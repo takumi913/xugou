@@ -38,8 +38,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # 指定 Node.js 的版本
-          node-version: '20'
+          # 指定 Node.js 的版本，Wrangler 4 需要 Node.js 22 或更高版本
+          node-version: '22'
           # 为 pnpm 配置依赖缓存，以加快后续运行速度
           cache: 'pnpm'
 
@@ -48,11 +48,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      # 第五步：手动安装 Wrangler
-      # 由于项目使用 pnpm workspace，我们需要手动安装 wrangler 并使用 '-w' 标志
-      # 这可以避免 wrangler-action 自动安装时可能出现的冲突
-      - name: Install Wrangler
-        run: pnpm add wrangler@4 -w
+      # 第五步：检查 Wrangler
+      # Wrangler 已作为根工作区 devDependency 安装，这里只校验版本，避免 CI 中动态修改依赖树
+      - name: Check Wrangler
+        run: pnpm exec wrangler --version
 
       # 第六步：构建项目
       # 执行在 'package.json' 中定义的 'build' 脚本，通常用于编译前端和后端代码

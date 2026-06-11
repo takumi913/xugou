@@ -11,7 +11,11 @@ overrides:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      wrangler:
+        specifier: ^4.13.1
+        version: 4.21.2(@cloudflare/workers-types@4.20250620.0)
 
   backend:
     dependencies:
