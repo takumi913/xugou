@@ -37,6 +37,8 @@ const badgeVariants = cva(
   }
 );
 
+type BadgeColor = VariantProps<typeof badgeVariants>["color"];
+
 function Badge({
   className,
   variant,
@@ -44,7 +46,7 @@ function Badge({
   asChild = false,
   ...props
 }: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants> & { asChild?: boolean; color?: string }) {
+  VariantProps<typeof badgeVariants> & { asChild?: boolean; color?: BadgeColor }) {
   const Comp = asChild ? Slot : "span";
 
   return (
@@ -57,3 +59,4 @@ function Badge({
 }
 
 export { Badge, badgeVariants };
+export type { BadgeColor };

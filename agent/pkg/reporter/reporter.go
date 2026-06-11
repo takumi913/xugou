@@ -81,8 +81,6 @@ func (r *DefaultReporter) Report(ctx context.Context, info *model.SystemInfo) er
 	reportURL := fmt.Sprintf("%s/api/agents/status", r.reporter.ServerURL)
 	reportPaylod, err := json.Marshal(info)
 
-	log.Println("即将上报数据: ", info)
-
 	if err != nil {
 		log.Println("注册客户端失败: ", err)
 		return err
@@ -101,15 +99,26 @@ func (r *DefaultReporter) Report(ctx context.Context, info *model.SystemInfo) er
 		return err
 	}
 	defer resp.Body.Close()
+	if err := checkResponse(resp, "上报数据失败"); err != nil {
+		log.Println(err)
+		return err
+	}
+	log.Printf("上报数据成功: hostname=%s timestamp=%s", info.Hostname, info.Timestamp.Format(time.RFC3339))
 	return nil
 }
 
 // ReportBatch 将多个系统信息批量上报到服务器
 func (r *DefaultReporter) ReportBatch(ctx context.Context, infoList []*model.SystemInfo) error {
-	// 客户端未注册，先注册
-	if err := r.register(ctx, infoList[0]); err != nil {
-		log.Printf("注册客户端失败: %v", err)
-		return err
+	if len(infoList) == 0 {
+		return errors.New("没有可上报的系统信息")
+	}
+
+	if !r.reporter.Registered {
+		// 客户端未注册，先注册
+		if err := r.register(ctx, infoList[0]); err != nil {
+			log.Printf("注册客户端失败: %v", err)
+			return err
+		}
 	}
 
 	reportURL := fmt.Sprintf("%s/api/agents/status", r.reporter.ServerURL)
@@ -133,6 +142,11 @@ func (r *DefaultReporter) ReportBatch(ctx context.Context, infoList []*model.Sys
 		return err
 	}
 	defer resp.Body.Close()
+	if err := checkResponse(resp, "上报数据失败"); err != nil {
+		log.Println(err)
+		return err
+	}
+	log.Printf("批量上报数据成功: count=%d", len(infoList))
 	return nil
 }
 
@@ -170,6 +184,10 @@ func (r *DefaultReporter) register(ctx context.Context, info *model.SystemInfo) 
 		return err
 	}
 	defer resp.Body.Close()
+	if err := checkResponse(resp, "注册客户端失败"); err != nil {
+		log.Println(err)
+		return err
+	}
 
 	body, err := io.ReadAll(resp.Body)
 
@@ -195,4 +213,16 @@ func (r *DefaultReporter) register(ctx context.Context, info *model.SystemInfo) 
 	r.reporter.Registered = true
 
 	return nil
+}
+
+func checkResponse(resp *http.Response, message string) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if len(body) == 0 {
+		return fmt.Errorf("%s: HTTP %d", message, resp.StatusCode)
+	}
+	return fmt.Errorf("%s: HTTP %d: %s", message, resp.StatusCode, string(body))
 }

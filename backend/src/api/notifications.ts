@@ -3,6 +3,7 @@ import { JwtPayload } from "../types";
 import { z } from "zod";
 import { Bindings } from "../models/db";
 import * as NotificationService from "../services/NotificationService";
+import { notificationSettingsSchema } from "./schemas";
 
 const notifications = new Hono<{ Bindings: Bindings; Variables: { jwtPayload: JwtPayload } }>();
 
@@ -526,23 +527,7 @@ notifications.post("/settings", async (c) => {
     const userId = payload.id;
     const body = await c.req.json();
 
-    const schema = z.object({
-      target_type: z.string(),
-      target_id: z.number().nullable().optional(),
-      enabled: z.boolean(),
-      on_down: z.boolean().optional(),
-      on_recovery: z.boolean().optional(),
-      on_offline: z.boolean().optional(),
-      on_cpu_threshold: z.boolean().optional(),
-      cpu_threshold: z.number().optional(),
-      on_memory_threshold: z.boolean().optional(),
-      memory_threshold: z.number().optional(),
-      on_disk_threshold: z.boolean().optional(),
-      disk_threshold: z.number().optional(),
-      channels: z.array(z.number()).or(z.string()),
-    });
-
-    const validatedData = schema.parse(body);
+    const validatedData = notificationSettingsSchema.parse(body);
 
     // 转换 channels 到 JSON 字符串
     const channelsStr =
@@ -565,6 +550,7 @@ notifications.post("/settings", async (c) => {
       memory_threshold: validatedData.memory_threshold || 90,
       on_disk_threshold: validatedData.on_disk_threshold || false,
       disk_threshold: validatedData.disk_threshold || 90,
+      cooldown_minutes: validatedData.cooldown_minutes ?? 30,
       channels: channelsStr,
     });
 

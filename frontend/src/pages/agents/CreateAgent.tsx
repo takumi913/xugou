@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text, Code } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text, Code } from "@/components/ui/theme-shim";
 import { Button, Card, Separator, Switch, Input } from "@/components/ui";
 import {
   ArrowLeftIcon,

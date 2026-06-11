@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { AuthProvider } from "./providers/AuthProvider";
 import { LanguageProvider } from "./providers/LanguageProvider";
-import "@radix-ui/themes/styles.css";
 import "./styles/global.css";
 import "./i18n/config";
 import router from "./router";

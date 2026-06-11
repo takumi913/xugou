@@ -1,4 +1,4 @@
-import { Box, Flex, Heading, Text } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text } from "@/components/ui/theme-shim";
 import { Card } from "./ui";
 import { ReactNode } from "react";
 

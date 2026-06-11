@@ -3,6 +3,7 @@ import { JwtPayload } from "../types";
 import { Bindings } from "../models/db";
 import * as SettingsService from "../services/SettingsService";
 import { jwtMiddleware } from "../middlewares";
+import { allowRegistrationSchema, badRequest } from "./schemas";
 
 const settings = new Hono<{ Bindings: Bindings; Variables: { jwtPayload: JwtPayload } }>();
 
@@ -31,11 +32,11 @@ settings.put("/allow_new_user_registration", async (c) => {
     if (payload.role !== 'admin') {
         return c.json({ success: false, message: '无权操作' }, 403);
     }
-    const { allow } = await c.req.json();
-    if (typeof allow !== 'boolean') {
-        return c.json({ success: false, message: '无效的参数' }, 400);
+    const parsed = allowRegistrationSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+        return c.json(badRequest("无效的参数"), 400);
     }
-    const result = await SettingsService.updateAllowNewUserRegistration(allow);
+    const result = await SettingsService.updateAllowNewUserRegistration(parsed.data.allow);
     return c.json(result);
 });
 

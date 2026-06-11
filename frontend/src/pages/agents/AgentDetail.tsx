@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Flex, Heading, Text, Grid, Container } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text, Grid, Container } from "@/components/ui/theme-shim";
 
 import { Button, Card, Badge } from "@/components/ui";
 
@@ -22,6 +22,7 @@ import { Agent } from "../../types/agents";
 import { useTranslation } from "react-i18next";
 import AgentCard from "../../components/AgentCard";
 import { toast } from "sonner"; // Added
+import { usePolling } from "../../hooks/usePolling";
 
 // 定义客户端状态颜色映射
 const statusColors: Record<string, "red" | "green" | "yellow" | "gray"> = {
@@ -40,50 +41,53 @@ const AgentDetail = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const { t } = useTranslation();
 
-  const fetchAgentData = async () => {
+  const agentId = Number(id);
+  const hasValidAgentId = Boolean(id) && !Number.isNaN(agentId);
+
+  const fetchAgentData = useCallback(async (signal?: AbortSignal) => {
+    if (!hasValidAgentId) return;
+
     setLoading(true);
     setError(null);
+    try {
+      const [agentResponse, metricResponse] = await Promise.all([
+        getAgent(agentId, signal),
+        getAgentMetrics(agentId, signal),
+      ]);
+      if (signal?.aborted) return;
 
-    console.log("AgentDetail: 正在获取客户端数据...");
-    const agentResponse = await getAgent(Number(id));
-    const metricResponse = await getAgentMetrics(Number(id));
-
-    console.log("AgentDetail: 客户端数据获取成功:", agentResponse);
-    console.log("AgentDetail: 客户端指标数据获取成功:", metricResponse);
-    console.log(agentResponse.agent, metricResponse.agent);
-    if (agentResponse.agent && metricResponse.agent) {
-      setAgent({
-        ...agentResponse.agent,
-        metrics: metricResponse.agent,
-      });
-
-      console.log("AgentDetail: 客户端数据处理成功:", agent);
+      if (agentResponse.agent && metricResponse.agent) {
+        setAgent({
+          ...agentResponse.agent,
+          metrics: metricResponse.agent,
+        });
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        setError(
+          error instanceof Error ? error.message : t("common.error.fetch")
+        );
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
-    console.log("AgentDetail: 客户端数据处理完成");
-    console.log("AgentInfo ", agent);
-    setLoading(false);
-  };
+  }, [agentId, hasValidAgentId, t]);
+
+  usePolling(fetchAgentData, {
+    enabled: hasValidAgentId,
+    intervalMs: 60000,
+  });
 
   useEffect(() => {
-    // 确保id是有效的数字
-    if (id && !isNaN(Number(id))) {
-      fetchAgentData();
-
-      // 设置定时器，每分钟刷新一次数据
-      const intervalId = setInterval(() => {
-        console.log("AgentDetail: 自动刷新数据...");
-        fetchAgentData();
-      }, 60000); // 60000ms = 1分钟
-
-      // 组件卸载时清除定时器
-      return () => clearInterval(intervalId);
-    } else if (id) {
+    if (id && !hasValidAgentId) {
       // 如果id存在但不是有效数字
       console.error(`无效的客户端ID: ${id}`);
       setError(t("agents.notFoundId", { id }));
       setLoading(false);
     }
-  }, [id, t]);
+  }, [hasValidAgentId, id, t]);
 
   const handleRefresh = () => {
     fetchAgentData();
@@ -313,7 +317,7 @@ const AgentDetail = () => {
                             </Text>
                           );
                         }
-                      } catch (e) {
+                      } catch {
                         return (
                           <Text as="div" size="2">
                             {String(agent.ip_addresses)}
@@ -372,7 +376,7 @@ const AgentDetail = () => {
                       );
                     }
                     return null;
-                  } catch (e) {
+                  } catch {
                     return null;
                   }
                 })()}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Box,
   Flex,
@@ -6,7 +6,7 @@ import {
   Text,
   Container,
   TextArea,
-} from "@radix-ui/themes";
+} from "@/components/ui/theme-shim";
 
 import {
   Button,
@@ -130,13 +130,8 @@ const NotificationsConfig = () => {
     { value: "${os}", key: "os" },
   ];
 
-  useEffect(() => {
-    loadData();
-    loadMonitorsAndAgents();
-  }, [t]);
-
   // 加载所有配置数据
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const configResponse = await getNotificationConfig();
@@ -155,10 +150,10 @@ const NotificationsConfig = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t]);
 
   // 加载监控和客户端数据
-  const loadMonitorsAndAgents = async () => {
+  const loadMonitorsAndAgents = useCallback(async () => {
     setMonitorsLoading(true);
     setAgentsLoading(true);
 
@@ -175,10 +170,18 @@ const NotificationsConfig = () => {
       setAgents(agentsResponse.agents);
     }
     setAgentsLoading(false);
-  };
+  }, []);
+
+  useEffect(() => {
+    loadData();
+    loadMonitorsAndAgents();
+  }, [loadData, loadMonitorsAndAgents]);
 
   // 处理全局监控设置变更
-  const handleMonitorSettingChange = (key: string, value: any) => {
+  const handleMonitorSettingChange = (
+    key: string,
+    value: boolean | number | number[]
+  ) => {
     if (!settings) return;
 
     setSettings({
@@ -191,7 +194,10 @@ const NotificationsConfig = () => {
   };
 
   // 处理全局客户端设置变更
-  const handleAgentSettingChange = (key: string, value: any) => {
+  const handleAgentSettingChange = (
+    key: string,
+    value: boolean | number | number[]
+  ) => {
     if (!settings) return;
 
     setSettings({
@@ -207,7 +213,7 @@ const NotificationsConfig = () => {
   const handleSpecificMonitorSettingChange = (
     monitorId: string,
     key: string,
-    value: any
+    value: boolean | number | number[]
   ) => {
     if (!settings) return;
 
@@ -215,10 +221,11 @@ const NotificationsConfig = () => {
       enabled: false,
       onDown: false,
       onRecovery: false,
+      cooldownMinutes: settings.monitors.cooldownMinutes,
       channels: [],
     };
 
-    let updatedSettings = {
+    const updatedSettings = {
       ...currentSettings,
       [key]: value,
     };
@@ -236,7 +243,7 @@ const NotificationsConfig = () => {
   const handleSpecificAgentSettingChange = (
     agentId: string,
     key: string,
-    value: any
+    value: boolean | number | number[]
   ) => {
     if (!settings) return;
 
@@ -250,10 +257,11 @@ const NotificationsConfig = () => {
       memoryThreshold: 85,
       onDiskThreshold: false,
       diskThreshold: 90,
+      cooldownMinutes: settings.agents.cooldownMinutes,
       channels: [],
     };
 
-    let updatedSettings = {
+    const updatedSettings = {
       ...currentSettings,
       [key]: value,
     };
@@ -287,6 +295,30 @@ const NotificationsConfig = () => {
       setSaving(false);
     }
   };
+
+  const renderCooldownInput = (
+    value: number,
+    onChange: (value: number) => void
+  ) => (
+    <Flex align="center" gap="2">
+      <Text size="2">{t("notifications.settings.cooldownMinutes")}</Text>
+      <Input
+        className="w-24 h-8"
+        type="number"
+        min="0"
+        max="1440"
+        value={value.toString()}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+          const nextValue = Math.max(
+            0,
+            Math.min(1440, Number(e.target.value) || 0)
+          );
+          onChange(nextValue);
+        }}
+      />
+      <Text size="2">{t("notifications.settings.minutes")}</Text>
+    </Flex>
+  );
 
   // 打开新增渠道对话框
   const handleAddChannelClick = () => {
@@ -473,7 +505,7 @@ const NotificationsConfig = () => {
           toast.error(t("notifications.channels.saveError"));
         }
       }
-    } catch (error) {
+    } catch {
       toast.error(t("notifications.channels.saveError"));
     } finally {
       setSaving(false);
@@ -493,7 +525,7 @@ const NotificationsConfig = () => {
         toast.error(t("notifications.channels.deleteError"));
       }
       setIsDeleteChannelOpen(false);
-    } catch (error) {
+    } catch {
       toast.error(t("notifications.channels.deleteError"));
     } finally {
       setSaving(false);
@@ -558,7 +590,7 @@ const NotificationsConfig = () => {
         }
       }
       setIsTemplateDialogOpen(false);
-    } catch (error) {
+    } catch {
       toast.error(t("notifications.templates.saveError"));
     } finally {
       setSaving(false);
@@ -578,7 +610,7 @@ const NotificationsConfig = () => {
         toast.error(t("notifications.templates.deleteError"));
       }
       setIsDeleteTemplateOpen(false);
-    } catch (error) {
+    } catch {
       toast.error(t("notifications.templates.deleteError"));
     } finally {
       setSaving(false);
@@ -809,6 +841,14 @@ const NotificationsConfig = () => {
                           {t("notifications.events.onRecovery")}
                         </Text>
                       </Flex>
+                      {renderCooldownInput(
+                        settings.monitors.cooldownMinutes,
+                        (value) =>
+                          handleMonitorSettingChange(
+                            "cooldownMinutes",
+                            value
+                          )
+                      )}
                       <Box>
                         <Text className="text-xs mb-2">
                           {t("notifications.specificSettings.channels")}
@@ -987,6 +1027,14 @@ const NotificationsConfig = () => {
                           </Text>
                         </Flex>
                       )}
+                      {renderCooldownInput(
+                        settings.agents.cooldownMinutes,
+                        (value) =>
+                          handleAgentSettingChange(
+                            "cooldownMinutes",
+                            value
+                          )
+                      )}
                       <Box>
                         <Text size="2" weight="medium" mb="2">
                           {t("notifications.specificSettings.channels")}
@@ -1031,6 +1079,7 @@ const NotificationsConfig = () => {
             enabled: false,
             onDown: false,
             onRecovery: false,
+            cooldownMinutes: settings.monitors.cooldownMinutes,
             channels: [],
           };
 
@@ -1089,6 +1138,15 @@ const NotificationsConfig = () => {
                           {t("notifications.events.onRecovery")}
                         </Text>
                       </Flex>
+                      {renderCooldownInput(
+                        specificSettings.cooldownMinutes,
+                        (value) =>
+                          handleSpecificMonitorSettingChange(
+                            monitorId,
+                            "cooldownMinutes",
+                            value
+                          )
+                      )}
                       <Box>
                         <Text size="2" weight="medium" mb="2">
                           {t("notifications.specificSettings.channels")}
@@ -1143,6 +1201,7 @@ const NotificationsConfig = () => {
             memoryThreshold: 85,
             onDiskThreshold: false,
             diskThreshold: 90,
+            cooldownMinutes: settings.agents.cooldownMinutes,
             channels: [],
           };
 
@@ -1161,7 +1220,7 @@ const NotificationsConfig = () => {
                           return Array.isArray(ipArray) && ipArray.length > 0
                             ? ipArray.join(", ")
                             : String(agent.ip_addresses || "");
-                        } catch (e) {
+                        } catch {
                           return String(agent.ip_addresses || "");
                         }
                       })()}
@@ -1333,6 +1392,15 @@ const NotificationsConfig = () => {
                             {t("notifications.threshold.percent")}
                           </Text>
                         </Flex>
+                      )}
+                      {renderCooldownInput(
+                        specificSettings.cooldownMinutes,
+                        (value) =>
+                          handleSpecificAgentSettingChange(
+                            agentId,
+                            "cooldownMinutes",
+                            value
+                          )
                       )}
                       <Box>
                         <Text size="2" weight="medium" mb="2">

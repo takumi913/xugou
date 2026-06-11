@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Flex, Heading, Text } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text } from "@/components/ui/theme-shim";
 import { Button, Card, Input } from "@/components/ui";
 import { ArrowLeftIcon } from "@radix-ui/react-icons";
 import { getAgent, updateAgent } from "../../api/agents";
@@ -22,13 +22,7 @@ const EditAgent = () => {
   });
   const { t } = useTranslation();
 
-  useEffect(() => {
-    if (id) {
-      fetchAgentData();
-    }
-  }, [id]);
-
-  const fetchAgentData = async () => {
+  const fetchAgentData = useCallback(async () => {
     setLoading(true);
 
     const response = await getAgent(Number(id));
@@ -44,7 +38,13 @@ const EditAgent = () => {
       setNotFound(true);
     }
     setLoading(false);
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      fetchAgentData();
+    }
+  }, [fetchAgentData, id]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>

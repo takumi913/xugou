@@ -2,7 +2,7 @@
  * 状态页面相关类型定义
  */
 
-import { Agent } from "./agents";
+import { AgentWithLatestMetrics } from "./agents";
 import { MonitorWithDailyStatsAndStatusHistory } from "./monitors";
 
 export interface ConfigMonitor {
@@ -41,5 +41,5 @@ export interface StatusPageData {
   logoUrl: string;
   customCss: string;
   monitors: MonitorWithDailyStatsAndStatusHistory[];
-  agents: Agent[];
+  agents: AgentWithLatestMetrics[];
 }

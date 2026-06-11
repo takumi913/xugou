@@ -41,6 +41,7 @@ export interface NotificationSettings {
   memory_threshold: number; // 适用于agent类型
   on_disk_threshold: boolean; // 适用于agent类型
   disk_threshold: number; // 适用于agent类型
+  cooldown_minutes: number; // 同类通知冷却时间，0 表示不抑制
 
   channels: string; // JSON字符串数组，存储channel IDs
 
@@ -70,6 +71,7 @@ export interface NotificationConfig {
       enabled: boolean;
       onDown: boolean;
       onRecovery: boolean;
+      cooldownMinutes: number;
       channels: string[];
     };
     agents: {
@@ -82,6 +84,7 @@ export interface NotificationConfig {
       memoryThreshold: number;
       onDiskThreshold: boolean;
       diskThreshold: number;
+      cooldownMinutes: number;
       channels: string[];
     };
     specificMonitors: {
@@ -89,6 +92,7 @@ export interface NotificationConfig {
         enabled: boolean;
         onDown: boolean;
         onRecovery: boolean;
+        cooldownMinutes: number;
         channels: string[];
       };
     };
@@ -103,6 +107,7 @@ export interface NotificationConfig {
         memoryThreshold: number;
         onDiskThreshold: boolean;
         diskThreshold: number;
+        cooldownMinutes: number;
         channels: string[];
       };
     };

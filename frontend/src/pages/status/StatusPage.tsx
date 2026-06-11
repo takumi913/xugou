@@ -1,18 +1,17 @@
-import { useState, useEffect } from "react";
-import { Box, Flex, Heading, Text, Grid, Theme } from "@radix-ui/themes";
-import { getStatusPageData } from "../../api/status";
+import { useCallback, useState } from "react";
+import { Box, Flex, Heading, Text, Grid, Theme } from "@/components/ui/theme-shim";
+import { getPublicAgentMetrics, getStatusPageData } from "../../api/status";
 import AgentCard from "../../components/AgentCard";
 import MonitorCard from "../../components/MonitorCard";
 import AgentStatusBar from "../../components/AgentStatusBar";
 import { useTranslation } from "react-i18next";
 import {
-  Agent,
   MonitorWithDailyStatsAndStatusHistory,
   MetricHistory,
   AgentWithLatestMetrics,
 } from "../../types";
-import { getLatestAgentMetrics, getAgentMetrics } from "../../api/agents";
 import { useParams } from "react-router-dom";
+import { usePolling } from "../../hooks/usePolling";
 
 const StatusPage = () => {
   const { t } = useTranslation();
@@ -37,58 +36,48 @@ const StatusPage = () => {
   >(null);
   const [cardLoading, setCardLoading] = useState(false);
 
-  // 从API获取数据
-  useEffect(() => {
-    if (userId) {
-      fetchData();
-      // 设置定时刷新，每3分钟更新数据
-      const intervalId = setInterval(() => {
-        fetchData();
-      }, 180000);
-      return () => clearInterval(intervalId);
-    }
-  }, [userId]);
-
   // 获取数据
-  const fetchData = async () => {
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     if (!userId) return;
     setLoading(true);
-    const response = await getStatusPageData(parseInt(userId, 10));
-    if (response) {
-      setPageTitle(response.title || t("statusPage.title"));
-      setPageDescription(
-        response.description || t("statusPage.allOperational")
-      );
-      // 只保留 AgentWithLatestMetrics 需要的字段，且 metrics 字段为 MetricHistory | undefined
-      let agentsWithLatestMetrics: AgentWithLatestMetrics[] = (
-        response.agents || []
-      ).map((a: Agent) => {
-        const { metrics, ...rest } = a;
-        return { ...rest };
-      });
-      // 只请求最新指标
-      await Promise.all(
-        agentsWithLatestMetrics.map(async (agent) => {
-          const metricsRes = await getLatestAgentMetrics(agent.id);
-          // 确保我们只取数组中的第一条记录（最新的）
-          const latestMetric = Array.isArray(metricsRes.agent)
-            ? metricsRes.agent[0]
-            : metricsRes.agent;
-          agent.metrics = latestMetric;
-        })
-      );
-      setData({
-        monitors: response.monitors || [],
-        agents: agentsWithLatestMetrics,
-      });
-    } else {
-      setError(t("statusPage.fetchError"));
+    try {
+      const response = await getStatusPageData(parseInt(userId, 10), signal);
+      if (signal?.aborted) return;
+
+      if (response) {
+        setPageTitle(response.title || t("statusPage.title"));
+        setPageDescription(
+          response.description || t("statusPage.allOperational")
+        );
+        setData({
+          monitors: response.monitors || [],
+          agents: response.agents || [],
+        });
+      } else {
+        setError(t("statusPage.fetchError"));
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        setError(
+          error instanceof Error ? error.message : t("statusPage.fetchError")
+        );
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
-  };
+  }, [t, userId]);
+
+  usePolling(fetchData, {
+    enabled: Boolean(userId),
+    intervalMs: 180000,
+  });
 
   // 点击 agent 卡片时，获取完整指标
   const handleAgentClick = async (agent: AgentWithLatestMetrics) => {
+    if (!userId) return;
+
     // 如果点击的是当前展开的 agent，则收起
     if (selectedAgent?.id === agent.id) {
       setSelectedAgent(null);
@@ -99,7 +88,7 @@ const StatusPage = () => {
     setSelectedAgent(agent);
     setCardLoading(true);
     setSelectedAgentMetrics(null);
-    const metricsRes = await getAgentMetrics(agent.id);
+    const metricsRes = await getPublicAgentMetrics(parseInt(userId, 10), agent.id);
     setSelectedAgentMetrics(metricsRes.success ? metricsRes.agent || [] : []);
     setCardLoading(false);
   };
@@ -172,7 +161,7 @@ const StatusPage = () => {
                     >
                       <AgentStatusBar
                         latestMetric={agent.metrics}
-                        agent={agent as any}
+                        agent={agent}
                       />
                     </div>
                     {/* 展开的详情区域 */}

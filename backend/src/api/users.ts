@@ -9,6 +9,13 @@ import {
   deleteUserService,
   changePasswordService,
 } from "../services/UserService";
+import {
+  badRequest,
+  changePasswordSchema,
+  idParamSchema,
+  userCreateSchema,
+  userUpdateSchema,
+} from "./schemas";
 
 const users = new Hono<{ Bindings: Bindings; Variables: { jwtPayload: JwtPayload } }>();
 
@@ -32,7 +39,7 @@ users.get("/", async (c) => {
 // 获取单个用户
 users.get("/:id", async (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
+    const id = idParamSchema.parse(c.req.param("id"));
     const payload = c.get("jwtPayload") as JwtPayload;
 
     const result = await getUserByIdService(id, payload.id, payload.role);
@@ -51,9 +58,12 @@ users.get("/:id", async (c) => {
 users.post("/", async (c) => {
   try {
     const payload = c.get("jwtPayload") as JwtPayload;
-    const userData = await c.req.json();
+    const parsed = userCreateSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json(badRequest("用户创建参数无效"), 400);
+    }
 
-    const result = await createUserService(userData, payload.role);
+    const result = await createUserService(parsed.data, payload.role);
 
     return c.json(
       { success: result.success, user: result.user, message: result.message },
@@ -68,13 +78,16 @@ users.post("/", async (c) => {
 // 更新用户
 users.put("/:id", async (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
+    const id = idParamSchema.parse(c.req.param("id"));
     const payload = c.get("jwtPayload") as JwtPayload;
-    const updateData = await c.req.json();
+    const parsed = userUpdateSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json(badRequest("用户更新参数无效"), 400);
+    }
 
     const result = await updateUserService(
       id,
-      updateData,
+      parsed.data,
       payload.id,
       payload.role
     );
@@ -92,7 +105,7 @@ users.put("/:id", async (c) => {
 // 删除用户（仅管理员）
 users.delete("/:id", async (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
+    const id = idParamSchema.parse(c.req.param("id"));
     const payload = c.get("jwtPayload") as JwtPayload;
 
     const result = await deleteUserService(id, payload.id, payload.role);
@@ -110,12 +123,15 @@ users.delete("/:id", async (c) => {
 // 修改密码
 users.post("/:id/change-password", async (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
-    const passwordData = await c.req.json();
+    const id = idParamSchema.parse(c.req.param("id"));
+    const parsed = changePasswordSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json(badRequest("密码参数无效"), 400);
+    }
 
     const result = await changePasswordService(
       id,
-      passwordData,
+      parsed.data,
     );
 
     return c.json(

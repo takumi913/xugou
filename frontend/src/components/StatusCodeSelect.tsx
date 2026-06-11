@@ -1,4 +1,4 @@
-import { Text } from "@radix-ui/themes";
+import { Text } from "@/components/ui/theme-shim";
 import {
   Select,
   SelectContent,

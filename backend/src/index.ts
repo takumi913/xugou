@@ -12,8 +12,13 @@ import * as config from "./config";
 // 创建Hono应用
 const app = new Hono<{ Bindings: Bindings }>();
 
-// 中间件，需要作为服务端接收所有来源客户端的请求
-app.use("*", logger());
+// 中间件
+app.use("*", async (c, next) => {
+  if (c.env.LOG_REQUESTS === "true" || c.env.NODE_ENV === "development") {
+    return logger()(c, next);
+  }
+  await next();
+});
 app.use("*", middlewares.corsMiddleware);
 app.use("*", prettyJSON());
 app.use("*", middlewares.jwtMiddleware);
@@ -83,14 +88,7 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods":
-            "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-          "Access-Control-Allow-Headers":
-            "Content-Type, Authorization, X-Requested-With",
-          "Access-Control-Max-Age": "86400",
-        },
+        headers: middlewares.createCorsHeaders(request, env),
       });
     }
 
@@ -100,10 +98,8 @@ export default {
 
     // 如果数据库尚未初始化，则进行初始化检查
     if (!dbInitialized) {
-      console.log("首次请求，检查数据库状态...");
-      const initResult = await seed.checkAndInitializeDatabase(env.DB);
+      await seed.checkAndInitializeDatabase(env.DB);
       dbInitialized = true;
-      console.log("数据库检查结果:", initResult.message);
     }
 
     // 处理请求

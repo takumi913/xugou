@@ -8,7 +8,8 @@
     "build": "tsc && pnpm run generate:migrations",
     "deploy": "wrangler deploy",
     "db:generate": "drizzle-kit generate",
-    "generate:migrations": "tsx scripts/generate-migrations.ts"
+    "generate:migrations": "tsx scripts/generate-migrations.ts",
+    "test:contracts": "tsx scripts/api-contracts.test.ts"
   },
   "keywords": [],
   "author": "",

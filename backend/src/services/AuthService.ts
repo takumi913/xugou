@@ -25,41 +25,17 @@ export async function loginUser(
   password: string
 ): Promise<{ success: boolean; message: string; token?: string; user?: any }> {
   try {
-    console.log("=== loginUser 函数被调用 ===");
-    console.log("传入的 env 参数类型:", typeof env);
-    console.log(
-      "传入的 env 参数结构:",
-      JSON.stringify(
-        env,
-        (key, value) => {
-          // 排除可能的循环引用对象
-          if (key === "DB" && typeof value === "object") {
-            return "[DB Object]";
-          }
-          return value;
-        },
-        2
-      )
-    );
-
     // 查找用户
-    console.log("开始查找用户:", username);
     const user = await repositories.getUserByUsername(username);
 
     if (!user) {
-      console.log("用户不存在:", username);
       return { success: false, message: "用户名或密码错误" };
     }
 
-    console.log("找到用户, ID:", user.id);
-
     // 验证密码
-    console.log("开始验证密码");
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    console.log("密码验证结果:", isPasswordValid);
 
     if (!isPasswordValid) {
-      console.log("密码验证失败");
       return { success: false, message: "用户名或密码错误" };
     }
 
@@ -69,21 +45,14 @@ export async function loginUser(
       username: user.username,
       role: user.role,
     };
-    console.log("JWT payload:", payload);
-
-    console.log("调用 getJwtSecret 前的环境变量检查:");
-    console.log("env 是否存在:", !!env);
-    console.log("env.CF_VERSION_METADATA 是否存在:", !!env.CF_VERSION_METADATA);
 
     try {
       const secret = getJwtSecret(env);
-      console.log("获取到的 JWT secret:", secret);
 
       // 使用配置的 token 有效期（30天）
       const token = jsonwebtoken.sign(payload, secret, {
         expiresIn: JWT_CONFIG.ACCESS_TOKEN_EXPIRES_IN,
       } as jsonwebtoken.SignOptions) as string;
-      console.log("成功生成 JWT token, 长度:", token.length);
 
       return {
         success: true,

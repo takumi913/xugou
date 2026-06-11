@@ -48,7 +48,7 @@ export async function createUserService(
   userData: {
     username: string;
     password: string;
-    email?: string;
+    email?: string | null;
     role: string;
   },
   userRole: string

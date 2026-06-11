@@ -1,10 +1,11 @@
-import { Box, Flex, Text } from "@radix-ui/themes";
+import { Box, Flex, Text } from "@/components/ui/theme-shim";
 import {
   CheckCircledIcon,
   CrossCircledIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
 import { Card, Badge } from "./ui";
+import type { BadgeColor } from "./ui/badge";
 import { MonitorWithDailyStatsAndStatusHistory } from "../types/monitors";
 import { useTranslation } from "react-i18next";
 import StatusBar from "./MonitorStatusBar";
@@ -43,7 +44,7 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
   };
 
   // 状态颜色映射
-  const statusColors: { [key: string]: string } = {
+  const statusColors: Record<string, BadgeColor> = {
     up: "green",
     down: "red",
     pending: "amber",
@@ -67,7 +68,7 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
             <StatusIcon status={currentStatus} />
             <Text weight="medium">{monitor.name}</Text>
           </Flex>
-          <Badge color={statusColors[currentStatus] as any}>
+          <Badge color={statusColors[currentStatus] ?? "gray"}>
             {statusText[currentStatus]}
           </Badge>
         </Flex>

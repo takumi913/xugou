@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
@@ -8,7 +8,7 @@ import {
   IconButton,
   Grid,
   Container,
-} from "@radix-ui/themes";
+} from "@/components/ui/theme-shim";
 import {
   Button,
   Card,
@@ -38,13 +38,13 @@ import {
   TrashIcon,
 } from "@radix-ui/react-icons";
 import {
-  getAllAgents,
+  getAllAgentsWithLatestMetricsWithSignal,
   deleteAgent,
-  getLatestAgentMetrics,
 } from "../../api/agents";
 import AgentStatusBar from "../../components/AgentStatusBar";
 import { useTranslation } from "react-i18next";
 import { AgentWithLatestMetrics } from "../../types";
+import { usePolling } from "../../hooks/usePolling";
 
 // 定义客户端状态颜色映射
 const statusColors: Record<string, "red" | "green" | "yellow" | "gray"> = {
@@ -64,52 +64,35 @@ const AgentsList = () => {
   const [viewMode, setViewMode] = useState<"table" | "card">("card"); // 默认使用卡片视图
   const { t } = useTranslation();
 
-  useEffect(() => {
-    fetchAgents();
-    // 设置定时器，每分钟刷新一次数据
-    const intervalId = setInterval(() => {
-      console.log("AgentsList: 自动刷新数据...");
-      fetchAgents();
-    }, 60000); // 60000ms = 1分钟
-
-    // 组件卸载时清除定时器
-    return () => clearInterval(intervalId);
-  }, [t]);
-
   // 获取客户端数据
-  const fetchAgents = async () => {
+  const fetchAgents = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
-    // 获取所有客户端
-    const response = await getAllAgents();
+    try {
+      const response = await getAllAgentsWithLatestMetricsWithSignal(signal);
+      if (signal?.aborted) return;
 
-    if (response.agents) {
-      // 合并指标数据到客户端数据
-      const agentsWithMetrics = await Promise.all(
-        response.agents.map(async (agent) => {
-          // 获取指定客户端的指标数据
-          const metricsResponse = await getLatestAgentMetrics(agent.id);
-          if (!metricsResponse.success) {
-            console.error("获取指标数据失败:", metricsResponse.message);
-            return { ...agent, metrics: undefined } as AgentWithLatestMetrics;
-          }
-          // 确保我们只取数组中的第一条记录（最新的）
-          const latestMetric = Array.isArray(metricsResponse.agent)
-            ? metricsResponse.agent[0]
-            : metricsResponse.agent;
-
-          return {
-            ...agent,
-            metrics: latestMetric,
-          } as AgentWithLatestMetrics;
-        })
-      );
-      console.log("获取到的 agentsWithMetrics 数据: ", agentsWithMetrics);
-      setAgents(agentsWithMetrics as AgentWithLatestMetrics[]);
+      if (response.agents) {
+        setAgents(response.agents);
+      } else if (!response.success) {
+        setError(response.message || t("common.error.fetch"));
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        setError(
+          error instanceof Error ? error.message : t("common.error.fetch")
+        );
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
+  }, [t]);
 
-    setLoading(false);
-  };
+  usePolling(fetchAgents, {
+    intervalMs: 60000,
+  });
 
   // 刷新客户端列表
   const handleRefresh = () => {
@@ -221,7 +204,7 @@ const AgentsList = () => {
                           return Array.isArray(ipArray) && ipArray.length > 0
                             ? ipArray.join(", ")
                             : String(agent.ip_addresses);
-                        } catch (e) {
+                        } catch {
                           return String(agent.ip_addresses);
                         }
                       })()
@@ -333,16 +316,7 @@ const AgentsList = () => {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => {
-              console.log(
-                "点击添加客户端按钮(空列表)，准备导航到/agents/create"
-              );
-              try {
-                navigate("/agents/create");
-              } catch (err) {
-                console.error("导航到添加客户端页面失败:", err);
-              }
-            }}
+            onClick={() => navigate("/agents/create")}
           >
             <PlusIcon />
             {t("agents.create")}

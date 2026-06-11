@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Box, Flex, Heading, Text, Container } from "@radix-ui/themes";
+import { useCallback, useState } from "react";
+import { Box, Flex, Heading, Text, Container } from "@/components/ui/theme-shim";
 import {
   CheckCircledIcon,
   CrossCircledIcon,
@@ -8,9 +8,10 @@ import {
   ExclamationTriangleIcon,
 } from "@radix-ui/react-icons";
 import { Monitor, Agent } from "../types";
-import { getDashboardData } from "../api/dashboard";
+import { getDashboardDataWithSignal } from "../api/dashboard";
 import StatusSummaryCard from "../components/StatusSummaryCard";
 import { useTranslation } from "react-i18next";
+import { usePolling } from "../hooks/usePolling";
 
 const Dashboard = () => {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -18,28 +19,26 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const { t } = useTranslation();
 
-  // 获取所有数据
-  useEffect(() => {
-    fetchData();
-    // 设置定时器，每分钟刷新一次数据
-    const intervalId = setInterval(() => {
-      console.log("Dashboard: 自动刷新数据...");
-      fetchData();
-    }, 180000); // 180000ms = 3分钟
-
-    // 组件卸载时清除定时器
-    return () => clearInterval(intervalId);
-  }, [t]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    const [dashboardResponse] = await Promise.all([getDashboardData()]);
-    if (dashboardResponse) {
-      setMonitors(dashboardResponse.monitors || []);
-      setAgents(dashboardResponse.agents || []);
+    try {
+      const dashboardResponse = await getDashboardDataWithSignal(signal);
+      if (signal?.aborted) return;
+
+      if (dashboardResponse) {
+        setMonitors(dashboardResponse.monitors || []);
+        setAgents(dashboardResponse.agents || []);
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
-  };
+  }, []);
+
+  usePolling(fetchData, {
+    intervalMs: 180000,
+  });
 
   // 加载中显示
   if (loading) {

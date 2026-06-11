@@ -233,5 +233,155 @@ CREATE INDEX IF NOT EXISTS \`monitor_status_history_24h_monitor_timestamp_idx\` 
 	\`key\` text PRIMARY KEY NOT NULL,
 	\`value\` text
 );`
+  },
+  {
+    name: "0005_sloppy_vulture.sql",
+    sql: `CREATE INDEX IF NOT EXISTS \`agents_created_by_created_at_idx\` ON \`agents\` (\`created_by\`,\`created_at\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`agents_status_updated_at_idx\` ON \`agents\` (\`status\`,\`updated_at\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`monitors_active_last_checked_idx\` ON \`monitors\` (\`active\`,\`last_checked\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`monitors_created_by_created_at_idx\` ON \`monitors\` (\`created_by\`,\`created_at\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`notification_channels_created_by_id_idx\` ON \`notification_channels\` (\`created_by\`,\`id\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`notification_history_channel_sent_at_idx\` ON \`notification_history\` (\`channel_id\`,\`sent_at\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`notification_settings_lookup_idx\` ON \`notification_settings\` (\`user_id\`,\`target_type\`,\`target_id\`,\`enabled\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`status_page_config_user_id_idx\` ON \`status_page_config\` (\`user_id\`);`
+  },
+  {
+    name: "0006_youthful_misty_knight.sql",
+    sql: `DROP INDEX IF EXISTS \`monitors_active_last_checked_idx\`;
+--> statement-breakpoint
+ALTER TABLE \`monitors\` ADD \`next_check_at\` text;
+--> statement-breakpoint
+UPDATE \`monitors\`
+SET \`next_check_at\` = CASE
+  WHEN \`active\` = 1 AND \`last_checked\` IS NOT NULL
+    THEN strftime('%Y-%m-%dT%H:%M:%fZ', datetime(\`last_checked\`, '+' || \`interval\` || ' seconds'))
+  WHEN \`active\` = 1
+    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  ELSE NULL
+END;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`monitors_active_next_check_at_idx\` ON \`monitors\` (\`active\`,\`next_check_at\`);`
+  },
+  {
+    name: "0007_little_cannonball.sql",
+    sql: `DELETE FROM \`monitor_daily_stats\`
+WHERE \`id\` NOT IN (
+  SELECT max(\`id\`)
+  FROM \`monitor_daily_stats\`
+  GROUP BY \`monitor_id\`, \`date\`
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS \`monitor_daily_stats_monitor_id_date_unique_idx\` ON \`monitor_daily_stats\` (\`monitor_id\`,\`date\`);`
+  },
+  {
+    name: "0008_notification_cooldown.sql",
+    sql: `ALTER TABLE \`notification_settings\` ADD \`cooldown_minutes\` integer DEFAULT 30 NOT NULL;`
+  },
+  {
+    name: "0009_cooing_songbird.sql",
+    sql: `CREATE TABLE IF NOT EXISTS \`agent_latest_metrics\` (
+	\`agent_id\` integer PRIMARY KEY NOT NULL,
+	\`metrics_json\` text NOT NULL,
+	\`collected_at\` text,
+	\`reported_at\` text NOT NULL,
+	\`cpu_usage\` real,
+	\`memory_usage_rate\` real,
+	\`disk_usage_rate\` real,
+	\`updated_at\` text NOT NULL,
+	FOREIGN KEY (\`agent_id\`) REFERENCES \`agents\`(\`id\`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`agent_latest_metrics_reported_at_idx\` ON \`agent_latest_metrics\` (\`reported_at\`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS \`agent_metric_rollups\` (
+	\`id\` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	\`agent_id\` integer NOT NULL,
+	\`bucket_start\` text NOT NULL,
+	\`bucket_size_seconds\` integer NOT NULL,
+	\`sample_count\` integer DEFAULT 0 NOT NULL,
+	\`cpu_avg\` real,
+	\`cpu_min\` real,
+	\`cpu_max\` real,
+	\`cpu_p95\` real,
+	\`memory_avg\` real,
+	\`memory_min\` real,
+	\`memory_max\` real,
+	\`memory_p95\` real,
+	\`disk_max\` real,
+	\`load_avg\` real,
+	\`network_delta_json\` text,
+	\`threshold_events_json\` text,
+	\`created_at\` text NOT NULL,
+	FOREIGN KEY (\`agent_id\`) REFERENCES \`agents\`(\`id\`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS \`agent_metric_rollups_agent_bucket_unique_idx\` ON \`agent_metric_rollups\` (\`agent_id\`,\`bucket_start\`,\`bucket_size_seconds\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`agent_metric_rollups_agent_bucket_idx\` ON \`agent_metric_rollups\` (\`agent_id\`,\`bucket_start\`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS \`monitor_check_rollups\` (
+	\`id\` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	\`monitor_id\` integer NOT NULL,
+	\`bucket_start\` text NOT NULL,
+	\`bucket_size_seconds\` integer NOT NULL,
+	\`total_checks\` integer DEFAULT 0 NOT NULL,
+	\`up_checks\` integer DEFAULT 0 NOT NULL,
+	\`down_checks\` integer DEFAULT 0 NOT NULL,
+	\`last_status\` text,
+	\`response_time_avg\` integer DEFAULT 0,
+	\`response_time_p95\` integer DEFAULT 0,
+	\`response_time_max\` integer DEFAULT 0,
+	\`created_at\` text NOT NULL,
+	\`updated_at\` text NOT NULL,
+	FOREIGN KEY (\`monitor_id\`) REFERENCES \`monitors\`(\`id\`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS \`monitor_check_rollups_monitor_bucket_unique_idx\` ON \`monitor_check_rollups\` (\`monitor_id\`,\`bucket_start\`,\`bucket_size_seconds\`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`monitor_check_rollups_monitor_bucket_idx\` ON \`monitor_check_rollups\` (\`monitor_id\`,\`bucket_start\`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS \`monitor_incidents\` (
+	\`id\` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	\`monitor_id\` integer NOT NULL,
+	\`from_status\` text,
+	\`to_status\` text NOT NULL,
+	\`started_at\` text NOT NULL,
+	\`ended_at\` text,
+	\`reason\` text,
+	\`last_error\` text,
+	\`created_at\` text NOT NULL,
+	\`updated_at\` text NOT NULL,
+	FOREIGN KEY (\`monitor_id\`) REFERENCES \`monitors\`(\`id\`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`monitor_incidents_monitor_started_at_idx\` ON \`monitor_incidents\` (\`monitor_id\`,\`started_at\`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS \`public_status_snapshots\` (
+	\`user_id\` integer PRIMARY KEY NOT NULL,
+	\`snapshot_json\` text NOT NULL,
+	\`etag\` text NOT NULL,
+	\`generated_at\` text NOT NULL,
+	\`expires_at\` text NOT NULL,
+	\`dirty_at\` text,
+	\`refresh_after\` text,
+	\`refreshing\` integer DEFAULT 0 NOT NULL,
+	\`last_error\` text,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`last_seen_at\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`last_state_changed_at\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`next_offline_at\` text;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS \`agents_status_next_offline_at_idx\` ON \`agents\` (\`status\`,\`next_offline_at\`);`
   }
 ];

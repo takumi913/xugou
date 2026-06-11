@@ -1,4 +1,12 @@
-let deferredPrompt: any; // 用于存储 beforeinstallprompt 事件
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{
+    outcome: "accepted" | "dismissed";
+    platform: string;
+  }>;
+}
+
+let deferredPrompt: BeforeInstallPromptEvent | null = null; // 用于存储 beforeinstallprompt 事件
 
 /**
  * 监听 'beforeinstallprompt' 事件。
@@ -8,11 +16,10 @@ window.addEventListener('beforeinstallprompt', (e) => {
   // 阻止浏览器默认的迷你信息栏提示 (在某些移动浏览器上)
   e.preventDefault();
   // 保存事件，以便稍后可以触发它
-  deferredPrompt = e;
+  deferredPrompt = e as BeforeInstallPromptEvent;
   // 派发一个自定义事件，通知应用 PWA 可以安装了
   // 这允许 UI 组件（如 Navbar）更新其状态
   window.dispatchEvent(new CustomEvent('pwaInstallReady', { detail: { canInstall: true } }));
-  console.log('`beforeinstallprompt` 事件已触发。PWA 可以安装。');
 });
 
 /**
@@ -38,11 +45,6 @@ export const promptPWAInstall = async (): Promise<boolean> => {
   // 等待用户对提示做出响应
   try {
     const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      console.log('用户接受了 PWA 安装提示');
-    } else {
-      console.log('用户拒绝了 PWA 安装提示');
-    }
     // 清除 deferredPrompt，因为它只能使用一次
     deferredPrompt = null;
     // 派发自定义事件，通知 PWA 安装状态已更改
@@ -61,7 +63,6 @@ export const promptPWAInstall = async (): Promise<boolean> => {
  * 当 PWA 成功安装后，此事件会触发。
  */
 window.addEventListener('appinstalled', () => {
-  console.log('PWA 已成功安装！');
   // PWA 安装后，deferredPrompt 通常应为 null，
   // 因为 beforeinstallprompt 不会再次触发，直到应用被卸载（在某些情况下）
   deferredPrompt = null;

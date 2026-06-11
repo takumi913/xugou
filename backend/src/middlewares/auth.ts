@@ -3,6 +3,13 @@ import { jwt } from "hono/jwt";
 import { getJwtSecret } from "../utils/jwt";
 import { JwtPayload } from "../types";
 
+function isPublicStatusRoute(path: string) {
+  return (
+    /^\/api\/status\/public\/\d+\/data$/.test(path) ||
+    /^\/api\/status\/public\/\d+\/agents\/\d+\/metrics$/.test(path)
+  );
+}
+
 /**
  * JWT认证中间件
  * 验证请求中的JWT令牌并将解码的payload存入上下文
@@ -28,17 +35,10 @@ export const jwtMiddleware = async (c: Context, next: Next) => {
     return next();
   }
 
-  if (c.req.path.endsWith("/data") && c.req.method === "GET") {
+  if (isPublicStatusRoute(c.req.path) && c.req.method === "GET") {
     return next();
   }
-  // 获取 metrics 时暂时先不验证。
-  if (
-    (c.req.path.endsWith("/metrics") ||
-      c.req.path.endsWith("/metrics/latest")) &&
-    c.req.method === "GET"
-  ) {
-    return next();
-  }
+
   const middleware = jwt({
     secret: getJwtSecret(c),
     alg: 'HS256',

@@ -1,11 +1,8 @@
 import { ReactNode } from "react";
-import { Box, Flex, Text, Container, Theme } from "@radix-ui/themes";
+import { Box, Flex, Text, Container, Theme } from "@/components/ui/theme-shim";
 import { Separator, Button, Toaster } from "./ui";
 import Navbar from "./Navbar";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faRss } from "@fortawesome/free-solid-svg-icons";
-import { faYoutube } from "@fortawesome/free-brands-svg-icons";
-import { faEnvelope } from "@fortawesome/free-solid-svg-icons";
+import { Mail, Rss } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 interface LayoutProps {
@@ -40,18 +37,8 @@ const Layout = ({ children }: LayoutProps) => {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <FontAwesomeIcon icon={faRss} size="lg" />
+                    <Rss className="size-4" />
                     <Text size="2">{t("footer.blog")}</Text>
-                  </a>
-                </Button>
-                <Button variant="link" asChild>
-                  <a
-                    href="https://www.youtube.com/@zaunist"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <FontAwesomeIcon icon={faYoutube} size="lg" />
-                    <Text size="2">{t("footer.youtube")}</Text>
                   </a>
                 </Button>
                 <Button variant="link" asChild>
@@ -60,7 +47,7 @@ const Layout = ({ children }: LayoutProps) => {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <FontAwesomeIcon icon={faEnvelope} size="lg" />
+                    <Mail className="size-4" />
                     <Text size="2">{t("footer.tempMail")}</Text>
                   </a>
                 </Button>

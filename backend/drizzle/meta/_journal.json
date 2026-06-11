@@ -36,6 +36,41 @@
       "when": 1762361284317,
       "tag": "0004_many_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1781084068252,
+      "tag": "0005_sloppy_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1781108557076,
+      "tag": "0006_youthful_misty_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1781143307351,
+      "tag": "0007_little_cannonball",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1781143628582,
+      "tag": "0008_notification_cooldown",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1781184335047,
+      "tag": "0009_cooing_songbird",
+      "breakpoints": true
     }
   ]
 }

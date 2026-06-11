@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Box, Text, Flex } from "@radix-ui/themes";
+import { Box, Text, Flex } from "@/components/ui/theme-shim";
 import {
   Tooltip,
   TooltipContent,
@@ -32,8 +32,6 @@ const StatusBar: React.FC<StatusBarProps> = ({ dailyStats = [] }) => {
   const [selectedDayData, setSelectedDayData] =
     useState<EnrichedDailyStats | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-
-  // console.log("StatusBar组件的dailyStats: ", dailyStats); // 调试信息可以暂时注释或移除
 
   // 根据状态或百分比确定颜色
   const getColor = (value: string | number, isHover = false) => {

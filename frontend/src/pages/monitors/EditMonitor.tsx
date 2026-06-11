@@ -7,7 +7,7 @@ import {
   Text,
   IconButton,
   Container,
-} from "@radix-ui/themes";
+} from "@/components/ui/theme-shim";
 
 import {
   Button,
@@ -216,6 +216,7 @@ const EditMonitor = () => {
 
   // 判断是否需要显示请求体输入框
   const showBodyField = ["POST", "PUT", "PATCH"].includes(formData.method);
+  const showQuotaWarning = formData.interval > 0 && formData.interval < 5;
 
   if (loadingData) {
     return (
@@ -333,6 +334,11 @@ const EditMonitor = () => {
                   <Text size="1" color="gray">
                     {t("monitor.form.intervalMin")}
                   </Text>
+                  {showQuotaWarning && (
+                    <Text size="1" className="block mt-1 text-amber-600">
+                      {t("monitor.form.intervalQuotaWarning")}
+                    </Text>
+                  )}
                 </Box>
 
                 <Box>

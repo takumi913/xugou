@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useState,
 } from "react";
-import { Box, Flex } from "@radix-ui/themes";
+import { Box, Flex } from "@/components/ui/theme-shim";
 import {
   Select,
   SelectContent,
@@ -25,11 +25,9 @@ import {
   Title,
   Tooltip as ChartTooltip,
   Legend,
-  TimeScale,
   ChartOptions,
   TooltipItem,
 } from "chart.js";
-import "chartjs-adapter-moment";
 
 // 注册Chart.js组件
 ChartJS.register(
@@ -39,8 +37,7 @@ ChartJS.register(
   LineElement,
   Title,
   ChartTooltip,
-  Legend,
-  TimeScale
+  Legend
 );
 
 // 数据点接口
@@ -48,7 +45,7 @@ interface DataPoint {
   x: number; // 时间戳（毫秒）
   y: number; // 指标值
   originalValue?: number; // 原始值，用于在tooltip中显示
-  originalMetric?: MetricHistory; // 原始指标完整数据
+  originalMetric?: ParsedMetricHistory; // 原始指标完整数据
   originalIndex?: number; // 原始数据索引
 }
 
@@ -75,6 +72,11 @@ interface DeviceOption {
   label: string;
 }
 
+interface ParsedMetricHistory extends MetricHistory {
+  parsedDiskMetrics: DiskMetric[];
+  parsedNetworkMetrics: NetworkMetric[];
+}
+
 interface MetricsChartProps {
   history?: MetricHistory[];
   metricType: MetricType;
@@ -96,6 +98,17 @@ const formatBytes = (bytes: number | undefined, decimals = 2): string => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+};
+
+const parseMetricArray = <T,>(value?: string): T[] => {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
 };
 
 const MetricsChart: React.FC<MetricsChartProps> = ({
@@ -130,46 +143,40 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
     loadType || "1"
   );
 
-  console.log(`MetricsChart组件的history (${metricType}): `, history);
+  const parsedHistory = useMemo<ParsedMetricHistory[]>(
+    () =>
+      history.map((item) => ({
+        ...item,
+        parsedDiskMetrics: parseMetricArray<DiskMetric>(item.disk_metrics),
+        parsedNetworkMetrics: parseMetricArray<NetworkMetric>(
+          item.network_metrics
+        ),
+      })),
+    [history]
+  );
 
   // 从历史数据中提取可用的磁盘设备和网络接口
   useEffect(() => {
-    if (history.length === 0) return;
+    if (parsedHistory.length === 0) return;
 
     // 提取所有可用的磁盘设备
     const disks = new Map<string, { device: string; mount_point: string }>();
     // 提取所有可用的网络接口
     const networks = new Map<string, string>();
 
-    history.forEach((item) => {
+    parsedHistory.forEach((item) => {
       // 处理磁盘信息
-      if (item.disk_metrics) {
-        try {
-          const diskData = JSON.parse(item.disk_metrics) as DiskMetric[];
-          diskData.forEach((disk) => {
-            disks.set(disk.mount_point, {
-              device: disk.device,
-              mount_point: disk.mount_point,
-            });
-          });
-        } catch (e) {
-          console.error("解析磁盘信息失败:", e);
-        }
-      }
+      item.parsedDiskMetrics.forEach((disk) => {
+        disks.set(disk.mount_point, {
+          device: disk.device,
+          mount_point: disk.mount_point,
+        });
+      });
 
       // 处理网络信息
-      if (item.network_metrics) {
-        try {
-          const networkData = JSON.parse(
-            item.network_metrics
-          ) as NetworkMetric[];
-          networkData.forEach((network) => {
-            networks.set(network.interface, network.interface);
-          });
-        } catch (e) {
-          console.error("解析网络信息失败:", e);
-        }
-      }
+      item.parsedNetworkMetrics.forEach((network) => {
+        networks.set(network.interface, network.interface);
+      });
     });
 
     // 转换为选项数组
@@ -206,7 +213,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
     ) {
       setSelectedNetworkInterface(networkOptions[0].value);
     }
-  }, [history, selectedDiskDevice, selectedNetworkInterface]);
+  }, [parsedHistory, selectedDiskDevice, selectedNetworkInterface]);
 
   // 格式化时间的函数
   const formatTime = useCallback((date: Date) => {
@@ -287,7 +294,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
           };
       }
     },
-    [t, loadType, selectedNetworkMetric]
+    [t, selectedLoadType, selectedNetworkMetric]
   );
 
   // 根据指标类型获取数据点的显示格式
@@ -362,113 +369,94 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
           break;
 
         case "disk":
-          try {
-            if (metric.disk_metrics) {
-              const diskData = JSON.parse(metric.disk_metrics) as DiskMetric[];
-              const selectedDisk = diskData.find(
-                (d) => d.mount_point === selectedDiskDevice
-              );
+          {
+            const selectedDisk = metric.parsedDiskMetrics.find(
+              (d) => d.mount_point === selectedDiskDevice
+            );
 
-              if (selectedDisk) {
-                lines.push(
-                  `${t("agent.metrics.disk.device")}: ${selectedDisk.device}`
-                );
-                lines.push(
-                  `${t("agent.metrics.disk.mountPoint")}: ${
-                    selectedDisk.mount_point
-                  }`
-                );
-                lines.push(
-                  `${t("agent.metrics.disk.total")}: ${formatBytes(
-                    selectedDisk.total
-                  )}`
-                );
-                lines.push(
-                  `${t("agent.metrics.disk.used")}: ${formatBytes(
-                    selectedDisk.used
-                  )}`
-                );
-                lines.push(
-                  `${t("agent.metrics.disk.free")}: ${formatBytes(
-                    selectedDisk.free
-                  )}`
-                );
-                lines.push(
-                  `${t(
-                    "agent.metrics.disk.usageRate"
-                  )}: ${selectedDisk.usage_rate.toFixed(2)}%`
-                );
-                lines.push(
-                  `${t("agent.metrics.disk.fsType")}: ${selectedDisk.fs_type}`
-                );
-              }
+            if (selectedDisk) {
+              lines.push(
+                `${t("agent.metrics.disk.device")}: ${selectedDisk.device}`
+              );
+              lines.push(
+                `${t("agent.metrics.disk.mountPoint")}: ${
+                  selectedDisk.mount_point
+                }`
+              );
+              lines.push(
+                `${t("agent.metrics.disk.total")}: ${formatBytes(
+                  selectedDisk.total
+                )}`
+              );
+              lines.push(
+                `${t("agent.metrics.disk.used")}: ${formatBytes(
+                  selectedDisk.used
+                )}`
+              );
+              lines.push(
+                `${t("agent.metrics.disk.free")}: ${formatBytes(
+                  selectedDisk.free
+                )}`
+              );
+              lines.push(
+                `${t(
+                  "agent.metrics.disk.usageRate"
+                )}: ${selectedDisk.usage_rate.toFixed(2)}%`
+              );
+              lines.push(
+                `${t("agent.metrics.disk.fsType")}: ${selectedDisk.fs_type}`
+              );
             }
-          } catch (e) {
-            console.error("解析磁盘数据失败:", e);
           }
           break;
 
         case "network":
-          try {
-            if (metric.network_metrics) {
-              const networkData = JSON.parse(
-                metric.network_metrics
-              ) as NetworkMetric[];
-              const selectedInterface = networkData.find(
-                (n) => n.interface === selectedNetworkInterface
+          {
+            const selectedInterface = metric.parsedNetworkMetrics.find(
+              (n) => n.interface === selectedNetworkInterface
+            );
+
+            if (selectedInterface) {
+              lines.push(
+                `${t("agent.metrics.network.interface")}: ${
+                  selectedInterface.interface
+                }`
               );
 
-              if (selectedInterface) {
+              // 显示当前网络速率
+              const currentRate = dataPoint.y;
+              if (currentRate !== undefined) {
                 lines.push(
-                  `${t("agent.metrics.network.interface")}: ${
-                    selectedInterface.interface
-                  }`
-                );
-
-                // 显示当前网络速率
-                const currentRate = dataPoint.y;
-                if (currentRate !== undefined) {
-                  if (selectedNetworkMetric === "sent") {
-                    lines.push(
-                      `${t(
-                        "agent.metrics.network.rate"
-                      )}: ${getValueDisplayText("network", currentRate)}`
-                    );
-                  } else {
-                    lines.push(
-                      `${t(
-                        "agent.metrics.network.rate"
-                      )}: ${getValueDisplayText("network", currentRate)}`
-                    );
-                  }
-                }
-
-                // 显示累计数据
-                lines.push(
-                  `${t("agent.metrics.network.sent")}: ${formatBytes(
-                    selectedInterface.bytes_sent
+                  `${t("agent.metrics.network.rate")}: ${getValueDisplayText(
+                    "network",
+                    currentRate
                   )}`
-                );
-                lines.push(
-                  `${t("agent.metrics.network.received")}: ${formatBytes(
-                    selectedInterface.bytes_recv
-                  )}`
-                );
-
-                lines.push(
-                  `${t("agent.metrics.network.packetsSent")}: ${
-                    selectedInterface.packets_sent
-                  }`
-                );
-                lines.push(
-                  `${t("agent.metrics.network.packetsReceived")}: ${
-                    selectedInterface.packets_recv
-                  }`
                 );
               }
+
+              // 显示累计数据
+              lines.push(
+                `${t("agent.metrics.network.sent")}: ${formatBytes(
+                  selectedInterface.bytes_sent
+                )}`
+              );
+              lines.push(
+                `${t("agent.metrics.network.received")}: ${formatBytes(
+                  selectedInterface.bytes_recv
+                )}`
+              );
+
+              lines.push(
+                `${t("agent.metrics.network.packetsSent")}: ${
+                  selectedInterface.packets_sent
+                }`
+              );
+              lines.push(
+                `${t("agent.metrics.network.packetsReceived")}: ${
+                  selectedInterface.packets_recv
+                }`
+              );
             }
-          } catch (e) {
-            console.error("解析网络数据失败:", e);
           }
           break;
 
@@ -490,7 +478,12 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
 
       return lines;
     },
-    [t, getValueDisplayText, selectedDiskDevice, selectedNetworkInterface]
+    [
+      t,
+      getValueDisplayText,
+      selectedDiskDevice,
+      selectedNetworkInterface,
+    ]
   );
 
   // 使用 useMemo 计算并缓存 tooltip 回调函数
@@ -512,7 +505,6 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
 
   // 使用 useMemo 缓存基础图表选项
   const baseChartOptions = useMemo<ChartOptions<"line">>(() => {
-    console.log("创建新的基础图表选项");
     const config = getMetricConfig(metricType);
 
     return {
@@ -567,14 +559,8 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
       },
       scales: {
         x: {
-          type: "time",
+          type: "linear",
           display: showTimeLabels,
-          time: {
-            unit: "hour",
-            displayFormats: {
-              hour: "HH:mm",
-            },
-          },
           grid: {
             color: "#e0e0e0",
             lineWidth: 0.5,
@@ -590,7 +576,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
               enabled: true,
             },
             callback: function (value) {
-              const date = new Date(value);
+              const date = new Date(Number(value));
               if (date.getHours() % 2 === 0) {
                 return `${date.getHours().toString().padStart(2, "0")}:00`;
               }
@@ -649,14 +635,11 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
       },
       events: ["mouseout", "mousemove", "touchstart", "touchmove"],
     };
-  }, [t, showTimeLabels, tooltipCallbacks, metricType, getMetricConfig]);
+  }, [showTimeLabels, tooltipCallbacks, metricType, getMetricConfig]);
 
   // 处理数据并生成图表数据
   const { chartData } = useMemo(() => {
-    console.log(`----开始处理${metricType}图表数据----`);
-
-    if (history.length === 0) {
-      console.log("没有接收到历史数据");
+    if (parsedHistory.length === 0) {
       return {
         chartData: {
           datasets: [
@@ -694,7 +677,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
       interfaces: Record<string, { bytes_sent: number; bytes_recv: number }>;
     } | null = null;
 
-    history.forEach((item, idx) => {
+    parsedHistory.forEach((item, idx) => {
       try {
         // 解析时间
         let timestamp: Date;
@@ -707,7 +690,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
           } else {
             timestamp = new Date();
           }
-        } catch (e) {
+        } catch {
           timestamp = new Date();
         }
 
@@ -722,93 +705,78 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
             value = item.memory_usage_rate;
             break;
           case "disk":
-            try {
-              if (item.disk_metrics) {
-                const diskData = JSON.parse(item.disk_metrics) as DiskMetric[];
-                const selectedDisk = diskData.find(
-                  (d) => d.mount_point === selectedDiskDevice
-                );
-                value = selectedDisk?.usage_rate;
-              }
-            } catch (e) {
-              console.error("解析磁盘数据失败:", e);
-            }
+            value = item.parsedDiskMetrics.find(
+              (d) => d.mount_point === selectedDiskDevice
+            )?.usage_rate;
             break;
           case "network":
-            try {
-              if (item.network_metrics) {
-                const networkData = JSON.parse(
-                  item.network_metrics
-                ) as NetworkMetric[];
-                const selectedInterface = networkData.find(
-                  (n) => n.interface === selectedNetworkInterface
-                );
+            {
+              const selectedInterface = item.parsedNetworkMetrics.find(
+                (n) => n.interface === selectedNetworkInterface
+              );
 
-                // 计算网络速率
-                if (selectedInterface) {
-                  const currentTimestamp = timestamp.getTime();
-                  const currentBytes =
+              // 计算网络速率
+              if (selectedInterface) {
+                const currentTimestamp = timestamp.getTime();
+                const currentBytes =
+                  selectedNetworkMetric === "received"
+                    ? selectedInterface.bytes_recv
+                    : selectedInterface.bytes_sent;
+
+                // 如果有前一个数据点，计算速率
+                if (
+                  prevNetworkData &&
+                  prevNetworkData.interfaces[selectedNetworkInterface] &&
+                  currentTimestamp > prevNetworkData.timestamp
+                ) {
+                  const prevBytes =
                     selectedNetworkMetric === "received"
-                      ? selectedInterface.bytes_recv
-                      : selectedInterface.bytes_sent;
+                      ? prevNetworkData.interfaces[selectedNetworkInterface]
+                          .bytes_recv
+                      : prevNetworkData.interfaces[selectedNetworkInterface]
+                          .bytes_sent;
 
-                  // 如果有前一个数据点，计算速率
-                  if (
-                    prevNetworkData &&
-                    prevNetworkData.interfaces[selectedNetworkInterface] &&
-                    currentTimestamp > prevNetworkData.timestamp
-                  ) {
-                    const prevBytes =
-                      selectedNetworkMetric === "received"
-                        ? prevNetworkData.interfaces[selectedNetworkInterface]
-                            .bytes_recv
-                        : prevNetworkData.interfaces[selectedNetworkInterface]
-                            .bytes_sent;
+                  // 计算时间差（秒）
+                  const timeDiff =
+                    (currentTimestamp - prevNetworkData.timestamp) / 1000;
 
-                    // 计算时间差（秒）
-                    const timeDiff =
-                      (currentTimestamp - prevNetworkData.timestamp) / 1000;
-
-                    // 如果时间差大于0且当前字节数大于等于前一个字节数，计算速率
-                    if (timeDiff > 0 && currentBytes >= prevBytes) {
-                      // 计算速率（字节/秒）
-                      value = (currentBytes - prevBytes) / timeDiff;
-                    } else {
-                      // 如果数据异常（如计数器重置），则跳过该点
-                      value = undefined;
-                    }
+                  // 如果时间差大于0且当前字节数大于等于前一个字节数，计算速率
+                  if (timeDiff > 0 && currentBytes >= prevBytes) {
+                    // 计算速率（字节/秒）
+                    value = (currentBytes - prevBytes) / timeDiff;
                   } else {
-                    // 第一个数据点，无法计算速率
+                    // 如果数据异常（如计数器重置），则跳过该点
                     value = undefined;
                   }
-
-                  // 更新前一个数据点信息
-                  if (!prevNetworkData) {
-                    prevNetworkData = {
-                      timestamp: currentTimestamp,
-                      interfaces: {},
-                    };
-                  }
-
-                  // 保存当前接口的数据
-                  if (!prevNetworkData.interfaces[selectedNetworkInterface]) {
-                    prevNetworkData.interfaces[selectedNetworkInterface] = {
-                      bytes_sent: 0,
-                      bytes_recv: 0,
-                    };
-                  }
-
-                  prevNetworkData.timestamp = currentTimestamp;
-                  prevNetworkData.interfaces[
-                    selectedNetworkInterface
-                  ].bytes_sent = selectedInterface.bytes_sent;
-                  prevNetworkData.interfaces[
-                    selectedNetworkInterface
-                  ].bytes_recv = selectedInterface.bytes_recv;
+                } else {
+                  // 第一个数据点，无法计算速率
+                  value = undefined;
                 }
+
+                // 更新前一个数据点信息
+                if (!prevNetworkData) {
+                  prevNetworkData = {
+                    timestamp: currentTimestamp,
+                    interfaces: {},
+                  };
+                }
+
+                // 保存当前接口的数据
+                if (!prevNetworkData.interfaces[selectedNetworkInterface]) {
+                  prevNetworkData.interfaces[selectedNetworkInterface] = {
+                    bytes_sent: 0,
+                    bytes_recv: 0,
+                  };
+                }
+
+                prevNetworkData.timestamp = currentTimestamp;
+                prevNetworkData.interfaces[
+                  selectedNetworkInterface
+                ].bytes_sent = selectedInterface.bytes_sent;
+                prevNetworkData.interfaces[
+                  selectedNetworkInterface
+                ].bytes_recv = selectedInterface.bytes_recv;
               }
-            } catch (e) {
-              console.error("解析网络数据失败:", e);
             }
             break;
           case "load":
@@ -846,11 +814,9 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
       .filter((point) => point.x >= twentyFourHoursAgo)
       .sort((a, b) => a.x - b.x);
 
-    console.log(`${metricType}Data:`, metricsData);
-
     // 确保相邻点至少间隔1分钟
     const oneMinute = 60 * 1000;
-    let filteredData: DataPoint[] = [];
+    const filteredData: DataPoint[] = [];
 
     if (metricsData.length > 0) {
       filteredData.push(metricsData[0]);
@@ -970,12 +936,13 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
       yAxisMax: calculatedYAxisMax,
     };
   }, [
-    history,
+    parsedHistory,
     metricType,
     selectedDiskDevice,
     selectedNetworkInterface,
     selectedNetworkMetric,
     selectedLoadType,
+    getMetricConfig,
   ]);
 
   // 渲染设备选择器

@@ -10,8 +10,16 @@
     "build:backend": "cd backend && pnpm run build",
     "generate": "cd backend && pnpm run db:generate",
     "build": "pnpm run generate && pnpm run build:frontend && pnpm run build:backend",
+    "test:contracts": "pnpm --dir backend run test:contracts",
     "deploy": "wrangler deploy",
     "dev:preview": "pnpm run build && cd backend && pnpm run dev",
     "preview": "cd backend && pnpm run dev"
+  },
+  "pnpm": {
+    "overrides": {
+      "browserslist": "^4.28.2",
+      "caniuse-lite": "1.0.30001797",
+      "update-browserslist-db": "^1.2.3"
+    }
   }
 }

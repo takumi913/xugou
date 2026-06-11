@@ -14,6 +14,7 @@ export interface Monitor {
   timeout: number;
   status: "up" | "down" | "pending" | "unknown" | "error";
   last_checked?: string;
+  next_check_at?: string;
   response_time?: number;
   user_id: number;
   created_by?: number;

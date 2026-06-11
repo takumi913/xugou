@@ -1,5 +1,6 @@
-import { Box, Card, Flex, Text } from "@radix-ui/themes";
+import { Box, Card, Flex, Text } from "@/components/ui/theme-shim";
 import { Tabs, TabsContent, TabsList, TabsTrigger, Badge } from "./ui";
+import type { BadgeColor } from "./ui/badge";
 import { GlobeIcon } from "@radix-ui/react-icons";
 import MetricsChart from "./MetricsChart";
 import { useTranslation } from "react-i18next";
@@ -17,16 +18,15 @@ const AgentCard = ({
 }: AgentCardProps) => {
   const { t } = useTranslation();
 
-  console.log(t("agentCard.receivedData"), agent);
-
   // 根据status属性判断状态
   const agentStatus = agent.status || "inactive";
 
   // 状态颜色映射
-  const statusColors: { [key: string]: string } = {
+  const statusColors: Record<string, BadgeColor> = {
     active: "green",
     inactive: "amber",
     connecting: "yellow",
+    unknown: "gray",
   };
 
   // 状态文本映射
@@ -51,7 +51,7 @@ const AgentCard = ({
 
     try {
       return new Date(agent.updated_at).toLocaleString();
-    } catch (e) {
+    } catch {
       return agent.updated_at;
     }
   };
@@ -98,7 +98,7 @@ const AgentCard = ({
             {t("agent.lastUpdated")}: {formatLastUpdated()}
           </Text>
         )}
-        <Badge color={statusColors[agentStatus] as any}>
+        <Badge color={statusColors[agentStatus] ?? "gray"}>
           {statusText[agentStatus] || agentStatus}
         </Badge>
       </Flex>

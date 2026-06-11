@@ -1,4 +1,4 @@
-import { Box, Flex, Heading, Text, Grid } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text, Grid } from "@/components/ui/theme-shim";
 import { Button, Card } from "@/components/ui";
 import { Link } from "react-router-dom";
 import {

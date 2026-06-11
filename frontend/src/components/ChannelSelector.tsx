@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Box, Flex, Text } from "@radix-ui/themes";
+import { Box, Flex, Text } from "@/components/ui/theme-shim";
 import { CheckIcon } from "@radix-ui/react-icons";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
@@ -156,10 +156,10 @@ const ChannelSelector = ({
                       borderBottom: "1px solid var(--gray-4)",
                       backgroundColor: "white",
                     }}
-                    onMouseOver={(e) => {
+                    onMouseOver={(e: React.MouseEvent<HTMLDivElement>) => {
                       e.currentTarget.style.backgroundColor = "var(--gray-3)";
                     }}
-                    onMouseOut={(e) => {
+                    onMouseOut={(e: React.MouseEvent<HTMLDivElement>) => {
                       e.currentTarget.style.backgroundColor = "white";
                     }}
                   >

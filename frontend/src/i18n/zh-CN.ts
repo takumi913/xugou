@@ -196,7 +196,9 @@ const zhCN = {
     "monitor.form.urlPlaceholder": "输入要监控的URL",
     "monitor.form.method": "请求方法",
     "monitor.form.interval": "检查间隔（分钟）",
-    "monitor.form.intervalMin": "最小间隔 1 分钟",
+    "monitor.form.intervalMin": "免费模式默认最小间隔 5 分钟",
+    "monitor.form.intervalQuotaWarning":
+      "低于 5 分钟会更快消耗 Cloudflare D1 与 Worker 免费额度，后端可能会自动提升到安全间隔。",
     "monitor.form.timeout": "超时时间（秒）",
     "monitor.form.expectedStatus": "预期状态码",
     "monitor.form.headers": "请求头",
@@ -487,6 +489,8 @@ const zhCN = {
       "当客户端状态或资源使用超出阈值时发送通知",
     "notifications.settings.enable": "启用通知",
     "notifications.settings.threshold": "触发阈值",
+    "notifications.settings.cooldownMinutes": "冷却时间",
+    "notifications.settings.minutes": "分钟",
     "notifications.specificMonitors.description":
       "配置针对特定API监控的通知设置，这些设置将覆盖全局通知设置",
     "notifications.specificAgents.description":
@@ -556,7 +560,6 @@ const zhCN = {
     // 页脚
     "footer.copyright": "© {year} XUGOU. 保留所有权利。",
     "footer.blog": "博客",
-    "footer.youtube": "油管频道",
     "footer.tempMail": "24小时临时邮箱",
 
     // AgentCard 组件

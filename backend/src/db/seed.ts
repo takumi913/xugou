@@ -25,8 +25,6 @@ export async function checkAndInitializeDatabase(d1: Bindings["DB"]): Promise<{
   message: string;
 }> {
   try {
-    console.log("开始数据库初始化流程...");
-
     // 1. 执行迁移
     await runMigrations(d1);
 
@@ -51,7 +49,6 @@ export async function checkAndInitializeDatabase(d1: Bindings["DB"]): Promise<{
 
 // 创建管理员用户
 export async function createAdminUser(): Promise<void> {
-  console.log("检查管理员用户...");
   const adminUser = await db
     .select()
     .from(users)
@@ -59,8 +56,6 @@ export async function createAdminUser(): Promise<void> {
 
   // 如果不存在管理员用户，则创建一个
   if (adminUser.length === 0) {
-    console.log("创建管理员用户...");
-
     const hashedPassword = await bcrypt.hash("admin123", 10);
     const now = new Date().toISOString();
 
@@ -83,7 +78,6 @@ export async function createNotificationTemplates(): Promise<void> {
   const existingTemplates = await db.select().from(notificationTemplates);
 
   if (existingTemplates.length === 0) {
-    console.log("添加默认通知模板...");
     const now = new Date().toISOString();
     const userId = 1; // 管理员用户ID
 
@@ -121,7 +115,6 @@ export async function createNotificationChannelsAndSettings(): Promise<void> {
   const existingChannels = await db.select().from(notificationChannels);
 
   if (existingChannels.length === 0) {
-    console.log("添加默认通知渠道...");
     const now = new Date().toISOString();
     const userId = 1; // 管理员用户ID
 
@@ -142,7 +135,6 @@ export async function createNotificationChannelsAndSettings(): Promise<void> {
   const existingSettings = await db.select().from(notificationSettings);
 
   if (existingSettings.length === 0) {
-    console.log("添加默认通知设置...");
     const now = new Date().toISOString();
     const userId = 1; // 管理员用户ID
 
@@ -153,6 +145,7 @@ export async function createNotificationChannelsAndSettings(): Promise<void> {
       enabled: 0,
       on_down: 1,
       on_recovery: 1,
+      cooldown_minutes: 30,
       channels: "[1]", // channels (只有Telegram)
       created_at: now,
       updated_at: now,
@@ -171,6 +164,7 @@ export async function createNotificationChannelsAndSettings(): Promise<void> {
       memory_threshold: 80,
       on_disk_threshold: 1,
       disk_threshold: 90,
+      cooldown_minutes: 30,
       channels: "[1]", // channels (只有Telegram)
       created_at: now,
       updated_at: now,
@@ -184,7 +178,6 @@ export async function createDefaultStatusPage(): Promise<void> {
   const existingConfig = await db.select().from(statusPageConfig);
 
   if (existingConfig.length === 0) {
-    console.log("创建默认状态页配置...");
     const now = new Date().toISOString();
     const userId = 1; // 管理员用户ID
 
@@ -238,14 +231,12 @@ export async function createDefaultStatusPage(): Promise<void> {
 
 // 新增：创建默认的应用设置
 export async function createDefaultSettings(): Promise<void> {
-  console.log("检查默认的应用设置...");
   const registrationSetting = await db
     .select()
     .from(settings)
     .where(eq(settings.key, "allow_new_user_registration"));
 
   if (registrationSetting.length === 0) {
-    console.log("创建默认的新用户注册设置...");
     await db.insert(settings).values({
       key: "allow_new_user_registration",
       value: "false", // 默认不允许新用户注册

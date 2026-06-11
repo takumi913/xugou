@@ -1,5 +1,5 @@
 import api from "./client";
-import { LoginRequest, AuthResponse } from "../types/auth";
+import { LoginRequest, RegisterRequest, AuthResponse } from "../types/auth";
 
 // 登录
 export const login = async (
@@ -10,7 +10,7 @@ export const login = async (
 };
 
 // 注册
-export const register = async (data: any): Promise<AuthResponse> => {
+export const register = async (data: RegisterRequest): Promise<AuthResponse> => {
   const response = await api.post("/api/auth/register", data);
   return response.data;
 };

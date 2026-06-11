@@ -196,7 +196,9 @@ const enUS = {
     "monitor.form.urlPlaceholder": "Enter URL to monitor",
     "monitor.form.method": "Request Method",
     "monitor.form.interval": "Check Interval (minutes)",
-    "monitor.form.intervalMin": "Minimum interval 1 minute",
+    "monitor.form.intervalMin": "Free mode default minimum interval is 5 minutes",
+    "monitor.form.intervalQuotaWarning":
+      "Intervals under 5 minutes consume Cloudflare D1 and Worker free quotas faster; the backend may raise this to the safe interval.",
     "monitor.form.timeout": "Timeout (seconds)",
     "monitor.form.expectedStatus": "Expected Status Code",
     "monitor.form.headers": "Request Headers",
@@ -494,6 +496,8 @@ const enUS = {
     "notifications.settings.agents.description": "Send notifications when agent status or resource usage exceeds thresholds",
     "notifications.settings.enable": "Enable Notifications",
     "notifications.settings.threshold": "Trigger Threshold",
+    "notifications.settings.cooldownMinutes": "Cooldown",
+    "notifications.settings.minutes": "minutes",
     "notifications.specificMonitors.description": "Configure notification settings for specific API monitors, these settings will override global notification settings",
     "notifications.specificAgents.description": "Configure notification settings for specific agents, these settings will override global notification settings",
     "notifications.specificSettings.override": "Custom Settings",
@@ -559,7 +563,6 @@ const enUS = {
     // Footer
     "footer.copyright": "© {year} XUGOU. All rights reserved.",
     "footer.blog": "Blog",
-    "footer.youtube": "YouTube Channel",
     "footer.tempMail": "24-hour Temporary Email",
 
     // AgentCard Component

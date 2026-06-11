@@ -1,4 +1,5 @@
 import api from "./client";
+import type { AxiosResponse } from "axios";
 import type {
   NotificationChannel,
   NotificationConfig,
@@ -29,6 +30,13 @@ type BackendNotificationTemplate = {
 };
 
 export type NotificationSettings = NotificationConfig["settings"];
+
+type RawNotificationSettings = {
+  monitors?: unknown;
+  agents?: unknown;
+  specificMonitors?: unknown;
+  specificAgents?: unknown;
+};
 
 export interface NotificationConfigResponse {
   success: boolean;
@@ -111,6 +119,9 @@ const normalizeChannelIds = (value: unknown): number[] => {
   return [];
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 const transformChannel = (
   channel: BackendNotificationChannel
 ): NotificationChannel => ({
@@ -138,12 +149,13 @@ const transformTemplate = (
   updatedAt: template.updated_at,
 });
 
-const normalizeSettings = (settings: any): NotificationSettings => {
+const normalizeSettings = (settings: unknown): NotificationSettings => {
   const normalized: NotificationSettings = {
     monitors: {
       enabled: false,
       onDown: false,
       onRecovery: false,
+      cooldownMinutes: 30,
       channels: [],
     },
     agents: {
@@ -156,107 +168,136 @@ const normalizeSettings = (settings: any): NotificationSettings => {
       memoryThreshold: 85,
       onDiskThreshold: false,
       diskThreshold: 90,
+      cooldownMinutes: 30,
       channels: [],
     },
     specificMonitors: {},
     specificAgents: {},
   };
 
-  if (!settings) {
+  if (!settings || !isRecord(settings)) {
     return normalized;
   }
 
-  if (settings.monitors) {
+  const rawSettings = settings as RawNotificationSettings;
+  const monitorSettings = isRecord(rawSettings.monitors)
+    ? rawSettings.monitors
+    : undefined;
+  const agentSettings = isRecord(rawSettings.agents)
+    ? rawSettings.agents
+    : undefined;
+
+  if (monitorSettings) {
     normalized.monitors = {
-      enabled: normalizeBoolean(settings.monitors.enabled),
-      onDown: normalizeBoolean(settings.monitors.onDown ?? settings.monitors.on_down),
+      enabled: normalizeBoolean(monitorSettings.enabled),
+      onDown: normalizeBoolean(monitorSettings.onDown ?? monitorSettings.on_down),
       onRecovery: normalizeBoolean(
-        settings.monitors.onRecovery ?? settings.monitors.on_recovery
+        monitorSettings.onRecovery ?? monitorSettings.on_recovery
       ),
-      channels: normalizeChannelIds(settings.monitors.channels),
+      cooldownMinutes: normalizeNumber(
+        monitorSettings.cooldownMinutes ?? monitorSettings.cooldown_minutes,
+        30
+      ),
+      channels: normalizeChannelIds(monitorSettings.channels),
     };
   }
 
-  if (settings.agents) {
+  if (agentSettings) {
     normalized.agents = {
-      enabled: normalizeBoolean(settings.agents.enabled),
-      onOffline: normalizeBoolean(settings.agents.onOffline ?? settings.agents.on_offline),
+      enabled: normalizeBoolean(agentSettings.enabled),
+      onOffline: normalizeBoolean(agentSettings.onOffline ?? agentSettings.on_offline),
       onRecovery: normalizeBoolean(
-        settings.agents.onRecovery ?? settings.agents.on_recovery
+        agentSettings.onRecovery ?? agentSettings.on_recovery
       ),
       onCpuThreshold: normalizeBoolean(
-        settings.agents.onCpuThreshold ?? settings.agents.on_cpu_threshold
+        agentSettings.onCpuThreshold ?? agentSettings.on_cpu_threshold
       ),
-      cpuThreshold: normalizeNumber(settings.agents.cpuThreshold ?? settings.agents.cpu_threshold, 90),
+      cpuThreshold: normalizeNumber(agentSettings.cpuThreshold ?? agentSettings.cpu_threshold, 90),
       onMemoryThreshold: normalizeBoolean(
-        settings.agents.onMemoryThreshold ?? settings.agents.on_memory_threshold
+        agentSettings.onMemoryThreshold ?? agentSettings.on_memory_threshold
       ),
       memoryThreshold: normalizeNumber(
-        settings.agents.memoryThreshold ?? settings.agents.memory_threshold,
+        agentSettings.memoryThreshold ?? agentSettings.memory_threshold,
         85
       ),
       onDiskThreshold: normalizeBoolean(
-        settings.agents.onDiskThreshold ?? settings.agents.on_disk_threshold
+        agentSettings.onDiskThreshold ?? agentSettings.on_disk_threshold
       ),
       diskThreshold: normalizeNumber(
-        settings.agents.diskThreshold ?? settings.agents.disk_threshold,
+        agentSettings.diskThreshold ?? agentSettings.disk_threshold,
         90
       ),
-      channels: normalizeChannelIds(settings.agents.channels),
+      cooldownMinutes: normalizeNumber(
+        agentSettings.cooldownMinutes ?? agentSettings.cooldown_minutes,
+        30
+      ),
+      channels: normalizeChannelIds(agentSettings.channels),
     };
   }
 
-  if (settings.specificMonitors) {
-    Object.entries(settings.specificMonitors).forEach(
-      ([monitorId, monitorSetting]: [string, any]) => {
-        normalized.specificMonitors[monitorId] = {
-          enabled: normalizeBoolean(monitorSetting?.enabled),
-          onDown: normalizeBoolean(
-            monitorSetting?.onDown ?? monitorSetting?.on_down
-          ),
-          onRecovery: normalizeBoolean(
-            monitorSetting?.onRecovery ?? monitorSetting?.on_recovery
-          ),
-          channels: normalizeChannelIds(monitorSetting?.channels),
-        };
+  if (isRecord(rawSettings.specificMonitors)) {
+    Object.entries(rawSettings.specificMonitors).forEach(
+      ([monitorId, monitorSetting]) => {
+        if (isRecord(monitorSetting)) {
+          normalized.specificMonitors[monitorId] = {
+            enabled: normalizeBoolean(monitorSetting.enabled),
+            onDown: normalizeBoolean(
+              monitorSetting.onDown ?? monitorSetting.on_down
+            ),
+            onRecovery: normalizeBoolean(
+              monitorSetting.onRecovery ?? monitorSetting.on_recovery
+            ),
+            cooldownMinutes: normalizeNumber(
+              monitorSetting.cooldownMinutes ?? monitorSetting.cooldown_minutes,
+              normalized.monitors.cooldownMinutes
+            ),
+            channels: normalizeChannelIds(monitorSetting.channels),
+          };
+        }
       }
     );
   }
 
-  if (settings.specificAgents) {
-    Object.entries(settings.specificAgents).forEach(
-      ([agentId, agentSetting]: [string, any]) => {
-        normalized.specificAgents[agentId] = {
-          enabled: normalizeBoolean(agentSetting?.enabled),
-          onOffline: normalizeBoolean(
-            agentSetting?.onOffline ?? agentSetting?.on_offline
-          ),
-          onRecovery: normalizeBoolean(
-            agentSetting?.onRecovery ?? agentSetting?.on_recovery
-          ),
-          onCpuThreshold: normalizeBoolean(
-            agentSetting?.onCpuThreshold ?? agentSetting?.on_cpu_threshold
-          ),
-          cpuThreshold: normalizeNumber(
-            agentSetting?.cpuThreshold ?? agentSetting?.cpu_threshold,
-            normalized.agents.cpuThreshold
-          ),
-          onMemoryThreshold: normalizeBoolean(
-            agentSetting?.onMemoryThreshold ?? agentSetting?.on_memory_threshold
-          ),
-          memoryThreshold: normalizeNumber(
-            agentSetting?.memoryThreshold ?? agentSetting?.memory_threshold,
-            normalized.agents.memoryThreshold
-          ),
-          onDiskThreshold: normalizeBoolean(
-            agentSetting?.onDiskThreshold ?? agentSetting?.on_disk_threshold
-          ),
-          diskThreshold: normalizeNumber(
-            agentSetting?.diskThreshold ?? agentSetting?.disk_threshold,
-            normalized.agents.diskThreshold
-          ),
-          channels: normalizeChannelIds(agentSetting?.channels),
-        };
+  if (isRecord(rawSettings.specificAgents)) {
+    Object.entries(rawSettings.specificAgents).forEach(
+      ([agentId, agentSetting]) => {
+        if (isRecord(agentSetting)) {
+          normalized.specificAgents[agentId] = {
+            enabled: normalizeBoolean(agentSetting.enabled),
+            onOffline: normalizeBoolean(
+              agentSetting.onOffline ?? agentSetting.on_offline
+            ),
+            onRecovery: normalizeBoolean(
+              agentSetting.onRecovery ?? agentSetting.on_recovery
+            ),
+            onCpuThreshold: normalizeBoolean(
+              agentSetting.onCpuThreshold ?? agentSetting.on_cpu_threshold
+            ),
+            cpuThreshold: normalizeNumber(
+              agentSetting.cpuThreshold ?? agentSetting.cpu_threshold,
+              normalized.agents.cpuThreshold
+            ),
+            onMemoryThreshold: normalizeBoolean(
+              agentSetting.onMemoryThreshold ?? agentSetting.on_memory_threshold
+            ),
+            memoryThreshold: normalizeNumber(
+              agentSetting.memoryThreshold ?? agentSetting.memory_threshold,
+              normalized.agents.memoryThreshold
+            ),
+            onDiskThreshold: normalizeBoolean(
+              agentSetting.onDiskThreshold ?? agentSetting.on_disk_threshold
+            ),
+            diskThreshold: normalizeNumber(
+              agentSetting.diskThreshold ?? agentSetting.disk_threshold,
+              normalized.agents.diskThreshold
+            ),
+            cooldownMinutes: normalizeNumber(
+              agentSetting.cooldownMinutes ?? agentSetting.cooldown_minutes,
+              normalized.agents.cooldownMinutes
+            ),
+            channels: normalizeChannelIds(agentSetting.channels),
+          };
+        }
       }
     );
   }
@@ -274,7 +315,7 @@ export const getNotificationConfig =
         data?: {
           channels?: BackendNotificationChannel[];
           templates?: BackendNotificationTemplate[];
-          settings?: any;
+          settings?: unknown;
         };
       }>("/api/notifications");
 
@@ -388,7 +429,7 @@ export const saveNotificationSettings = async (
 }> => {
   try {
     // 创建一个请求队列，用于批量保存设置
-    const saveRequests: Promise<any>[] = [];
+    const saveRequests: Promise<AxiosResponse<{ success?: boolean }>>[] = [];
 
     // 转换全局监控设置
     const monitorSettings = {
@@ -396,6 +437,7 @@ export const saveNotificationSettings = async (
       enabled: settings.monitors.enabled,
       on_down: settings.monitors.onDown,
       on_recovery: settings.monitors.onRecovery,
+      cooldown_minutes: settings.monitors.cooldownMinutes,
       channels: JSON.stringify(settings.monitors.channels),
     };
 
@@ -413,6 +455,7 @@ export const saveNotificationSettings = async (
       memory_threshold: settings.agents.memoryThreshold,
       on_disk_threshold: settings.agents.onDiskThreshold,
       disk_threshold: settings.agents.diskThreshold,
+      cooldown_minutes: settings.agents.cooldownMinutes,
       channels: JSON.stringify(settings.agents.channels),
     };
 
@@ -428,6 +471,7 @@ export const saveNotificationSettings = async (
         enabled: monitorSetting.enabled,
         on_down: monitorSetting.onDown,
         on_recovery: monitorSetting.onRecovery,
+        cooldown_minutes: monitorSetting.cooldownMinutes,
         channels: JSON.stringify(monitorSetting.channels),
       };
 
@@ -452,6 +496,7 @@ export const saveNotificationSettings = async (
         memory_threshold: agentSetting.memoryThreshold,
         on_disk_threshold: agentSetting.onDiskThreshold,
         disk_threshold: agentSetting.diskThreshold,
+        cooldown_minutes: agentSetting.cooldownMinutes,
         channels: JSON.stringify(agentSetting.channels),
       };
 
@@ -673,7 +718,7 @@ export const getNotificationHistory = async (params: {
 }): Promise<{
   success: boolean;
   message?: string;
-  data?: any[];
+  data?: unknown[];
 }> => {
   try {
     // 构建查询参数

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text } from "@/components/ui/theme-shim";
 import {
   Button,
   Card,
@@ -52,7 +52,7 @@ const CreateUser = () => {
       } else {
         toast.error(response.message || "创建用户失败");
       }
-    } catch (error) {
+    } catch {
       toast.error("创建用户失败");
     } finally {
       setLoading(false);

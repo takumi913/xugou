@@ -2,6 +2,12 @@ import { Hono } from "hono";
 import { JwtPayload } from "../types";
 import { Bindings } from "../models/db";
 import * as MonitorService from "../services/MonitorService";
+import {
+  badRequest,
+  idParamSchema,
+  monitorSchema,
+  monitorUpdateSchema,
+} from "./schemas";
 
 const monitors = new Hono<{ Bindings: Bindings; Variables: { jwtPayload: JwtPayload } }>();
 
@@ -37,10 +43,13 @@ monitors.get("/daily", async (c) => {
 // 创建监控
 monitors.post("/", async (c) => {
   const payload = c.get("jwtPayload") as JwtPayload;
-  const data = await c.req.json();
+  const parsed = monitorSchema.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json(badRequest("监控创建参数无效"), 400);
+  }
 
   // 调用服务层创建监控
-  const result = await MonitorService.createMonitor(data, payload.id);
+  const result = await MonitorService.createMonitor(parsed.data, payload.id, c.env);
 
   return c.json(
     {
@@ -69,7 +78,7 @@ monitors.get("/history", async (c) => {
 
 // 获取单个监控
 monitors.get("/:id", async (c) => {
-  const id = parseInt(c.req.param("id"));
+  const id = idParamSchema.parse(c.req.param("id"));
   const payload = c.get("jwtPayload") as JwtPayload;
 
   // 调用服务层获取监控详情
@@ -87,12 +96,21 @@ monitors.get("/:id", async (c) => {
 
 // 更新监控
 monitors.put("/:id", async (c) => {
-  const id = parseInt(c.req.param("id"));
-  const data = await c.req.json();
+  const id = idParamSchema.parse(c.req.param("id"));
+  const parsed = monitorUpdateSchema.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json(badRequest("监控更新参数无效"), 400);
+  }
   const payload = c.get("jwtPayload") as JwtPayload; // 获取用户信息
 
   // 调用服务层更新监控，并传入用户信息以进行权限验证
-  const result = await MonitorService.updateMonitor(id, data, payload.id, payload.role);
+  const result = await MonitorService.updateMonitor(
+    id,
+    parsed.data,
+    payload.id,
+    payload.role,
+    c.env
+  );
 
   return c.json(
     {
@@ -106,7 +124,7 @@ monitors.put("/:id", async (c) => {
 
 // 删除监控
 monitors.delete("/:id", async (c) => {
-  const id = parseInt(c.req.param("id"));
+  const id = idParamSchema.parse(c.req.param("id"));
   const payload = c.get("jwtPayload") as JwtPayload;
 
   // 调用服务层删除监控，并传入用户信息以进行权限验证
@@ -123,7 +141,7 @@ monitors.delete("/:id", async (c) => {
 
 // 获取单个监控状态历史
 monitors.get("/:id/history", async (c) => {
-  const id = parseInt(c.req.param("id"));
+  const id = idParamSchema.parse(c.req.param("id"));
   const payload = c.get("jwtPayload") as JwtPayload;
 
   // 调用服务层获取监控历史
@@ -145,7 +163,7 @@ monitors.get("/:id/history", async (c) => {
 
 // 获取单个监控的每日统计数据
 monitors.get("/:id/daily", async (c) => {
-  const id = parseInt(c.req.param("id"));
+  const id = idParamSchema.parse(c.req.param("id"));
   const payload = c.get("jwtPayload") as JwtPayload;
 
   // 调用服务层获取每日统计数据
@@ -160,7 +178,7 @@ monitors.get("/:id/daily", async (c) => {
 
 // 手动检查单个监控
 monitors.post("/:id/check", async (c) => {
-  const id = parseInt(c.req.param("id"));
+  const id = idParamSchema.parse(c.req.param("id"));
   const payload = c.get("jwtPayload") as JwtPayload;
 
   // 调用服务层手动检查监控，并传入用户信息以进行权限验证

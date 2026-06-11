@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Box, Flex, Heading, Text, Container } from "@radix-ui/themes";
+import { useState, useEffect, useCallback } from "react";
+import { Box, Flex, Heading, Text, Container } from "@/components/ui/theme-shim";
 import {
   Card,
   Button,
@@ -70,36 +70,47 @@ const StatusPageConfig = () => {
     }
   }, [user]);
 
-  // 从API获取数据
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     // 获取状态页配置
     setLoading(true);
-    console.log(t("statusPageConfig.fetchingConfig"));
-    const configResponse = await getStatusPageConfig();
-    console.log(
-      "==== 状态页配置API响应 ====",
-      JSON.stringify(configResponse, null, 2)
-    );
+    try {
+      const configResponse = await getStatusPageConfig(signal);
 
-    // 如果获取到有效的配置数据，直接使用
-    if (configResponse) {
-      setConfig((prev) => ({
-        ...prev,
-        title: configResponse?.title || t("statusPage.title"),
-        description:
-          configResponse?.description || t("statusPage.allOperational"),
-        logoUrl: configResponse?.logoUrl || "",
-        customCss: configResponse?.customCss || "",
-        monitors: configResponse.monitors || [],
-        agents: configResponse.agents || [],
-      }));
+      if (signal?.aborted) {
+        return;
+      }
+
+      // 如果获取到有效的配置数据，直接使用
+      if (configResponse) {
+        setConfig((prev) => ({
+          ...prev,
+          title: configResponse?.title || t("statusPage.title"),
+          description:
+            configResponse?.description || t("statusPage.allOperational"),
+          logoUrl: configResponse?.logoUrl || "",
+          customCss: configResponse?.customCss || "",
+          monitors: configResponse.monitors || [],
+          agents: configResponse.agents || [],
+        }));
+      }
+    } catch {
+      if (!signal?.aborted) {
+        toast.error(t("common.error.fetch"));
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
-  };
+  }, [t]);
+
+  // 从API获取数据
+  useEffect(() => {
+    const abortController = new AbortController();
+    fetchData(abortController.signal);
+
+    return () => abortController.abort();
+  }, [fetchData]);
 
   // 处理表单字段变化
   const handleChange = (
@@ -351,13 +362,6 @@ const StatusPageConfig = () => {
                 ) : (
                   <Box>
                     {config.monitors.map((monitor) => {
-                      console.log(
-                        `【${t("statusPageConfig.serviceRendering")}】${
-                          monitor.name
-                        }(${monitor.id}), ${t(
-                          "statusPageConfig.selectedStatus"
-                        )}: ${monitor.selected}`
-                      );
                       return (
                         <Flex
                           key={monitor.id}
@@ -370,15 +374,6 @@ const StatusPageConfig = () => {
                             checked={monitor.selected}
                             onCheckedChange={(checked) => {
                               const newCheckedState = !!checked;
-                              console.log(
-                                `${t(
-                                  "statusPageConfig.monitorStatusChange"
-                                )}: ${monitor.name}(${monitor.id}), ${t(
-                                  "statusPageConfig.from"
-                                )} ${monitor.selected} ${t(
-                                  "statusPageConfig.to"
-                                )} ${newCheckedState}`
-                              );
                               handleMonitorChange(monitor.id, newCheckedState);
                             }}
                           />
@@ -399,13 +394,6 @@ const StatusPageConfig = () => {
                 ) : (
                   <Box>
                     {config.agents.map((agent) => {
-                      console.log(
-                        `【${t("statusPageConfig.agentRendering")}】${
-                          agent.name
-                        }(${agent.id}), ${t(
-                          "statusPageConfig.selectedStatus"
-                        )}: ${agent.selected}`
-                      );
                       return (
                         <Flex
                           key={agent.id}
@@ -418,15 +406,6 @@ const StatusPageConfig = () => {
                             className="ml-auto"
                             onCheckedChange={(checked) => {
                               const newCheckedState = !!checked;
-                              console.log(
-                                `${t("statusPageConfig.agentStatusChange")}: ${
-                                  agent.name
-                                }(${agent.id}), ${t("statusPageConfig.from")} ${
-                                  agent.selected
-                                } ${t(
-                                  "statusPageConfig.to"
-                                )} ${newCheckedState}`
-                              );
                               handleAgentChange(agent.id, newCheckedState);
                             }}
                           />

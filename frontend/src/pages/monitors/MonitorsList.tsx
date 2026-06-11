@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
@@ -8,7 +8,7 @@ import {
   IconButton,
   Grid,
   Container,
-} from "@radix-ui/themes";
+} from "@/components/ui/theme-shim";
 import {
   Button,
   Table,
@@ -49,6 +49,7 @@ import {
 import { MonitorWithDailyStatsAndStatusHistory } from "../../types/monitors";
 import MonitorCard from "../../components/MonitorCard";
 import { useTranslation } from "react-i18next";
+import { usePolling } from "../../hooks/usePolling";
 
 const MonitorsList = () => {
   const navigate = useNavigate();
@@ -64,56 +65,73 @@ const MonitorsList = () => {
   );
   const { t } = useTranslation();
 
-  useEffect(() => {
-    fetchData();
-
-    // 设置定时器，每分钟刷新一次数据
-    const intervalId = setInterval(() => {
-      console.log("MonitorsList: 自动刷新数据...");
-      fetchData();
-    }, 60000); // 60000ms = 1分钟
-
-    // 组件卸载时清除定时器
-    return () => clearInterval(intervalId);
-  }, []);
-
   // 获取监控数据
-  const fetchData = async () => {
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    const response = await getAllMonitors();
-    const responseDailyStats = await getAllDailyStats();
-    const responseMonitorHistory = await getAllMonitorHistory();
+    try {
+      const [response, responseDailyStats, responseMonitorHistory] =
+        await Promise.all([
+          getAllMonitors(signal),
+          getAllDailyStats(signal),
+          getAllMonitorHistory(signal),
+        ]);
+      if (signal?.aborted) return;
 
-    console.log("responseDailyStats: ", responseDailyStats);
+      if (
+        response.success &&
+        responseDailyStats.success &&
+        responseMonitorHistory.success
+      ) {
+        const dailyStatsByMonitor = new Map<
+          number,
+          NonNullable<typeof responseDailyStats.dailyStats>
+        >();
+        for (const stat of responseDailyStats.dailyStats ?? []) {
+          const stats = dailyStatsByMonitor.get(stat.monitor_id) ?? [];
+          stats.push(stat);
+          dailyStatsByMonitor.set(stat.monitor_id, stats);
+        }
 
-    if (
-      response.success &&
-      responseDailyStats.success &&
-      responseMonitorHistory.success
-    ) {
-      const monitorsWithData = response.monitors?.map((monitor) => {
-        // 将与当前监控相关的 dailyStats 数据附加到 monitor 上
-        const dailyStats = (responseDailyStats.dailyStats || []).filter(
-          (stat) => stat.monitor_id === monitor.id
+        const historyByMonitor = new Map<
+          number,
+          NonNullable<typeof responseMonitorHistory.history>
+        >();
+        for (const item of responseMonitorHistory.history ?? []) {
+          const history = historyByMonitor.get(item.monitor_id) ?? [];
+          history.push(item);
+          historyByMonitor.set(item.monitor_id, history);
+        }
+
+        const monitorsWithData = response.monitors?.map((monitor) => {
+          const dailyStats = dailyStatsByMonitor.get(monitor.id) ?? [];
+          const history = historyByMonitor.get(monitor.id) ?? [];
+          // 返回附加了相关数据的 monitor
+          return {
+            ...monitor,
+            dailyStats: dailyStats,
+            history: history,
+          };
+        });
+        setMonitors(monitorsWithData || []);
+      } else {
+        setError(response.message || t("monitors.loadingError"));
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        setError(
+          error instanceof Error ? error.message : t("monitors.loadingError")
         );
-        // 将与当前监控相关的 monitorHistory 数据附加到 monitor 上
-        const history = (responseMonitorHistory.history || []).filter(
-          (item) => item.monitor_id === monitor.id
-        );
-        // 返回附加了相关数据的 monitor
-        return {
-          ...monitor,
-          dailyStats: dailyStats,
-          history: history,
-        };
-      });
-      console.log("monitorsWithData: ", monitorsWithData);
-      setMonitors(monitorsWithData || []);
-    } else {
-      setError(response.message || t("monitors.loadingError"));
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
-  };
+  }, [t]);
+
+  usePolling(fetchData, {
+    intervalMs: 60000,
+  });
 
   // 处理刷新
   const handleRefresh = () => {

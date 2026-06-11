@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Flex, Heading, Text } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text } from "@/components/ui/theme-shim";
 import {
   Button,
   Card,
@@ -75,7 +75,7 @@ const EditUser = () => {
       } else {
         toast.error(response.message || "更新用户失败");
       }
-    } catch (error) {
+    } catch {
       toast.error("更新用户失败");
     } finally {
       setLoading(false);

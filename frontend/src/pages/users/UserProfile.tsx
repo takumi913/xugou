@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Flex, Heading, Text, Box } from "@radix-ui/themes";
+import { Flex, Heading, Text, Box } from "@/components/ui/theme-shim";
 import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "../../providers/AuthProvider";
 import { updateUser, changePassword, getUser } from "../../api/users";
@@ -56,8 +56,10 @@ const UserProfile = () => {
       } else {
         toast.error(response.message || t("profile.error.update"));
       }
-    } catch (err: any) {
-      toast.error(err.message || t("profile.error.update"));
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t("profile.error.update")
+      );
     } finally {
       setIsProfileLoading(false);
     }
@@ -93,8 +95,10 @@ const UserProfile = () => {
       } else {
         toast.error(response.message || t("profile.error.passwordChange"));
       }
-    } catch (err: any) {
-      toast.error(err.message || t("profile.error.passwordChange"));
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t("profile.error.passwordChange")
+      );
     } finally {
       setIsPasswordLoading(false);
     }

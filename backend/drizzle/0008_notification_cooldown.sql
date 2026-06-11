@@ -1,0 +1,1 @@
+ALTER TABLE `notification_settings` ADD `cooldown_minutes` integer DEFAULT 30 NOT NULL;

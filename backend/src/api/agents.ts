@@ -4,6 +4,7 @@ import { Bindings } from "../models/db";
 import { Agent } from "../models/agent";
 import {
   getAgents,
+  getAgentsWithLatestMetrics,
   getAgentDetail,
   updateAgentService,
   deleteAgentService,
@@ -13,6 +14,13 @@ import {
   getAgentMetrics,
   getLatestAgentMetrics,
 } from "../services/AgentService";
+import {
+  agentRegisterSchema,
+  agentStatusSchema,
+  agentUpdateSchema,
+  badRequest,
+  idParamSchema,
+} from "./schemas";
 
 const agents = new Hono<{
   Bindings: Bindings;
@@ -22,7 +30,11 @@ const agents = new Hono<{
 // 获取所有客户端
 agents.get("/", async (c) => {
   const payload = c.get("jwtPayload") as JwtPayload;
-  const result = await getAgents(payload.id);
+  const includeLatestMetrics =
+    c.req.query("includeLatestMetrics") === "true";
+  const result = includeLatestMetrics
+    ? await getAgentsWithLatestMetrics(payload.id)
+    : await getAgents(payload.id);
 
   return c.json(
     {
@@ -36,11 +48,19 @@ agents.get("/", async (c) => {
 
 // 更新客户端信息
 agents.put("/:id", async (c) => {
-  const agentId = Number(c.req.param("id"));
+  const agentId = idParamSchema.parse(c.req.param("id"));
   const payload = c.get("jwtPayload") as JwtPayload;
-  const updateData = await c.req.json();
+  const parsed = agentUpdateSchema.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json(badRequest("客户端更新参数无效"), 400);
+  }
 
-  const result = await updateAgentService(c.env.DB, agentId, updateData);
+  const result = await updateAgentService(
+    agentId,
+    parsed.data,
+    payload.id,
+    payload.role
+  );
 
   return c.json(
     {
@@ -55,17 +75,21 @@ agents.put("/:id", async (c) => {
 // 删除客户端
 agents.delete("/:id", async (c) => {
   try {
-    const agentId = Number(c.req.param("id"));
+    const agentId = idParamSchema.parse(c.req.param("id"));
     const payload = c.get("jwtPayload") as JwtPayload; // 获取用户信息
 
-    await deleteAgentService(agentId, payload.id); // 传入 userId
+    const result = await deleteAgentService(
+      agentId,
+      payload.id,
+      payload.role
+    );
 
     return c.json(
       {
-        success: true,
-        message: "客户端已删除",
+        success: result.success,
+        message: result.message,
       },
-      200
+      result.status as any
     );
   } catch (error) {
     return c.json(
@@ -95,8 +119,12 @@ agents.post("/token/generate", async (c) => {
 
 // 客户端自注册接口
 agents.post("/register", async (c) => {
-  const { token, name, hostname, ip_addresses, os, version } =
-    await c.req.json();
+  const parsed = agentRegisterSchema.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json(badRequest("客户端注册参数无效"), 400);
+  }
+
+  const { token, name, hostname, ip_addresses, os, version } = parsed.data;
 
   const result = await registerAgentService(
     c.env,
@@ -120,15 +148,20 @@ agents.post("/register", async (c) => {
 
 // 通过令牌更新客户端状态
 agents.post("/status", async (c) => {
-  // 获取客户端发送的所有数据并打印日志
-  const statusData = await c.req.json();
+  const parsed = agentStatusSchema.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json(badRequest("客户端状态参数无效"), 400);
+  }
 
   try {
-    await updateAgentStatusService(statusData);
+    const result = await updateAgentStatusService(parsed.data, c.env);
     return c.json(
       {
         success: true,
         message: "客户端状态已更新",
+        sampled: result.sampled,
+        recommendedReportIntervalSeconds:
+          result.recommendedReportIntervalSeconds,
       },
       200
     );
@@ -145,8 +178,18 @@ agents.post("/status", async (c) => {
 
 // 获取单个客户端的指标
 agents.get("/:id/metrics", async (c) => {
-  const agentId = Number(c.req.param("id"));
-  const result = await getAgentMetrics(agentId);
+  const agentId = idParamSchema.parse(c.req.param("id"));
+  const payload = c.get("jwtPayload") as JwtPayload;
+  const result = await getAgentMetrics(agentId, payload.id, payload.role);
+  if (!result) {
+    return c.json(
+      {
+        success: false,
+        message: "客户端不存在或无权访问",
+      },
+      404
+    );
+  }
   return c.json(
     {
       success: true,
@@ -159,8 +202,18 @@ agents.get("/:id/metrics", async (c) => {
 
 // 获取单个客户端的最新指标
 agents.get("/:id/metrics/latest", async (c) => {
-  const agentId = Number(c.req.param("id"));
-  const result = await getLatestAgentMetrics(agentId);
+  const agentId = idParamSchema.parse(c.req.param("id"));
+  const payload = c.get("jwtPayload") as JwtPayload;
+  const result = await getLatestAgentMetrics(agentId, payload.id, payload.role);
+  if (!result) {
+    return c.json(
+      {
+        success: false,
+        message: "客户端不存在或无权访问",
+      },
+      404
+    );
+  }
   return c.json(
     {
       success: true,
@@ -173,11 +226,19 @@ agents.get("/:id/metrics/latest", async (c) => {
 
 // 获取单个客户端
 agents.get("/:id", async (c) => {
-  const agentId = Number(c.req.param("id"));
+  const agentId = idParamSchema.parse(c.req.param("id"));
+  const payload = c.get("jwtPayload") as JwtPayload;
 
-  const result = await getAgentDetail(agentId);
-
-  console.log("result: ", result);
+  const result = await getAgentDetail(agentId, payload.id, payload.role);
+  if (!result) {
+    return c.json(
+      {
+        success: false,
+        message: "客户端不存在或无权访问",
+      },
+      404
+    );
+  }
 
   return c.json(
     {

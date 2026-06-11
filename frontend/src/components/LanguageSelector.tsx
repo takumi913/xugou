@@ -1,5 +1,5 @@
 import React from "react";
-import { Text, Flex } from "@radix-ui/themes";
+import { Text, Flex } from "@/components/ui/theme-shim";
 import {
   DropdownMenu,
   DropdownMenuTrigger,

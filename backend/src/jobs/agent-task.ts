@@ -1,17 +1,19 @@
 // 定期检查客户端状态的任务
 import {
-  getActiveAgents,
   setAgentInactive,
   getAgentById,
   getFormattedIPAddresses,
 } from "../services";
+import { getAgentsToMarkOffline } from "../repositories";
 import { shouldSendNotification, sendNotification } from "../services";
 import { Hono } from "hono";
 import { db } from "../config";
 import { and, eq,lt } from "drizzle-orm";
-import { notificationSettings,agentMetrics24h } from "../db/schema";
+import { notificationSettings, agentMetrics24h } from "../db/schema";
+import { getEnvNumber } from "../utils/env";
 
 const agentTask = new Hono<{}>();
+const DEFAULT_AGENT_OFFLINE_BATCH_SIZE = 50;
 
 interface AgentResult {
   id: number;
@@ -20,42 +22,33 @@ interface AgentResult {
   updated_at: string;
   keepalive: string;
   created_by: number; // 添加 created_by 以便获取 userId
+  last_seen_at?: string | null;
+  next_offline_at?: string | null;
 }
+
+type ThresholdMetricValue = {
+  cpu?: number | null;
+  memory?: number | null;
+  disk?: number | null;
+};
 
 export const checkAgentsStatus = async (c: any) => {
   try {
-    console.log("定时任务: 检查客户端状态...");
-
-    // 检查所有客户端的最后更新时间，如果超过60分钟没有更新，将状态设置为inactive
-    const now = new Date();
-
-    // 查询所有状态为active的客户端
-    const activeAgents = await getActiveAgents();
-
-    console.log("定时任务: 活跃状态的客户端数量:", activeAgents); // 调试用，输出活跃客户端数量，确保正确获取到数据
+    const batchSize = getEnvNumber(
+      c?.env,
+      "AGENT_OFFLINE_BATCH_SIZE",
+      DEFAULT_AGENT_OFFLINE_BATCH_SIZE,
+      { min: 1, max: 500 }
+    );
+    const activeAgents = await getAgentsToMarkOffline(batchSize);
 
     if (!activeAgents || activeAgents.length === 0) {
-      console.log("定时任务: 没有活跃状态的客户端");
       return;
     }
 
-    // 检查每个活跃客户端的最后更新时间
     for (const agent of activeAgents as AgentResult[]) {
-      const lastUpdateTime = new Date(agent.updated_at);
-      const timeDiff = now.getTime() - lastUpdateTime.getTime();
-
-      // 如果超过5个监控周期没有更新状态，将客户端状态设置为inactive
-      if (timeDiff > parseInt(agent.keepalive || "60") * 5 * 1000) {
-        console.log(
-          `定时任务: 客户端 ${agent.name} (ID: ${agent.id}) 超过5个监控周期未更新状态，设置为离线`
-        );
-
-        // 更新客户端状态为inactive
-        await setAgentInactive(agent.id);
-
-        // 处理通知
-        await handleAgentOfflineNotification(c.env, agent.id, agent.name, agent.created_by);
-      }
+      await setAgentInactive(agent.id);
+      await handleAgentOfflineNotification(c.env, agent.id, agent.name, agent.created_by);
     }
   } catch (error) {
     console.error("定时任务: 检查客户端状态出错:", error);
@@ -89,13 +82,8 @@ async function handleAgentOfflineNotification(
       !notificationCheck.shouldSend ||
       notificationCheck.channels.length === 0
     ) {
-      console.log(
-        `客户端 ${agentName} (ID: ${agentId}) 已离线，但不需要发送通知`
-      );
       return;
     }
-
-    console.log(`客户端 ${agentName} (ID: ${agentId}) 已离线，正在发送通知...`);
 
     // 获取客户端完整信息
     const agent = await getAgentById(agentId);
@@ -116,7 +104,7 @@ async function handleAgentOfflineNotification(
       ip_address: formattedIP, // 兼容旧模板
       os: agent.os || "未知",
       error: "客户端连接超时 🔴",
-      details: `主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}\n最后连接时间: ${new Date(agent.updated_at).toLocaleString("zh-CN")}`,
+      details: `主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}\n最后连接时间: ${new Date(agent.last_seen_at || agent.updated_at).toLocaleString("zh-CN")}`,
     };
 
     // 发送通知
@@ -125,12 +113,11 @@ async function handleAgentOfflineNotification(
       agentId,
       variables,
       notificationCheck.channels,
-      userId // 修复: 传入 userId
+      userId, // 修复: 传入 userId
+      notificationCheck.cooldownMinutes
     );
 
-    if (notificationResult.success) {
-      console.log(`客户端 ${agentName} (ID: ${agentId}) 离线通知发送成功`);
-    } else {
+    if (!notificationResult.success) {
       console.error(`客户端 ${agentName} (ID: ${agentId}) 离线通知发送失败`);
     }
   } catch (error) {
@@ -172,8 +159,6 @@ export async function handleAgentOnlineNotification(
       return;
     }
 
-    console.log(`客户端 ${agentName} (ID: ${agentId}) 已恢复上线，正在发送通知...`);
-
     // 获取客户端完整信息
     const agent = await getAgentById(agentId);
     if (!agent) {
@@ -202,12 +187,11 @@ export async function handleAgentOnlineNotification(
       agentId,
       variables,
       notificationCheck.channels,
-      userId
+      userId,
+      notificationCheck.cooldownMinutes
     );
 
-    if (notificationResult.success) {
-      console.log(`客户端 ${agentName} (ID: ${agentId}) 上线通知发送成功`);
-    } else {
+    if (!notificationResult.success) {
       console.error(`客户端 ${agentName} (ID: ${agentId}) 上线通知发送失败`);
     }
   } catch (error) {
@@ -227,6 +211,15 @@ export async function handleAgentThresholdNotification(
   metricType: string,
   value: number
 ) {
+  return handleAgentThresholdNotifications(agentId, {
+    [metricType]: value,
+  });
+}
+
+export async function handleAgentThresholdNotifications(
+  agentId: number,
+  values: ThresholdMetricValue
+) {
   try {
     // 获取客户端配置
     const agent = await getAgentById(agentId);
@@ -237,11 +230,6 @@ export async function handleAgentThresholdNotification(
     }
 
     const userId = agent.created_by; // 获取 userId
-
-    // 根据具体的指标类型
-    let metricName = "";
-    let threshold = 0;
-    let shouldSend = false;
 
     // 查询特定设置
     const settings = await db
@@ -274,34 +262,40 @@ export async function handleAgentThresholdNotification(
     const finalSettings = settings.length === 0 ? globalSettings?.[0] : settings[0];
 
     if (!finalSettings) {
-      console.log(
-        `客户端 ${agent.name} (ID: ${agentId}) 没有可用的通知设置，不发送通知`
-      );
       return;
     }
 
-    // 根据指标类型检查阈值
-    switch (metricType) {
-      case "cpu":
-        metricName = "CPU使用率";
-        threshold = finalSettings.cpu_threshold;
-        shouldSend = finalSettings.on_cpu_threshold && value >= threshold;
-        break;
-      case "memory":
-        metricName = "内存使用率";
-        threshold = finalSettings.memory_threshold;
-        shouldSend = finalSettings.on_memory_threshold && value >= threshold;
-        break;
-      case "disk":
-        metricName = "磁盘使用率";
-        threshold = finalSettings.disk_threshold;
-        shouldSend = finalSettings.on_disk_threshold && value >= threshold;
-        break;
-      default:
-        return; // 不支持的指标类型
-    }
+    const thresholdEvents = [
+      {
+        key: "cpu",
+        name: "CPU使用率",
+        value: values.cpu,
+        threshold: finalSettings.cpu_threshold,
+        enabled: Boolean(finalSettings.on_cpu_threshold),
+      },
+      {
+        key: "memory",
+        name: "内存使用率",
+        value: values.memory,
+        threshold: finalSettings.memory_threshold,
+        enabled: Boolean(finalSettings.on_memory_threshold),
+      },
+      {
+        key: "disk",
+        name: "磁盘使用率",
+        value: values.disk,
+        threshold: finalSettings.disk_threshold,
+        enabled: Boolean(finalSettings.on_disk_threshold),
+      },
+    ].filter(
+      (event) =>
+        event.enabled &&
+        typeof event.value === "number" &&
+        Number.isFinite(event.value) &&
+        event.value >= event.threshold
+    );
 
-    if (!shouldSend) {
+    if (thresholdEvents.length === 0) {
       return;
     }
 
@@ -315,33 +309,30 @@ export async function handleAgentThresholdNotification(
     }
 
     if (channels.length === 0) {
-      console.log(
-        `客户端 ${agent.name} (ID: ${agentId}) 没有配置通知渠道，不发送通知`
-      );
       return;
     }
 
-    console.log(
-      `客户端 ${
-        agent.name
-      } (ID: ${agentId}) ${metricName}超过阈值(${value.toFixed(
-        2
-      )}% >= ${threshold}%)，发送通知...`
-    );
-
     // 准备通知变量
     const formattedIP = getFormattedIPAddresses(agent.ip_addresses);
+    const metricNames = thresholdEvents.map((event) => event.name).join("、");
+    const details = thresholdEvents
+      .map(
+        (event) =>
+          `${event.name}: ${event.value!.toFixed(2)}%\n阈值: ${event.threshold}%`
+      )
+      .join("\n\n");
+
     const variables = {
       name: agent.name,
-      status: `${metricName}告警`,
+      status: `资源阈值告警: ${metricNames}`,
       previous_status: "normal", // 添加previous_status变量
       time: new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }),
       hostname: agent.hostname || "未知",
       ip_addresses: formattedIP,
       ip_address: formattedIP, // 兼容旧模板
       os: agent.os || "未知",
-      error: `${metricName}(${value.toFixed(2)}%)超过阈值(${threshold}%)`,
-      details: `${metricName}: ${value.toFixed(2)}%\n阈值: ${threshold}%\n主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}`,
+      error: `${metricNames}超过阈值`,
+      details: `${details}\n\n主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}`,
     };
 
     // 发送通知
@@ -350,16 +341,13 @@ export async function handleAgentThresholdNotification(
       agentId,
       variables,
       channels,
-      userId // 修复: 传入 userId
+      userId, // 修复: 传入 userId
+      finalSettings.cooldown_minutes
     );
 
-    if (notificationResult.success) {
-      console.log(
-        `客户端 ${agent.name} (ID: ${agentId}) ${metricName}告警通知发送成功`
-      );
-    } else {
+    if (!notificationResult.success) {
       console.error(
-        `客户端 ${agent.name} (ID: ${agentId}) ${metricName}告警通知发送失败`
+        `客户端 ${agent.name} (ID: ${agentId}) 资源阈值聚合通知发送失败`
       );
     }
   } catch (error) {
@@ -381,7 +369,6 @@ export default {
     // 每隔6小时清理一次 metrics 24h 表数据
 
     if (hour % 6 === 0 && minute === 5) {
-      console.log("定时任务: 正在清理 metrics 24h 表数据...");
       await db.delete(agentMetrics24h).where(lt(agentMetrics24h.timestamp, yesterday));
     }
 

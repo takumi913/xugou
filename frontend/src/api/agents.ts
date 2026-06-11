@@ -3,6 +3,7 @@ import {
   Agent,
   AgentResponse,
   AgentsResponse,
+  AgentWithLatestMetrics,
   MetricHistory,
 } from "../types/agents";
 
@@ -31,8 +32,35 @@ export const getAllAgents = async (): Promise<AgentsResponse> => {
   };
 };
 
-export const getAgent = async (id: number): Promise<AgentResponse> => {
-  const response = await api.get(`/api/agents/${id}`);
+export const getAllAgentsWithLatestMetrics = async (): Promise<{
+  success: boolean;
+  agents?: AgentWithLatestMetrics[];
+  message?: string;
+}> => getAllAgentsWithLatestMetricsWithSignal();
+
+export const getAllAgentsWithLatestMetricsWithSignal = async (
+  signal?: AbortSignal
+): Promise<{
+  success: boolean;
+  agents?: AgentWithLatestMetrics[];
+  message?: string;
+}> => {
+  const response = await api.get("/api/agents", {
+    params: { includeLatestMetrics: true },
+    signal,
+  });
+  return {
+    success: response.data.success,
+    agents: response.data.agents,
+    message: response.data.message,
+  };
+};
+
+export const getAgent = async (
+  id: number,
+  signal?: AbortSignal
+): Promise<AgentResponse> => {
+  const response = await api.get(`/api/agents/${id}`, { signal });
   return {
     success: true,
     agent: response.data.agent,
@@ -70,16 +98,20 @@ export const updateAgent = async (
 };
 
 export const getAgentMetrics = async (
-  id: number
+  id: number,
+  signal?: AbortSignal
 ): Promise<{
   success: boolean;
   agent?: MetricHistory[];
   message?: string;
 }> => {
   try {
-    const response = await api.get(`/api/agents/${id}/metrics`);
+    const response = await api.get(`/api/agents/${id}/metrics`, { signal });
     return response.data;
   } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
     console.error(`获取客户端 ${id} 的指标失败:`, error);
     return {
       success: false,
@@ -89,12 +121,15 @@ export const getAgentMetrics = async (
 };
 
 export const getLatestAgentMetrics = async (
-  id: number
+  id: number,
+  signal?: AbortSignal
 ): Promise<{
   success: boolean;
   agent?: MetricHistory;
   message?: string;
 }> => {
-  const response = await api.get(`/api/agents/${id}/metrics/latest`);
+  const response = await api.get(`/api/agents/${id}/metrics/latest`, {
+    signal,
+  });
   return response.data;
 };

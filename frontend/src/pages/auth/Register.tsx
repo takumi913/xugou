@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"; // 导入 useEffect
 import { useNavigate, Link } from "react-router-dom";
-import { Flex, Heading, Text } from "@radix-ui/themes";
+import { Flex, Heading, Text } from "@/components/ui/theme-shim";
 import { Button, Card, Input } from "@/components/ui"; // 导入 Input 组件
 import { useAuth } from "../../providers/AuthProvider";
 import { useTranslation } from "react-i18next";
@@ -28,7 +28,7 @@ const Register = () => {
           toast.error(t('register.disabled'));
           navigate("/login");
         }
-      } catch (e) {
+      } catch {
         toast.error(t('register.disabled'));
         navigate("/login");
       }
@@ -58,8 +58,10 @@ const Register = () => {
       } else {
         setError(result.message);
       }
-    } catch (err: any) {
-      setError(err.message || t("register.error.usernameExists"));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t("register.error.usernameExists")
+      );
     } finally {
       setIsLoading(false);
     }

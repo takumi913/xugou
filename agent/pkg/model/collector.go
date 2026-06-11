@@ -4,19 +4,21 @@ import "time"
 
 // SystemInfo 包含系统的各种信息
 type SystemInfo struct {
-	Token       string        `json:"token"`
-	Timestamp   time.Time     `json:"timestamp"`
-	Hostname    string        `json:"hostname"`
-	Platform    string        `json:"platform"`
-	OS          string        `json:"os"`
-	Version     string        `json:"version"`      // 操作系统版本
-	IPAddresses []string      `json:"ip_addresses"` // IP地址列表
-	Keepalive   int           `json:"keepalive"`
-	CPUInfo     CPUInfo       `json:"cpu"`
-	MemoryInfo  MemoryInfo    `json:"memory"`
-	DiskInfo    []DiskInfo    `json:"disks"`
-	NetworkInfo []NetworkInfo `json:"network"`
-	LoadInfo    LoadInfo      `json:"load"`
+	Token                  string        `json:"token"`
+	Timestamp              time.Time     `json:"timestamp"`
+	Hostname               string        `json:"hostname"`
+	Platform               string        `json:"platform"`
+	OS                     string        `json:"os"`
+	Version                string        `json:"version"`      // 操作系统版本
+	IPAddresses            []string      `json:"ip_addresses"` // IP地址列表
+	Keepalive              int           `json:"keepalive"`
+	CollectIntervalSeconds int           `json:"collect_interval_seconds"`
+	ReportIntervalSeconds  int           `json:"report_interval_seconds"`
+	CPUInfo                CPUInfo       `json:"cpu"`
+	MemoryInfo             MemoryInfo    `json:"memory"`
+	DiskInfo               []DiskInfo    `json:"disks"`
+	NetworkInfo            []NetworkInfo `json:"network"`
+	LoadInfo               LoadInfo      `json:"load"`
 }
 
 // CPUInfo 包含CPU相关信息

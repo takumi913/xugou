@@ -5,7 +5,14 @@ import { Monitor, Agent } from "../types";
 export const getDashboardData = async (): Promise<{
   monitors: Monitor[];
   agents: Agent[];
+}> => getDashboardDataWithSignal();
+
+export const getDashboardDataWithSignal = async (
+  signal?: AbortSignal
+): Promise<{
+  monitors: Monitor[];
+  agents: Agent[];
 }> => {
-  const response = await api.get("/api/dashboard");
+  const response = await api.get("/api/dashboard", { signal });
   return response.data;
 };

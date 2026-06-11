@@ -1,14 +1,14 @@
 import React from "react";
 import { MetricHistory, AgentWithLatestMetrics } from "../types";
 import { Badge } from "./ui/badge";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
-  faWindows,
-  faLinux,
-  faApple,
-  faAndroid,
-} from "@fortawesome/free-brands-svg-icons";
-import { faLaptop } from "@fortawesome/free-solid-svg-icons";
+  Apple,
+  Laptop,
+  Monitor,
+  Smartphone,
+  Terminal,
+  type LucideIcon,
+} from "lucide-react";
 
 interface AgentStatusBarProps {
   latestMetric?: MetricHistory;
@@ -83,21 +83,22 @@ const MetricCard = ({
   </div>
 );
 
-const getOsIcon = (os: string | undefined) => {
-  if (!os) return faLaptop;
+const getOsIcon = (os: string | undefined): LucideIcon => {
+  if (!os) return Laptop;
   const osLower = os.toLowerCase();
-  if (osLower.includes("windows")) return faWindows;
-  if (osLower.includes("mac") || osLower.includes("darwin")) return faApple;
-  if (osLower.includes("linux")) return faLinux;
-  if (osLower.includes("android")) return faAndroid;
-  if (osLower.includes("ios")) return faApple;
-  return faLaptop;
+  if (osLower.includes("windows")) return Monitor;
+  if (osLower.includes("mac") || osLower.includes("darwin")) return Apple;
+  if (osLower.includes("linux")) return Terminal;
+  if (osLower.includes("android") || osLower.includes("ios")) return Smartphone;
+  return Laptop;
 };
 
 const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
   latestMetric,
   agent,
 }) => {
+  const OsIcon = getOsIcon(agent.os);
+
   // 计算存储总量和使用情况
   let totalStorage = 0;
   let usedStorage = 0;
@@ -144,7 +145,7 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Badge variant="secondary" className="flex items-center gap-1">
-            <FontAwesomeIcon icon={getOsIcon(agent.os)} className="w-4 h-4" />
+            <OsIcon className="size-4" />
           </Badge>
           <span className="text-lg font-bold dark:text-white">
             {agent.name}

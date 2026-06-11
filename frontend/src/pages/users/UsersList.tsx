@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Table, Text, Flex, Heading, Box } from "@radix-ui/themes";
+import { Table, Text, Flex, Heading, Box } from "@/components/ui/theme-shim";
 import {
   Button,
   AlertDialog,
@@ -49,8 +49,9 @@ const UsersList = () => {
         setError(response.message || t("users.error.fetch"));
         toast.error(response.message || t("users.error.fetch"));
       }
-    } catch (err: any) {
-      const errorMessage = err.message || t("users.error.fetch");
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : t("users.error.fetch");
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -87,8 +88,9 @@ const UsersList = () => {
         setError(response.message || t("users.error.delete"));
         toast.error(response.message || t("users.error.delete"));
       }
-    } catch (err: any) {
-      const errorMessage = err.message || t("users.error.delete");
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : t("users.error.delete");
       setError(errorMessage);
       toast.error(errorMessage);
     }
@@ -105,7 +107,7 @@ const UsersList = () => {
           toast.error(response.message);
           setAllowRegistration(!checked); // 失败时回滚状态
       }
-    } catch (e) {
+    } catch {
         toast.error("更新设置失败");
         setAllowRegistration(!checked); // 失败时回滚状态
     }

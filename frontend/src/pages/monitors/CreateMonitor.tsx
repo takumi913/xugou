@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text, IconButton } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text, IconButton } from "@/components/ui/theme-shim";
 import {
   Button,
   Card,
@@ -29,7 +29,7 @@ const CreateMonitor = () => {
     name: "",
     url: "",
     method: "GET",
-    interval: 1, // 默认为1分钟
+    interval: 5,
     timeout: 30,
     expectedStatus: 200,
     body: "",
@@ -135,6 +135,7 @@ const CreateMonitor = () => {
 
   // 判断是否需要显示请求体输入框
   const showBodyField = ["POST", "PUT", "PATCH"].includes(formData.method);
+  const showQuotaWarning = formData.interval > 0 && formData.interval < 5;
 
   return (
     <Box className="sm:px-6 lg:px-[8%]">
@@ -219,6 +220,11 @@ const CreateMonitor = () => {
                   <Text size="1" color="gray">
                     {t("monitor.form.intervalMin")}
                   </Text>
+                  {showQuotaWarning && (
+                    <Text size="1" className="block mt-1 text-amber-600">
+                      {t("monitor.form.intervalQuotaWarning")}
+                    </Text>
+                  )}
                 </Box>
 
                 <Box>

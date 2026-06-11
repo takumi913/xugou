@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useMemo, useCallback } from "react";
-import { Box } from "@radix-ui/themes";
+import { Box } from "@/components/ui/theme-shim";
 import { MonitorStatusHistory } from "../types/monitors";
 import { useTranslation } from "react-i18next";
 import { Line } from "react-chartjs-2";
@@ -12,11 +12,9 @@ import {
   Title,
   Tooltip as ChartTooltip,
   Legend,
-  TimeScale,
   ChartOptions,
   TooltipItem,
 } from "chart.js";
-import "chartjs-adapter-moment";
 
 // 注册Chart.js组件
 ChartJS.register(
@@ -26,8 +24,7 @@ ChartJS.register(
   LineElement,
   Title,
   ChartTooltip,
-  Legend,
-  TimeScale
+  Legend
 );
 
 interface ResponseTimeChartProps {
@@ -51,8 +48,6 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
 }) => {
   const { t } = useTranslation();
   const chartRef = useRef<ChartJS<"line">>(null);
-
-  console.log("ResponseTimeChart组件的history: ", history);
 
   // 格式化时间的函数使用 useCallback 缓存
   const formatTime = useCallback((date: Date) => {
@@ -82,7 +77,6 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
 
   // 使用 useMemo 计算并缓存 tooltip 回调函数
   const tooltipCallbacks = useMemo(() => {
-    console.log("创建新的 tooltip 回调函数");
     return {
       title: (items: TooltipItem<"line">[]) => {
         if (items.length > 0 && items[0].raw) {
@@ -111,7 +105,6 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
 
   // 使用 useMemo 缓存基础图表选项，只有在显示标签更改时才更新
   const baseChartOptions = useMemo<ChartOptions<"line">>(() => {
-    console.log("创建新的基础图表选项");
     return {
       responsive: true,
       maintainAspectRatio: false,
@@ -164,14 +157,8 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       },
       scales: {
         x: {
-          type: "time",
+          type: "linear",
           display: showTimeLabels,
-          time: {
-            unit: "hour",
-            displayFormats: {
-              hour: "HH:mm",
-            },
-          },
           grid: {
             color: "#e0e0e0",
             lineWidth: 0.5,
@@ -187,7 +174,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
               enabled: true,
             },
             callback: function (value) {
-              const date = new Date(value);
+              const date = new Date(Number(value));
               if (date.getHours() % 2 === 0) {
                 return `${date.getHours().toString().padStart(2, "0")}:00`;
               }
@@ -237,10 +224,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
 
   // 处理数据并生成图表数据，使用 useMemo 缓存结果
   const { chartData, timeRange, yAxisMax } = useMemo(() => {
-    console.log("----开始处理响应时间图表数据----");
-
     if (history.length === 0) {
-      console.log("没有接收到历史数据");
       return {
         chartData: {
           datasets: [
@@ -276,8 +260,6 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       };
     });
 
-    console.log("processedHistory: ", processedHistory);
-
     // 计算24小时前的时间戳
     const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
 
@@ -296,7 +278,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
             } else {
               timestamp = new Date();
             }
-          } catch (e) {
+          } catch {
             timestamp = new Date();
           }
 
@@ -318,7 +300,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           };
 
           return result;
-        } catch (e) {
+        } catch {
           return {
             x: new Date().getTime(),
             y: 0,
@@ -331,11 +313,9 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       .filter((point) => point.x >= twentyFourHoursAgo)
       .sort((a, b) => a.x - b.x);
 
-    console.log("responseTimeData: ", responseTimeData);
-
     // 确保相邻点至少间隔1分钟
     const oneMinute = 60 * 1000;
-    let filteredData: DataPoint[] = [];
+    const filteredData: DataPoint[] = [];
 
     if (responseTimeData.length > 0) {
       filteredData.push(responseTimeData[0]);
@@ -465,12 +445,10 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
 
     // 直接更新图表实例
     chartRef.current.update();
-    console.log("已更新图表配置");
   }, [finalChartOptions]);
 
   // 如果没有数据，显示空图表和提示信息
   if (!chartData.datasets[0].data.length) {
-    console.log("没有数据点，显示空图表提示");
     return (
       <Box
         style={{
@@ -489,12 +467,6 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       </Box>
     );
   }
-
-  console.log(
-    "渲染图表，数据点数量:",
-    chartData.datasets[0].data.length,
-    "个点"
-  );
 
   return (
     <Box

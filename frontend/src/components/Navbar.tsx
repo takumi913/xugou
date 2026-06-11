@@ -1,5 +1,5 @@
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Box, Flex, Text, Container } from "@radix-ui/themes";
+import { Box, Flex, Text, Container } from "@/components/ui/theme-shim";
 import {
   Separator,
   Button,

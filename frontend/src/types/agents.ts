@@ -18,6 +18,9 @@ export interface Agent {
   os?: string;
   created_at: string;
   updated_at: string;
+  last_seen_at?: string | null;
+  last_state_changed_at?: string | null;
+  next_offline_at?: string | null;
   metrics?: MetricHistory[];
 }
 
@@ -37,6 +40,9 @@ export interface AgentWithLatestMetrics {
   os?: string;
   created_at: string;
   updated_at: string;
+  last_seen_at?: string | null;
+  last_state_changed_at?: string | null;
+  next_offline_at?: string | null;
   metrics?: MetricHistory;
 }
 

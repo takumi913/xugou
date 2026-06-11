@@ -1,14 +1,36 @@
 import * as models from "../models";
 import * as repositories from "../repositories";
 import * as NotificationService from "./NotificationService";
+import { getEnvNumber } from "../utils/env";
 
-export async function getMonitorsToCheck() {
-  return await repositories.getMonitorsToCheck();
+const DEFAULT_MIN_MONITOR_INTERVAL_SECONDS = 300;
+const DEFAULT_STATUS_SNAPSHOT_DIRTY_COALESCE_SECONDS = 30;
+
+function normalizeMonitorInterval(interval: unknown, env?: Record<string, unknown>) {
+  const minInterval = getEnvNumber(
+    env,
+    "MIN_MONITOR_INTERVAL_SECONDS",
+    DEFAULT_MIN_MONITOR_INTERVAL_SECONDS,
+    { min: 1, max: 86400 }
+  );
+  const requestedInterval = Number(interval);
+  if (!Number.isFinite(requestedInterval) || requestedInterval <= 0) {
+    return minInterval;
+  }
+  return Math.max(Math.round(requestedInterval), minInterval);
 }
 
-export async function checkMonitor(monitor: models.Monitor) {
-  console.log(`开始检查监控项: ${monitor.name} (${monitor.url})`);
+export async function getMonitorsToCheck(limit: number) {
+  return await repositories.getMonitorsToCheck(limit);
+}
 
+export async function checkMonitor(
+  monitor: models.Monitor,
+  options: {
+    minIntervalSeconds?: number;
+    statusSnapshotDirtyCoalesceSeconds?: number;
+  } = {}
+) {
   // 记录监控之前的状态
   const previousStatus = monitor.status;
   const startTime = Date.now();
@@ -90,20 +112,45 @@ export async function checkMonitor(monitor: models.Monitor) {
 
   // 确保数据库一定会被更新
   try {
-    // 1. 记录状态历史
-    await repositories.insertMonitorStatusHistory(
+    // 1. 仅状态变化时写兼容历史；趋势图和状态页优先读取 rollup。
+    if (previousStatus && previousStatus !== status) {
+      await repositories.insertMonitorStatusHistory(
+        monitor.id,
+        status,
+        responseTime,
+        statusCode ?? 0,
+        error
+      );
+    }
+
+    // 2. 更新监控状态，防止重复通知
+    await repositories.updateMonitorStatus(
       monitor.id,
       status,
       responseTime,
-      statusCode ?? 0,
+      Math.max(
+        monitor.interval || DEFAULT_MIN_MONITOR_INTERVAL_SECONDS,
+        options.minIntervalSeconds || DEFAULT_MIN_MONITOR_INTERVAL_SECONDS
+      )
+    );
+    await repositories.upsertMonitorCheckRollup(
+      monitor.id,
+      status,
+      responseTime
+    );
+    await repositories.recordMonitorIncident(
+      monitor.id,
+      previousStatus,
+      status,
       error
     );
-
-    // 2. 更新监控状态，防止重复通知
-    await repositories.updateMonitorStatus(monitor.id, status, responseTime);
-    
-    console.log(`监控 ${monitor.name} (${monitor.url}) 检查完成. 结果: ${status}`);
-
+    if (previousStatus && previousStatus !== status) {
+      await repositories.markPublicStatusSnapshotDirty(
+        monitor.created_by,
+        options.statusSnapshotDirtyCoalesceSeconds ??
+          DEFAULT_STATUS_SNAPSHOT_DIRTY_COALESCE_SECONDS
+      );
+    }
   } catch (dbError) {
     console.error(`更新数据库失败 (${monitor.name}):`, dbError);
     // 即使数据库更新失败也返回检查结果，以免阻塞流程
@@ -149,7 +196,7 @@ export async function getMonitorById(id: number, userId: number, userRole: strin
   };
 }
 
-export async function createMonitor(data: any, userId: number) {
+export async function createMonitor(data: any, userId: number, env?: any) {
   try {
     // 验证必填字段
     if (!data.name || !data.url || !data.method) {
@@ -166,7 +213,7 @@ export async function createMonitor(data: any, userId: number) {
       data.name,
       data.url,
       data.method,
-      data.interval || 60,
+      normalizeMonitorInterval(data.interval, env),
       data.timeout || 30,
       data.expected_status || 200,
       data.headers || {},
@@ -190,7 +237,13 @@ export async function createMonitor(data: any, userId: number) {
   }
 }
 
-export async function updateMonitor(id: number, data: any, userId: number, userRole: string) {
+export async function updateMonitor(
+  id: number,
+  data: any,
+  userId: number,
+  userRole: string,
+  env?: any
+) {
   try {
     // 检查监控是否存在并验证权限
     const monitor = await repositories.getMonitorById(id, userId, userRole);
@@ -205,7 +258,9 @@ export async function updateMonitor(id: number, data: any, userId: number, userR
     if (data.name !== undefined) updateData.name = data.name;
     if (data.url !== undefined) updateData.url = data.url;
     if (data.method !== undefined) updateData.method = data.method;
-    if (data.interval !== undefined) updateData.interval = data.interval;
+    if (data.interval !== undefined) {
+      updateData.interval = normalizeMonitorInterval(data.interval, env);
+    }
     if (data.timeout !== undefined) updateData.timeout = data.timeout;
     if (data.expected_status !== undefined)
       updateData.expected_status = data.expected_status;
@@ -345,12 +400,7 @@ export async function manualCheckMonitor(id: number, userId: number, userRole: s
     try {
       // 判断是否需要发送通知
       if (result.previous_status !== result.status) {
-        console.log(
-          `状态已变化: ${result.previous_status} -> ${result.status}`
-        );
-
         // 检查是否需要发送通知
-        console.log(`检查通知设置...`);
         const notificationCheck =
           await NotificationService.shouldSendNotification(
             userId, // 修复: 传入 userId
@@ -360,20 +410,10 @@ export async function manualCheckMonitor(id: number, userId: number, userRole: s
             result.status
           );
 
-        console.log(
-          `通知判断结果: shouldSend=${
-            notificationCheck.shouldSend
-          }, channels=${JSON.stringify(notificationCheck.channels)}`
-        );
-
         if (
           notificationCheck.shouldSend &&
           notificationCheck.channels.length > 0
         ) {
-          console.log(
-            `监控 ${monitor.name} (ID: ${monitor.id}) 状态变更，正在发送通知...`
-          );
-          
           // 信息添加红绿灯
           let errorMsg = result.error || "无";
           if (result.status === "up") {
@@ -402,38 +442,22 @@ export async function manualCheckMonitor(id: number, userId: number, userRole: s
             }`,
           };
 
-          console.log(`通知变量: ${JSON.stringify(variables)}`);
-
           // 发送通知
-          console.log(`开始发送通知...`);
           const notificationResult = await NotificationService.sendNotification(
             "monitor",
             monitor.id,
             variables,
             notificationCheck.channels,
-            userId // 修复: 传入 userId
+            userId, // 修复: 传入 userId
+            notificationCheck.cooldownMinutes
           );
 
-          console.log(`通知发送结果: ${JSON.stringify(notificationResult)}`);
-
-          if (notificationResult.success) {
-            console.log(
-              `监控 ${monitor.name} (ID: ${monitor.id}) 通知发送成功`
-            );
-          } else {
+          if (!notificationResult.success) {
             console.error(
               `监控 ${monitor.name} (ID: ${monitor.id}) 通知发送失败`
             );
           }
-        } else {
-          console.log(
-            `监控 ${monitor.name} (ID: ${monitor.id}) 状态变更，但不需要发送通知`
-          );
         }
-      } else {
-        console.log(
-          `监控 ${monitor.name} (ID: ${monitor.id}) 状态未变更，不发送通知`
-        );
       }
     } catch (notificationError) {
       console.error("处理通知时出错:", notificationError);

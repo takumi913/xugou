@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text, Grid, Container } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text, Grid, Container } from "@/components/ui/theme-shim";
 import { Button, Card, Badge } from "@/components/ui";
 import {
   ArrowLeftIcon,
@@ -20,6 +20,7 @@ import { MonitorWithDailyStatsAndStatusHistory } from "../../types/monitors";
 import { useTranslation } from "react-i18next";
 import ResponseTimeChart from "../../components/ResponseTimeChart";
 import StatusBar from "../../components/MonitorStatusBar";
+import { usePolling } from "../../hooks/usePolling";
 
 // 将范围状态码转换为可读形式（2 -> 2xx, 3 -> 3xx 等）
 const formatStatusCode = (code: number | undefined): string => {
@@ -42,47 +43,52 @@ const MonitorDetail = () => {
   const [error, setError] = useState<string | null>(null);
   const { t } = useTranslation();
 
-  // 组件加载时获取数据
-  useEffect(() => {
-    fetchMonitorData();
-
-    // 设置定时器，每分钟刷新一次数据
-    const intervalId = setInterval(() => {
-      console.log("MonitorDetail: 自动刷新数据...");
-      fetchMonitorData();
-    }, 60000); // 60000ms = 1分钟
-
-    // 组件卸载时清除定时器
-    return () => clearInterval(intervalId);
-  }, [id]);
+  const monitorId = Number(id);
+  const hasValidMonitorId = Boolean(id) && !Number.isNaN(monitorId);
 
   // 获取监控详情数据
-  const fetchMonitorData = async () => {
-    if (!id) return;
+  const fetchMonitorData = useCallback(async (signal?: AbortSignal) => {
+    if (!hasValidMonitorId) return;
+
     setLoading(true);
-    let monitorData: MonitorWithDailyStatsAndStatusHistory | null = null;
-    const monitor = await getMonitor(parseInt(id));
-    const history = await getMonitorStatusHistoryById(parseInt(id));
-    const dailyStats = await getMonitorDailyStats(parseInt(id));
+    try {
+      let monitorData: MonitorWithDailyStatsAndStatusHistory | null = null;
+      const [monitor, history, dailyStats] = await Promise.all([
+        getMonitor(monitorId, signal),
+        getMonitorStatusHistoryById(monitorId, signal),
+        getMonitorDailyStats(monitorId, signal),
+      ]);
+      if (signal?.aborted) return;
 
-    console.log("dailyStats: ", dailyStats);
-    console.log("history: ", history);
-    console.log("monitor: ", monitor);
+      if (monitor.success && monitor.monitor) {
+        monitorData = {
+          ...monitor.monitor,
+          history: history.history || [],
+          dailyStats: dailyStats.dailyStats || [],
+        };
+      }
+      if (monitorData) {
+        setMonitor(monitorData);
+      } else {
+        setError(t("common.error.fetch"));
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        setError(
+          error instanceof Error ? error.message : t("common.error.fetch")
+        );
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
+    }
+  }, [hasValidMonitorId, monitorId, t]);
 
-    if (monitor.success && monitor.monitor) {
-      monitorData = {
-        ...monitor.monitor,
-        history: history.history || [],
-        dailyStats: dailyStats.dailyStats || [],
-      };
-    }
-    if (monitorData) {
-      setMonitor(monitorData);
-    } else {
-      setError(t("common.error.fetch"));
-    }
-    setLoading(false);
-  };
+  usePolling(fetchMonitorData, {
+    enabled: hasValidMonitorId,
+    intervalMs: 60000,
+  });
 
   // 手动检查监控状态
   const handleCheck = async () => {

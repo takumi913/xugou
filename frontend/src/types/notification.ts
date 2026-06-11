@@ -32,6 +32,7 @@ export interface NotificationConfig {
       enabled: boolean;
       onDown: boolean;
       onRecovery: boolean;
+      cooldownMinutes: number;
       channels: number[];
     };
     agents: {
@@ -44,6 +45,7 @@ export interface NotificationConfig {
       memoryThreshold: number;
       onDiskThreshold: boolean;
       diskThreshold: number;
+      cooldownMinutes: number;
       channels: number[];
     };
     specificMonitors: {
@@ -51,6 +53,7 @@ export interface NotificationConfig {
         enabled: boolean;
         onDown: boolean;
         onRecovery: boolean;
+        cooldownMinutes: number;
         channels: number[];
       };
     };
@@ -65,6 +68,7 @@ export interface NotificationConfig {
         memoryThreshold: number;
         onDiskThreshold: boolean;
         diskThreshold: number;
+        cooldownMinutes: number;
         channels: number[];
       };
     };

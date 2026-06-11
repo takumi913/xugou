@@ -1,6 +1,139 @@
 import * as models from "../models";
 import * as repositories from "../repositories";
 
+const NOTIFICATION_SEND_CONCURRENCY = 3;
+const DEFAULT_NOTIFICATION_COOLDOWN_MINUTES = 30;
+const NOTIFICATION_CONFIG_CACHE_TTL_MS = 60 * 1000;
+
+type NotificationSendResult = {
+  channelId: number;
+  success: boolean;
+  error?: string;
+  skipped?: boolean;
+};
+
+type GlobalNotificationSettings = {
+  monitorSettings: models.NotificationSettings | null;
+  agentSettings: models.NotificationSettings | null;
+};
+
+type UserNotificationCache = {
+  expiresAt: number;
+  templates?: models.NotificationTemplate[];
+  globalSettings?: GlobalNotificationSettings;
+  specificSettings: Map<string, models.NotificationSettings[]>;
+  channels: Map<number, models.NotificationChannel | null>;
+};
+
+const notificationConfigCache = new Map<number, UserNotificationCache>();
+
+function getUserNotificationCache(userId: number) {
+  const now = Date.now();
+  const existing = notificationConfigCache.get(userId);
+  if (existing && existing.expiresAt > now) {
+    return existing;
+  }
+
+  const freshCache: UserNotificationCache = {
+    expiresAt: now + NOTIFICATION_CONFIG_CACHE_TTL_MS,
+    specificSettings: new Map(),
+    channels: new Map(),
+  };
+  notificationConfigCache.set(userId, freshCache);
+  return freshCache;
+}
+
+function invalidateNotificationConfigCache(userId: number) {
+  notificationConfigCache.delete(userId);
+}
+
+async function getCachedNotificationTemplates(userId: number) {
+  const cache = getUserNotificationCache(userId);
+  if (!cache.templates) {
+    cache.templates = await repositories.getNotificationTemplates(userId);
+  }
+  return cache.templates;
+}
+
+async function getCachedGlobalSettings(userId: number) {
+  const cache = getUserNotificationCache(userId);
+  if (!cache.globalSettings) {
+    cache.globalSettings = await repositories.getGlobalSettings(userId);
+  }
+  return cache.globalSettings;
+}
+
+async function getCachedSpecificSettings(
+  userId: number,
+  type: "monitor" | "agent",
+  id: number
+) {
+  const cache = getUserNotificationCache(userId);
+  const key = `${type}:${id}`;
+  if (!cache.specificSettings.has(key)) {
+    cache.specificSettings.set(
+      key,
+      await repositories.getSpecificSettings(userId, type, id)
+    );
+  }
+  return cache.specificSettings.get(key) ?? [];
+}
+
+async function getCachedNotificationChannelById(id: number, userId: number) {
+  const cache = getUserNotificationCache(userId);
+  if (!cache.channels.has(id)) {
+    cache.channels.set(
+      id,
+      await repositories.getNotificationChannelById(id, userId)
+    );
+  }
+  return cache.channels.get(id) ?? null;
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>
+) {
+  const results: R[] = [];
+
+  for (let index = 0; index < items.length; index += concurrency) {
+    const batch = items.slice(index, index + concurrency);
+    const batchResults = await Promise.all(batch.map(worker));
+    results.push(...batchResults);
+  }
+
+  return results;
+}
+
+function getNotificationEventKey(
+  subject: string,
+  variables: Record<string, string>
+) {
+  return variables.status || subject;
+}
+
+function getHistoryEventKey(historyContent: string) {
+  try {
+    const parsed = JSON.parse(historyContent) as {
+      subject?: string;
+      variables?: Record<string, string>;
+    };
+    return parsed.variables?.status || parsed.subject || "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeCooldownMinutes(value: unknown) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes)) {
+    return DEFAULT_NOTIFICATION_COOLDOWN_MINUTES;
+  }
+
+  return Math.max(0, Math.min(Math.round(minutes), 1440));
+}
+
 // 通知渠道相关服务
 export async function getNotificationChannels(
   userId: number
@@ -21,6 +154,7 @@ export async function createNotificationChannel(
   try {
     // @ts-ignore
     const id = await repositories.createNotificationChannel(channel);
+    invalidateNotificationConfigCache(channel.created_by);
     return { success: true, id };
   } catch (error) {
     console.error("创建通知渠道失败:", error);
@@ -44,6 +178,9 @@ export async function updateNotificationChannel(
       userId,
       channel
     );
+    if (result) {
+      invalidateNotificationConfigCache(userId);
+    }
     return {
       success: result,
       message: result ? "通知渠道更新成功" : "通知渠道不存在或未做任何更改",
@@ -63,6 +200,9 @@ export async function deleteNotificationChannel(
 ): Promise<{ success: boolean; message?: string }> {
   try {
     const result = await repositories.deleteNotificationChannel(id, userId);
+    if (result) {
+      invalidateNotificationConfigCache(userId);
+    }
     return {
       success: result,
       message: result ? "通知渠道删除成功" : "通知渠道不存在",
@@ -101,6 +241,7 @@ export async function createNotificationTemplate(
 ): Promise<{ success: boolean; id?: number; message?: string }> {
   try {
     const id = await repositories.createNotificationTemplate(template);
+    invalidateNotificationConfigCache(template.created_by);
     return { success: true, id };
   } catch (error) {
     console.error("创建通知模板失败:", error);
@@ -124,6 +265,9 @@ export async function updateNotificationTemplate(
       userId,
       template
     );
+    if (result) {
+      invalidateNotificationConfigCache(userId);
+    }
     return {
       success: result,
       message: result ? "通知模板更新成功" : "通知模板不存在或未做任何更改",
@@ -143,6 +287,9 @@ export async function deleteNotificationTemplate(
 ): Promise<{ success: boolean; message?: string }> {
   try {
     const result = await repositories.deleteNotificationTemplate(id, userId);
+    if (result) {
+      invalidateNotificationConfigCache(userId);
+    }
     return {
       success: result,
       message: result ? "通知模板删除成功" : "通知模板不存在",
@@ -171,6 +318,7 @@ export async function createOrUpdateSettings(
 ): Promise<{ success: boolean; id?: number; message?: string }> {
   try {
     const id = await repositories.createOrUpdateSettings(settings);
+    invalidateNotificationConfigCache(settings.user_id);
     return { success: true, id };
   } catch (error) {
     console.error("保存通知设置失败:", error);
@@ -233,51 +381,26 @@ interface WeComConfig {
  */
 function parseChannelConfig<T>(channel: models.NotificationChannel): T {
   try {
-    console.log(
-      `[解析配置] 开始解析渠道ID=${channel.id} 名称=${channel.name} 类型=${channel.type}的配置`
-    );
-    console.log(`[解析配置] 原始配置类型: ${typeof channel.config}`);
-
-    if (typeof channel.config === "string") {
-      console.log(`[解析配置] 配置是字符串，长度=${channel.config.length}`);
-      console.log(
-        `[解析配置] 配置内容: ${channel.config.substring(0, 200)}${
-          channel.config.length > 200 ? "..." : ""
-        }`
-      );
-    }
-
     let config: any;
     if (typeof channel.config === "string") {
       // 如果是字符串，尝试解析为JSON对象
       try {
         config = JSON.parse(channel.config);
-        console.log(
-          `[解析配置] 成功解析渠道${channel.id}的JSON配置，结果:`,
-          config
-        );
       } catch (jsonError) {
         console.error(
           `[解析配置] 解析渠道${channel.id}的JSON配置失败:`,
           jsonError
-        );
-        console.error(
-          `[解析配置] 配置内容: ${channel.config.substring(0, 100)}${
-            channel.config.length > 100 ? "..." : ""
-          }`
         );
         return {} as T;
       }
     } else if (typeof channel.config === "object") {
       // 如果已经是对象，直接使用
       config = channel.config;
-      console.log(`[解析配置] 渠道${channel.id}配置已经是对象格式:`, config);
     } else {
       console.error(`[解析配置] 无效的配置格式: ${typeof channel.config}`);
       return {} as T;
     }
 
-    console.log(`[解析配置] 渠道${channel.id}配置解析完成，最终配置:`, config);
     return config as T;
   } catch (e) {
     console.error("[解析配置] 解析渠道配置失败:", e);
@@ -295,13 +418,8 @@ async function sendResendNotification(
   content: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    console.log(
-      `[Resend通知] 开始处理Resend通知发送，渠道ID=${channel.id}，名称=${channel.name}`
-    );
-
     // 解析渠道配置
     const config = parseChannelConfig<ResendConfig>(channel);
-    console.log(`[Resend通知] 解析后的配置:`, config);
 
     // 检查必要参数
     if (!config.apiKey) {
@@ -324,22 +442,6 @@ async function sendResendNotification(
     const from = config.from;
     const to = config.to.split(",").map((email) => email.trim());
 
-    // 记录发送的内容
-    console.log(`[Resend通知] 准备发送邮件通知`);
-    console.log(
-      `[Resend通知] API密钥: ${apiKey.substring(0, 5)}*****${apiKey.substring(
-        apiKey.length - 5
-      )}`
-    );
-    console.log(`[Resend通知] 发送者: ${from}`);
-    console.log(`[Resend通知] 接收者: ${to.join(", ")}`);
-    console.log(`[Resend通知] 主题: ${subject}`);
-    console.log(
-      `[Resend通知] 内容: ${content.substring(0, 100)}${
-        content.length > 100 ? "..." : ""
-      }`
-    );
-
     // 构建请求数据
     const requestData = {
       from: from,
@@ -348,10 +450,7 @@ async function sendResendNotification(
       html: content.replace(/\n/g, "<br>"), // 将换行符转换为HTML换行
     };
 
-    console.log(`[Resend通知] 请求数据:`, JSON.stringify(requestData));
-
     // 发送API请求
-    console.log(`[Resend通知] 开始发送API请求到 https://api.resend.com/emails`);
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -361,17 +460,13 @@ async function sendResendNotification(
       body: JSON.stringify(requestData),
     });
 
-    console.log(`[Resend通知] 收到API响应，状态码: ${response.status}`);
-
     // 解析响应
     const responseData = await response.json();
-    console.log(`[Resend通知] 响应数据:`, responseData);
 
     if (response.ok) {
-      console.log(`[Resend通知] 发送成功: ${JSON.stringify(responseData)}`);
       return { success: true };
     } else {
-      console.error(`[Resend通知] 发送失败: ${JSON.stringify(responseData)}`);
+      console.error(`[Resend通知] 发送失败，状态码: ${response.status}`);
       return {
         success: false,
         error:
@@ -406,14 +501,6 @@ async function sendTelegramNotification(
     // 组合主题和内容
     let message = `${subject}\n\n${content}`;
 
-    // 记录发送的内容
-    console.log("[Telegram通知] 准备发送通知");
-    console.log(
-      `[Telegram通知] 内容: ${message.substring(0, 100)}${
-        message.length > 100 ? "..." : ""
-      }`
-    );
-
     // 处理转义的换行符，确保它们会被正确显示为实际的换行
     message = message.replace(/\\n/g, "\n");
 
@@ -426,7 +513,6 @@ async function sendTelegramNotification(
       text: message,
     };
 
-    console.log("[Telegram通知] 开始发送POST请求...");
     const response = await fetch(apiEndpoint, {
       method: "POST",
       headers: {
@@ -438,10 +524,9 @@ async function sendTelegramNotification(
     const responseData = await response.json();
 
     if (responseData.ok === true) {
-      console.log("[Telegram通知] 发送成功:", responseData.result?.message_id);
       return { success: true };
     } else {
-      console.error("[Telegram通知] 发送失败:", responseData);
+      console.error("[Telegram通知] 发送失败");
       return {
         success: false,
         error: responseData.description || "发送失败",
@@ -492,7 +577,6 @@ function registerSender(type: string, sender: NotificationSender) {
     console.warn(`[通知注册] 覆盖已存在的发送器: ${type}`);
   }
   senderRegistry[type] = sender;
-  console.log(`[通知注册] 成功注册发送器: ${type}`);
 }
 
 /**
@@ -505,23 +589,41 @@ async function sendNotificationByChannel(
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
-  console.log(
-    `[渠道分发] 开始处理渠道ID=${channel.id}，名称=${channel.name}，类型=${channel.type}的通知`
-  );
-
   if (!channel.enabled) {
-    console.log(`[渠道分发] 渠道ID=${channel.id}已禁用，跳过发送`);
     return { success: false, error: "通知渠道已禁用" };
   }
 
   const sender = senderRegistry[channel.type];
   if (sender) {
-    console.log(`[渠道分发] 找到类型为 ${channel.type} 的发送器，开始执行`);
     return await sender(channel, subject, content);
   } else {
     console.error(`[渠道分发] 不支持的通知渠道类型: ${channel.type}`);
     return { success: false, error: `不支持的通知渠道类型: ${channel.type}` };
   }
+}
+
+async function isNotificationInCooldown(
+  type: "monitor" | "agent" | "system",
+  targetId: number | null,
+  channelId: number,
+  eventKey: string,
+  cooldownMinutes: number
+) {
+  if (!eventKey) return false;
+  if (cooldownMinutes <= 0) return false;
+
+  const since = new Date(Date.now() - cooldownMinutes * 60 * 1000).toISOString();
+  const recentHistory =
+    await repositories.getRecentSuccessfulNotificationHistory({
+      type,
+      targetId,
+      channelId,
+      since,
+    });
+
+  return recentHistory.some(
+    (history) => getHistoryEventKey(history.content) === eventKey
+  );
 }
 
 /**
@@ -562,7 +664,6 @@ async function sendFeishuNotification(
       },
     };
 
-    console.log("[飞书通知] 准备发送通知到:", webhookUrl);
     const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
@@ -574,10 +675,9 @@ async function sendFeishuNotification(
     const responseData = await response.json();
 
     if (responseData.StatusCode === 0 || responseData.code === 0) {
-      console.log("[飞书通知] 发送成功");
       return { success: true };
     } else {
-      console.error("[飞书通知] 发送失败:", responseData);
+      console.error("[飞书通知] 发送失败");
       return {
         success: false,
         error: responseData.StatusMessage || responseData.msg || "发送失败",
@@ -624,7 +724,6 @@ async function sendWeComNotification(
       },
     };
 
-    console.log("[企业微信通知] 准备发送通知到:", webhookUrl);
     const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
@@ -636,10 +735,9 @@ async function sendWeComNotification(
     const responseData = await response.json();
 
     if (responseData.errcode === 0) {
-      console.log("[企业微信通知] 发送成功");
       return { success: true };
     } else {
-      console.error("[企业微信通知] 发送失败:", responseData);
+      console.error("[企业微信通知] 发送失败");
       return {
         success: false,
         error: `错误码: ${responseData.errcode}, 错误信息: ${responseData.errmsg}`,
@@ -661,25 +759,19 @@ export async function sendNotification(
   targetId: number | null,
   variables: Record<string, string>,
   channelIds: number[],
-  userId: number
+  userId: number,
+  cooldownMinutes = DEFAULT_NOTIFICATION_COOLDOWN_MINUTES
 ): Promise<{
   success: boolean;
-  results: Array<{ channelId: number; success: boolean; error?: string }>;
+  results: NotificationSendResult[];
 }> {
   try {
-    console.log(
-      `[发送通知] 开始发送${type}通知，目标ID=${targetId}，渠道数量=${channelIds.length}，渠道IDs:`,
-      channelIds
-    );
-
     if (!channelIds || channelIds.length === 0) {
-      console.log("[发送通知] 没有指定通知渠道，跳过发送");
       return { success: false, results: [] };
     }
 
     // 获取默认的通知模板
-    const templates = await repositories.getNotificationTemplates(userId);
-    console.log(`[发送通知] 获取到${templates.length}个通知模板`);
+    const templates = await getCachedNotificationTemplates(userId);
 
     let defaultTemplate = templates.find(
       (t) => t.is_default && t.type === type
@@ -693,27 +785,16 @@ export async function sendNotification(
         return { success: false, results: [] };
       }
 
-      console.warn(
-        `[发送通知] 找不到类型为${type}的默认通知模板，使用ID=${fallbackTemplate.id}作为回退模板`
-      );
-
       defaultTemplate = fallbackTemplate;
     }
-
-    console.log(
-      `[发送通知] 使用模板ID=${defaultTemplate.id}，名称=${defaultTemplate.name}`
-    );
 
     // 替换变量
     const subject = replaceVariables(defaultTemplate.subject, variables);
     const content = replaceVariables(defaultTemplate.content, variables);
 
     // 获取所有通知渠道
-    console.log(`[发送通知] 开始获取${channelIds.length}个通知渠道的详细信息`);
     const channels = await Promise.all(
-      channelIds.map((id) =>
-        repositories.getNotificationChannelById(id, userId)
-      )
+      channelIds.map((id) => getCachedNotificationChannelById(id, userId))
     );
 
     // 过滤掉不存在的渠道
@@ -721,40 +802,51 @@ export async function sendNotification(
       (ch): ch is models.NotificationChannel => ch !== null
     );
 
-    console.log(
-      `[发送通知] 有效渠道数量: ${validChannels.length}，类型分布:`,
-      validChannels.map((c) => ({
-        id: c.id,
-        name: c.name,
-        type: c.type,
-        enabled: c.enabled,
-      }))
-    );
-
     if (validChannels.length === 0) {
-      console.log("[发送通知] 没有找到有效的通知渠道");
       return { success: false, results: [] };
     }
 
-    // 发送通知并记录结果
-    console.log(`[发送通知] 开始向${validChannels.length}个渠道发送通知`);
-    const results = await Promise.all(
-      validChannels.map(async (channel) => {
-        try {
-          console.log(
-            `[发送通知] 开始通过渠道ID=${channel.id}，名称=${channel.name}，类型=${channel.type}发送通知`
-          );
+    const eventKey = getNotificationEventKey(subject, variables);
+    const normalizedCooldownMinutes =
+      normalizeCooldownMinutes(cooldownMinutes);
+    const skippedResults: NotificationSendResult[] = [];
+    const channelsToSend: models.NotificationChannel[] = [];
 
+    for (const channel of validChannels) {
+      const inCooldown = await isNotificationInCooldown(
+        type,
+        targetId,
+        channel.id,
+        eventKey,
+        normalizedCooldownMinutes
+      );
+
+      if (inCooldown) {
+        skippedResults.push({
+          channelId: channel.id,
+          success: true,
+          skipped: true,
+        });
+      } else {
+        channelsToSend.push(channel);
+      }
+    }
+
+    if (channelsToSend.length === 0) {
+      return { success: true, results: skippedResults };
+    }
+
+    // 发送通知并记录结果
+    const sendResults = await runWithConcurrency(
+      channelsToSend,
+      NOTIFICATION_SEND_CONCURRENCY,
+      async (channel) => {
+        try {
           // 发送通知
           const sendResult = await sendNotificationByChannel(
             channel,
             subject,
             content
-          );
-
-          console.log(
-            `[发送通知] 渠道${channel.id}发送结果: success=${sendResult.success}`,
-            sendResult.success ? "" : `, error=${sendResult.error}`
           );
 
           // 记录通知历史
@@ -801,20 +893,13 @@ export async function sendNotification(
             error: error instanceof Error ? error.message : String(error),
           };
         }
-      })
+      }
     );
+
+    const results = [...skippedResults, ...sendResults];
 
     // 检查是否至少有一个通知发送成功
     const anySuccess = results.some((r) => r.success);
-
-    console.log(
-      `[发送通知] 通知发送完成，总体结果: success=${anySuccess}，详细结果:`,
-      results.map((r) => ({
-        channelId: r.channelId,
-        success: r.success,
-        error: r.error,
-      }))
-    );
 
     return {
       success: anySuccess,
@@ -844,56 +929,44 @@ export async function shouldSendNotification(
   id: number,
   prevStatus: string,
   currentStatus: string
-): Promise<{ shouldSend: boolean; channels: number[] }> {
+): Promise<{ shouldSend: boolean; channels: number[]; cooldownMinutes: number }> {
   // 初始化变量
   let shouldSend = false;
   let channels: number[] = [];
 
-  console.log(
-    `[通知触发检查] 开始检查是否应该发送${type}通知，ID=${id}，状态从${prevStatus}变为${currentStatus}`
-  );
-
   if (!id) {
     console.error("无效的ID");
-    return { shouldSend: false, channels: [] };
+    return {
+      shouldSend: false,
+      channels: [],
+      cooldownMinutes: DEFAULT_NOTIFICATION_COOLDOWN_MINUTES,
+    };
   }
 
   // 获取此对象的特定设置
-  const specificSettings = await repositories.getSpecificSettings(
-    userId,
-    type,
-    id
-  );
-
-  console.log(
-    `[通知触发检查] 获取到特定设置数量: ${
-      specificSettings ? specificSettings.length : 0
-    }`
-  );
+  const specificSettings = await getCachedSpecificSettings(userId, type, id);
 
   let targetSettings = specificSettings.filter(
     (setting: models.NotificationSettings) => setting.enabled
   );
   // 如果没有特定设置，使用全局设置
   if (targetSettings.length === 0) {
-    const globalSettings = await repositories.getGlobalSettings(userId);
-    console.log(
-      `[通知触发检查] 获取全局设置，是否存在监控设置: ${!!globalSettings.monitorSettings}，是否存在代理设置: ${!!globalSettings.agentSettings}`
-    );
+    const globalSettings = await getCachedGlobalSettings(userId);
 
     if (type === "monitor" && globalSettings.monitorSettings) {
-      console.log("[通知触发检查] 使用全局监控设置");
       targetSettings = [globalSettings.monitorSettings];
     } else if (type === "agent" && globalSettings.agentSettings) {
-      console.log("[通知触发检查] 使用全局代理设置");
       targetSettings = [globalSettings.agentSettings];
     }
   }
 
   // 如果没有设置，不发送通知
   if (!targetSettings) {
-    console.log(`[通知触发检查] 没有找到${type}的通知设置，跳过通知`);
-    return { shouldSend: false, channels: [] };
+    return {
+      shouldSend: false,
+      channels: [],
+      cooldownMinutes: DEFAULT_NOTIFICATION_COOLDOWN_MINUTES,
+    };
   }
 
   // 检查是否有启用的设置
@@ -901,9 +974,18 @@ export async function shouldSendNotification(
     (setting: models.NotificationSettings) => setting.enabled
   );
   if (enabledSettings.length === 0) {
-    console.log(`[通知触发检查] ${type}的所有通知设置均已禁用，跳过通知`);
-    return { shouldSend: false, channels: [] };
+    return {
+      shouldSend: false,
+      channels: [],
+      cooldownMinutes: DEFAULT_NOTIFICATION_COOLDOWN_MINUTES,
+    };
   }
+
+  const cooldownMinutes = Math.max(
+    ...enabledSettings.map((setting) =>
+      normalizeCooldownMinutes(setting.cooldown_minutes)
+    )
+  );
 
   // 解析所有启用设置的渠道列表
   try {
@@ -914,17 +996,12 @@ export async function shouldSendNotification(
     }
     // 去重
     channels = [...new Set(channels)];
-    console.log(
-      `[通知触发检查] 解析通知渠道列表成功，包含${channels.length}个渠道:`,
-      channels
-    );
   } catch (e) {
     console.error("[通知触发检查] 解析通知渠道列表失败:", e);
   }
 
   if (channels.length === 0) {
-    console.log("[通知触发检查] 没有配置通知渠道，跳过通知");
-    return { shouldSend: false, channels: [] };
+    return { shouldSend: false, channels: [], cooldownMinutes };
   }
 
   // 根据类型和状态变化判断是否应该发送通知
@@ -937,7 +1014,6 @@ export async function shouldSendNotification(
         currentStatus === "down" &&
         setting.on_down
       ) {
-        console.log("[通知触发检查] 监控状态从正常变为故障，满足发送通知条件");
         shouldSend = true;
         break;
       }
@@ -947,14 +1023,9 @@ export async function shouldSendNotification(
         currentStatus === "up" &&
         setting.on_recovery
       ) {
-        console.log("[通知触发检查] 监控状态从故障恢复正常，满足发送通知条件");
         shouldSend = true;
         break;
       }
-    }
-
-    if (!shouldSend) {
-      console.log("[通知触发检查] 监控状态变化不满足任何设置的发送条件");
     }
   }
   if (type === "agent") {
@@ -966,7 +1037,6 @@ export async function shouldSendNotification(
         currentStatus === "offline" &&
         setting.on_offline
       ) {
-        console.log("[通知触发检查] 代理状态从在线变为离线，满足发送通知条件");
         shouldSend = true;
         break;
       }
@@ -976,19 +1046,14 @@ export async function shouldSendNotification(
         currentStatus === "online" &&
         setting.on_recovery
       ) {
-        console.log("[通知触发检查] 代理状态从离线恢复在线，满足发送通知条件");
         shouldSend = true;
         break;
       }
     }
-
-    if (!shouldSend) {
-      console.log("[通知触发检查] 代理状态变化不满足任何设置的发送条件");
-    }
     // 其他代理相关的阈值通知逻辑...
   }
 
-  return { shouldSend, channels };
+  return { shouldSend, channels, cooldownMinutes };
 }
 
 /**
@@ -1003,11 +1068,9 @@ export async function deleteNotificationSettings(
   userId: number
 ): Promise<{ success: boolean; message?: string }> {
   try {
-    console.log(
-      `[删除通知设置] 开始删除${type}通知设置，ID=${id}，用户ID=${userId}`
-    );
     // 执行删除操作
     await repositories.deleteNotificationSettings(type, id, userId);
+    invalidateNotificationConfigCache(userId);
   } catch (error) {
     console.error("[删除通知设置] 删除通知设置失败:", error);
     return {
@@ -1029,7 +1092,7 @@ export async function createDefaultNotificationSettingsForUser(
   userId: number
 ): Promise<void> {
   try {
-    console.log(`为新用户 ${userId} 创建默认通知设置...`);
+    invalidateNotificationConfigCache(userId);
     const now = new Date().toISOString();
 
     // 创建默认通知模板
@@ -1078,6 +1141,7 @@ export async function createDefaultNotificationSettingsForUser(
       memory_threshold: 85,
       on_disk_threshold: false,
       disk_threshold: 90,
+      cooldown_minutes: DEFAULT_NOTIFICATION_COOLDOWN_MINUTES,
       channels: JSON.stringify([defaultChannelId]),
     });
 
@@ -1095,10 +1159,10 @@ export async function createDefaultNotificationSettingsForUser(
       memory_threshold: 80,
       on_disk_threshold: true,
       disk_threshold: 90,
+      cooldown_minutes: DEFAULT_NOTIFICATION_COOLDOWN_MINUTES,
       channels: JSON.stringify([defaultChannelId]),
     });
 
-    console.log(`为新用户 ${userId} 创建默认通知设置成功`);
   } catch (error) {
     console.error(`为新用户 ${userId} 创建默认通知设置失败:`, error);
     // 此处不向上抛出异常，以免影响用户创建的主流程

@@ -1,10 +1,17 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom"; // 导入 Link
-import { Flex, Heading, Text } from "@radix-ui/themes";
+import { Flex, Heading, Text } from "@/components/ui/theme-shim";
 import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "../../providers/AuthProvider";
 import { useTranslation } from "react-i18next";
 import { getAllowNewUserRegistration } from "../../api/settings"; // 导入新的 API 函数
+
+type LoginLocationState = {
+  from?: {
+    pathname?: string;
+  };
+  message?: string;
+};
 
 const Login = () => {
   const [username, setUsername] = useState("");
@@ -18,14 +25,15 @@ const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
+  const locationState = location.state as LoginLocationState | null;
 
   // 如果已登录，重定向到 dashboard 或原来要访问的页面
   useEffect(() => {
     if (isAuthenticated) {
-      const from = (location.state as any)?.from?.pathname || "/dashboard";
+      const from = locationState?.from?.pathname || "/dashboard";
       navigate(from, { replace: true });
     }
-  }, [isAuthenticated, navigate, location]);
+  }, [isAuthenticated, navigate, locationState]);
 
   // 检查是否有来自注册页面的消息
   useEffect(() => {
@@ -42,10 +50,10 @@ const Login = () => {
     };
     checkRegistrationStatus();
 
-    if (location.state?.message) {
-      setMessage(location.state.message);
+    if (locationState?.message) {
+      setMessage(locationState.message);
     }
-  }, [location.state]);
+  }, [locationState]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,13 +64,13 @@ const Login = () => {
       const result = await login({ username, password });
       if (result.success) {
         // 登录成功后，重定向到用户原来要访问的页面，或默认到 dashboard
-        const from = (location.state as any)?.from?.pathname || "/dashboard";
+        const from = locationState?.from?.pathname || "/dashboard";
         navigate(from, { replace: true });
       } else {
         setError(result.message);
       }
-    } catch (err: any) {
-      setError(err.message || t("login.error"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("login.error"));
     } finally {
       setIsLoading(false);
     }

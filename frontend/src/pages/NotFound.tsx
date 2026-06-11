@@ -1,4 +1,4 @@
-import { Flex, Heading, Text } from "@radix-ui/themes";
+import { Flex, Heading, Text } from "@/components/ui/theme-shim";
 import { Button } from "@/components/ui";
 import { Link } from "react-router-dom";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";

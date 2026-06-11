@@ -14,6 +14,7 @@ export interface Monitor {
   status: string;
   response_time: number;
   last_checked: string;
+  next_check_at?: string | null;
   created_at: string;
   updated_at: string;
 }

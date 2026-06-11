@@ -12,7 +12,7 @@ import {
   notificationSettings,
   notificationHistory,
 } from "../db/schema";
-import { eq, desc, asc, and, count, isNull, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, count, isNull, inArray, gte } from "drizzle-orm";
 
 // 获取指定用户的所有通知渠道
 export const getNotificationChannels = async (userId: number): Promise<
@@ -308,11 +308,12 @@ export const createOrUpdateSettings = async (
         memory_threshold: settings.memory_threshold,
         on_disk_threshold: settings.on_disk_threshold ? 1 : 0,
         disk_threshold: settings.disk_threshold,
+        cooldown_minutes: settings.cooldown_minutes,
         channels: settings.channels,
         updated_at: new Date().toISOString(),
       })
       .where(eq(notificationSettings.id, existingSetting.id));
-    return existingSettings.id;
+    return existingSetting.id;
   } else {
     // 如果不存在则创建
     const result = await db
@@ -331,6 +332,7 @@ export const createOrUpdateSettings = async (
         memory_threshold: settings.memory_threshold,
         on_disk_threshold: settings.on_disk_threshold ? 1 : 0,
         disk_threshold: settings.disk_threshold,
+        cooldown_minutes: settings.cooldown_minutes,
         channels: settings.channels,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -356,10 +358,39 @@ export const createNotificationHistory = async (
       status: history.status,
       content: history.content,
       error: history.error,
+      sent_at: new Date().toISOString(),
     })
     .returning();
 
   return result[0].id;
+};
+
+export const getRecentSuccessfulNotificationHistory = async (filter: {
+  type: "monitor" | "agent" | "system";
+  targetId: number | null;
+  channelId: number;
+  since: string;
+  limit?: number;
+}): Promise<NotificationHistory[]> => {
+  const targetCondition =
+    filter.targetId === null
+      ? isNull(notificationHistory.target_id)
+      : eq(notificationHistory.target_id, filter.targetId);
+
+  return await db
+    .select()
+    .from(notificationHistory)
+    .where(
+      and(
+        eq(notificationHistory.type, filter.type),
+        targetCondition,
+        eq(notificationHistory.channel_id, filter.channelId),
+        eq(notificationHistory.status, "success"),
+        gte(notificationHistory.sent_at, filter.since)
+      )
+    )
+    .orderBy(desc(notificationHistory.sent_at))
+    .limit(filter.limit ?? 20);
 };
 
 // 获取通知历史记录 (这个可以考虑是否也需要用户隔离)
@@ -441,6 +472,7 @@ export const getNotificationConfig = async (userId: number): Promise<Notificatio
         enabled: false,
         onDown: false,
         onRecovery: false,
+        cooldownMinutes: 30,
         channels: [],
       },
       agents: {
@@ -453,6 +485,7 @@ export const getNotificationConfig = async (userId: number): Promise<Notificatio
         memoryThreshold: 85,
         onDiskThreshold: false,
         diskThreshold: 90,
+        cooldownMinutes: 30,
         channels: [],
       },
       specificMonitors: {},
@@ -466,6 +499,7 @@ export const getNotificationConfig = async (userId: number): Promise<Notificatio
       enabled: globalSettings.monitorSettings.enabled,
       onDown: globalSettings.monitorSettings.on_down,
       onRecovery: globalSettings.monitorSettings.on_recovery,
+      cooldownMinutes: globalSettings.monitorSettings.cooldown_minutes,
       channels: JSON.parse(globalSettings.monitorSettings.channels || "[]"),
     };
   }
@@ -481,6 +515,7 @@ export const getNotificationConfig = async (userId: number): Promise<Notificatio
       memoryThreshold: globalSettings.agentSettings.memory_threshold,
       onDiskThreshold: globalSettings.agentSettings.on_disk_threshold,
       diskThreshold: globalSettings.agentSettings.disk_threshold,
+      cooldownMinutes: globalSettings.agentSettings.cooldown_minutes,
       channels: JSON.parse(globalSettings.agentSettings.channels || "[]"),
     };
   }
@@ -493,6 +528,7 @@ export const getNotificationConfig = async (userId: number): Promise<Notificatio
       enabled: setting.enabled,
       onDown: setting.on_down,
       onRecovery: setting.on_recovery,
+      cooldownMinutes: setting.cooldown_minutes,
       channels: JSON.parse(setting.channels),
     };
   }
@@ -511,6 +547,7 @@ export const getNotificationConfig = async (userId: number): Promise<Notificatio
       memoryThreshold: setting.memory_threshold,
       onDiskThreshold: setting.on_disk_threshold,
       diskThreshold: setting.disk_threshold,
+      cooldownMinutes: setting.cooldown_minutes,
       channels: JSON.parse(setting.channels),
     };
   }

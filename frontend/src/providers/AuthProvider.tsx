@@ -3,6 +3,7 @@ import React, {
   useContext,
   useState,
   useEffect,
+  useCallback,
   ReactNode,
 } from "react";
 import {
@@ -24,6 +25,33 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const [isLoading, setIsLoading] = useState(true);
   const { t } = useTranslation();
 
+  const clearAuthState = useCallback(() => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    setToken(null);
+    setUser(null);
+  }, []);
+
+  // 验证 token 是否有效
+  const verifyToken = useCallback(async () => {
+    try {
+      const response = await getCurrentUser();
+      if (response.success && response.user) {
+        setUser(response.user);
+        localStorage.setItem("user", JSON.stringify(response.user));
+      } else {
+        // Token 无效，清除登录状态
+        clearAuthState();
+      }
+    } catch (error) {
+      console.error(t("auth.error.fetchUser"), error);
+      // Token 验证失败，清除登录状态
+      clearAuthState();
+    } finally {
+      setIsLoading(false);
+    }
+  }, [clearAuthState, t]);
+
   useEffect(() => {
     // 从 localStorage 获取 token 和 user
     const storedToken = localStorage.getItem("token");
@@ -37,42 +65,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     } else {
       setIsLoading(false);
     }
-  }, []);
+  }, [verifyToken]);
 
-  // 验证 token 是否有效
-  const verifyToken = async () => {
-    try {
-      const response = await getCurrentUser();
-      if (response.success && response.user) {
-        setUser(response.user);
-        localStorage.setItem("user", JSON.stringify(response.user));
-      } else {
-        // Token 无效，清除登录状态
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        setToken(null);
-        setUser(null);
-      }
-    } catch (error) {
-      console.error(t("auth.error.fetchUser"), error);
-      // Token 验证失败，清除登录状态
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      setToken(null);
-      setUser(null);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    // 如果有 token，但没有 user，则获取用户信息
-    if (token && !user) {
-      fetchCurrentUser();
-    }
-  }, [token, user]);
-
-  const fetchCurrentUser = async () => {
+  const fetchCurrentUser = useCallback(async () => {
     try {
       const response = await getCurrentUser();
       if (response.success && response.user) {
@@ -80,19 +75,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         localStorage.setItem("user", JSON.stringify(response.user));
       } else {
         // 如果获取用户信息失败，清除 token 和 user
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        setToken(null);
-        setUser(null);
+        clearAuthState();
       }
     } catch (error) {
       console.error(t("auth.error.fetchUser"), error);
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      setToken(null);
-      setUser(null);
+      clearAuthState();
     }
-  };
+  }, [clearAuthState, t]);
+
+  useEffect(() => {
+    // 如果有 token，但没有 user，则获取用户信息
+    if (token && !user) {
+      fetchCurrentUser();
+    }
+  }, [token, user, fetchCurrentUser]);
 
   const login = async (data: LoginRequest) => {
     try {
@@ -126,10 +122,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   };
 
   const logout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setToken(null);
-    setUser(null);
+    clearAuthState();
     window.location.href = "/login";
   };
 

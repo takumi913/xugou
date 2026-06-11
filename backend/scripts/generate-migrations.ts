@@ -13,25 +13,8 @@ function addIfNotExists(sql: string): string {
     .replace(/CREATE TABLE (`?\w+`?)/g, 'CREATE TABLE IF NOT EXISTS $1')
     // 处理 CREATE INDEX 语句
     .replace(/CREATE (UNIQUE )?INDEX (`?\w+`?)/g, 'CREATE $1INDEX IF NOT EXISTS $2')
-    // 处理 ALTER TABLE ADD COLUMN 语句
-    .replace(
-      /ALTER TABLE (`?\w+`?) ADD (COLUMN )?(`?\w+`? \w+.*)/g,
-      (match, table, _, column) => {
-        // 提取列名（去掉类型和约束）
-        const columnName = column.match(/^`?\w+`?/)[0];
-        return `
--- 检查列是否存在
-SELECT CASE 
-  WHEN EXISTS (
-    SELECT 1 FROM pragma_table_info(${table}) WHERE name = ${columnName}
-  )
-  THEN 1
-  ELSE (
-    ALTER TABLE ${table} ADD ${column}
-  )
-END;`;
-      }
-    );
+    // 处理 DROP INDEX 语句
+    .replace(/DROP INDEX (`?\w+`?)/g, 'DROP INDEX IF EXISTS $1');
 }
 
 // 生成迁移文件
@@ -88,4 +71,4 @@ ${migrations.map(m => `  {
   console.log(`已生成迁移文件: ${outputFile}`);
 }
 
-generateMigrations().catch(console.error); 
+generateMigrations().catch(console.error);

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -25,41 +26,45 @@ type Collector interface {
 	CollectBatch(ctx context.Context) ([]*model.SystemInfo, error) // 批量采集一段时间内的系统信息
 }
 
+type stableMetadata struct {
+	Hostname string
+	Platform string
+	OS       string
+	Version  string
+	CPUModel string
+	CPUCores int
+}
+
 // DefaultCollector 是默认的数据收集器实现
-type DefaultCollector struct{}
+type DefaultCollector struct {
+	stableMu       sync.RWMutex
+	stableMetadata *stableMetadata
+}
 
 // NewCollector 创建一个新的数据收集器
 func NewCollector() Collector {
 	return &DefaultCollector{}
 }
 
-// Collect 收集系统信息
-func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, error) {
-	info := &model.SystemInfo{
-		Timestamp: time.Now(),
-		Keepalive: config.Interval,
+func (c *DefaultCollector) getStableMetadata() (*stableMetadata, error) {
+	c.stableMu.RLock()
+	if c.stableMetadata != nil {
+		metadata := c.stableMetadata
+		c.stableMu.RUnlock()
+		return metadata, nil
+	}
+	c.stableMu.RUnlock()
+
+	c.stableMu.Lock()
+	defer c.stableMu.Unlock()
+
+	if c.stableMetadata != nil {
+		return c.stableMetadata, nil
 	}
 
-	info.Token = config.Token
-
-	// 获取主机信息
 	hostInfo, err := host.Info()
 	if err != nil {
 		return nil, fmt.Errorf("获取主机信息失败: %w", err)
-	}
-	info.Hostname = hostInfo.Hostname
-	info.Platform = hostInfo.Platform
-	info.OS = hostInfo.OS
-	// 设置操作系统版本，格式化为更有意义的信息
-	info.Version = fmt.Sprintf("%s %s (%s)", hostInfo.Platform, hostInfo.PlatformVersion, hostInfo.KernelVersion)
-
-	// 获取本地IP地址
-	info.IPAddresses = utils.GetLocalIPs()
-
-	// 获取CPU信息
-	cpuPercent, err := cpu.Percent(time.Second, false)
-	if err != nil {
-		return nil, fmt.Errorf("获取CPU使用率失败: %w", err)
 	}
 
 	cpuInfo, err := cpu.Info()
@@ -72,10 +77,51 @@ func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, erro
 		modelName = cpuInfo[0].ModelName
 	}
 
+	c.stableMetadata = &stableMetadata{
+		Hostname: hostInfo.Hostname,
+		Platform: hostInfo.Platform,
+		OS:       hostInfo.OS,
+		Version:  fmt.Sprintf("%s %s (%s)", hostInfo.Platform, hostInfo.PlatformVersion, hostInfo.KernelVersion),
+		CPUModel: modelName,
+		CPUCores: runtime.NumCPU(),
+	}
+
+	return c.stableMetadata, nil
+}
+
+// Collect 收集系统信息
+func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, error) {
+	info := &model.SystemInfo{
+		Timestamp:              time.Now(),
+		Keepalive:              config.ReportInterval,
+		CollectIntervalSeconds: config.CollectInterval,
+		ReportIntervalSeconds:  config.ReportInterval,
+	}
+
+	info.Token = config.Token
+
+	metadata, err := c.getStableMetadata()
+	if err != nil {
+		return nil, err
+	}
+	info.Hostname = metadata.Hostname
+	info.Platform = metadata.Platform
+	info.OS = metadata.OS
+	info.Version = metadata.Version
+
+	// 获取本地IP地址
+	info.IPAddresses = utils.GetLocalIPs()
+
+	// 获取CPU信息
+	cpuPercent, err := cpu.Percent(time.Second, false)
+	if err != nil {
+		return nil, fmt.Errorf("获取CPU使用率失败: %w", err)
+	}
+
 	info.CPUInfo = model.CPUInfo{
 		Usage:     cpuPercent[0],
-		Cores:     runtime.NumCPU(),
-		ModelName: modelName,
+		Cores:     metadata.CPUCores,
+		ModelName: metadata.CPUModel,
 	}
 
 	// 获取内存信息
