@@ -3,6 +3,7 @@ import { Box, Grid } from "@/components/ui/theme-shim";
 import { getPublicAgentMetrics, getStatusPageData } from "../../api/status";
 import PageLoading from "../../components/PageLoading";
 import AgentCard from "../../components/AgentCard";
+import AgentViewsSection from "../../components/AgentViewsSection";
 import LiveIndicator from "../../components/LiveIndicator";
 import MonitorCard from "../../components/MonitorCard";
 import AgentStatusBar from "../../components/AgentStatusBar";
@@ -146,6 +147,12 @@ const StatusPage = () => {
     setCardLoading(false);
   };
 
+  // 供多视图组件回调：按 id 找到 agent 后走原有展开/收起逻辑
+  const handleAgentSelect = (agentId: number) => {
+    const agent = data.agents.find((item) => item.id === agentId);
+    if (agent) handleAgentClick(agent);
+  };
+
   // 错误显示
   if (error) {
     return (
@@ -183,53 +190,58 @@ const StatusPage = () => {
           </p>
         </div>
 
-        {/* 客户端监控状态 */}
+        {/* 客户端监控状态：与仪表盘同源的四视图切换（bar 视图沿用信息更全的
+            AgentStatusBar；公开数据无精确坐标，地图自动降级国家质心点） */}
         {data.agents.length > 0 && (
-          <section className="mb-6">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="group-title">
-                {t("statusPage.agentStatus")}{" "}
-                <span className="group-count">[{data.agents.length}]</span>
-              </h2>
-              <LiveIndicator
-                connected={liveConnected}
-                lagSeconds={liveLagSeconds}
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-4">
-              {data.agents.map((agent) => (
-                <div key={agent.id}>
-                  <div
-                    className="cursor-pointer transition hover:scale-[1.01]"
-                    onClick={() => handleAgentClick(agent)}
-                  >
-                    <AgentStatusBar
-                      latestMetric={displayMetricFor(agent)}
-                      agent={agent}
-                    />
-                  </div>
-                  {/* 展开的详情区域 */}
-                  {selectedAgent?.id === agent.id && (
-                    <div className="mt-4">
-                      {cardLoading ? (
-                        <PageLoading />
-                      ) : (
-                        <AgentCard
-                          agent={{
-                            ...selectedAgent,
-                            metrics: selectedAgentMetrics || [],
-                          }}
-                          liveMetric={displayMetricFor(agent)}
-                          // 公开页不展示 IP（后端投影已剥离，此处双保险）
-                          showIpAddress={false}
-                        />
-                      )}
-                    </div>
-                  )}
+          <>
+            <AgentViewsSection
+              agents={data.agents}
+              liveMetrics={liveMetrics}
+              title={
+                <>
+                  {t("statusPage.agentStatus")}{" "}
+                  <span className="group-count">[{data.agents.length}]</span>
+                </>
+              }
+              titleExtra={
+                <LiveIndicator
+                  connected={liveConnected}
+                  lagSeconds={liveLagSeconds}
+                />
+              }
+              storageKey="status_agent_view"
+              onSelectAgent={handleAgentSelect}
+              renderBarItem={(agent, displayMetric) => (
+                <div
+                  className="cursor-pointer transition hover:scale-[1.01]"
+                  onClick={() => handleAgentSelect(agent.id)}
+                >
+                  <AgentStatusBar
+                    latestMetric={displayMetric as MetricHistory | undefined}
+                    agent={agent as AgentWithLatestMetrics}
+                  />
                 </div>
-              ))}
-            </div>
-          </section>
+              )}
+            />
+            {/* 点击任意视图中的客户端后，在分区下方展开详情 */}
+            {selectedAgent && (
+              <div className="-mt-2 mb-6">
+                {cardLoading ? (
+                  <PageLoading />
+                ) : (
+                  <AgentCard
+                    agent={{
+                      ...selectedAgent,
+                      metrics: selectedAgentMetrics || [],
+                    }}
+                    liveMetric={displayMetricFor(selectedAgent)}
+                    // 公开页不展示 IP（后端投影已剥离，此处双保险）
+                    showIpAddress={false}
+                  />
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {/* API服务状态 */}

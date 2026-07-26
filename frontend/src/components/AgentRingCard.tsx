@@ -22,6 +22,8 @@ import { ProgressBar } from "./StatBar";
 interface AgentRingCardProps {
   agent: DashboardAgent;
   liveMetric?: Partial<MetricHistory> | null;
+  /** 点击行为覆盖（公开状态页展开详情）；缺省时链接到 /agents/:id */
+  onSelect?: () => void;
 }
 
 // 单个环形进度（复用 global.css 的 .metric-ring* 系列；无数据时置灰显示 '-'）
@@ -65,7 +67,7 @@ const Ring = ({
  * 客户端环形卡（Dashboard ring 视图，参照 CF-SM ServerRingCard 布局）：
  * header（名称+状态徽章）→ 分隔线 → CPU/RAM/DISK 三环 → 网络速率行 + 月流量进度
  */
-const AgentRingCard = ({ agent, liveMetric }: AgentRingCardProps) => {
+const AgentRingCard = ({ agent, liveMetric, onSelect }: AgentRingCardProps) => {
   const { t } = useTranslation();
 
   const agentStatus = agent.status || "inactive";
@@ -122,11 +124,9 @@ const AgentRingCard = ({ agent, liveMetric }: AgentRingCardProps) => {
       ? `${displayMetric.cpu_cores} Cores`
       : undefined;
 
-  return (
-    <Link
-      to={`/agents/${agent.id}`}
-      className="terminal-card block p-3 text-[13px]"
-    >
+  // 卡片主体先构造为节点，再按点击行为选择外层（避免内联组件反复重挂子树）
+  const body = (
+    <>
       {/* header：名称 + 地区 + 状态徽章（与 AgentCard/bar 卡同款样式） */}
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
@@ -212,6 +212,26 @@ const AgentRingCard = ({ agent, liveMetric }: AgentRingCardProps) => {
           )}
         </div>
       )}
+    </>
+  );
+
+  // onSelect 提供时渲染为可点击 div（公开状态页无管理端路由），否则保持 Link
+  return onSelect ? (
+    <div
+      role="button"
+      tabIndex={0}
+      className="terminal-card block cursor-pointer p-3 text-[13px]"
+      onClick={onSelect}
+      onKeyDown={(e) => e.key === "Enter" && onSelect()}
+    >
+      {body}
+    </div>
+  ) : (
+    <Link
+      to={`/agents/${agent.id}`}
+      className="terminal-card block p-3 text-[13px]"
+    >
+      {body}
     </Link>
   );
 };

@@ -32,6 +32,8 @@ interface WorldMapViewProps {
   agents: DashboardAgent[];
   liveMetrics: Record<number, Partial<MetricHistory>>;
   onSelectRegion: (regionCode: string) => void;
+  /** 单机点点击行为覆盖（公开状态页展开详情）；缺省时跳转 /agents/:id */
+  onSelectAgent?: (agentId: number) => void;
 }
 
 interface MapCluster {
@@ -68,6 +70,7 @@ const WorldMapView = ({
   agents,
   liveMetrics,
   onSelectRegion,
+  onSelectAgent,
 }: WorldMapViewProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -262,7 +265,11 @@ const WorldMapView = ({
   const onClusterClick = (cluster: MapCluster) => {
     if (dragRef.current?.moved) return; // 拖拽结束派生的 click 不触发
     if (cluster.agents.length === 1) {
-      navigate(`/agents/${cluster.agents[0].id}`);
+      if (onSelectAgent) {
+        onSelectAgent(cluster.agents[0].id);
+      } else {
+        navigate(`/agents/${cluster.agents[0].id}`);
+      }
       return;
     }
     if (cluster.countryCode) {

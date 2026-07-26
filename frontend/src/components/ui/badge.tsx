@@ -20,13 +20,14 @@ const badgeVariants = cva(
       },
       color: {
         default: "",
+        // 黑灰简约风：除红色告警外，语义色统一为中性灰阶（green 稍亮以示“正常”）
         green:
-          "border-transparent bg-green-500/15 text-green-700 dark:text-green-400",
+          "border-transparent bg-neutral-500/15 text-neutral-700 dark:text-neutral-300",
         red: "border-transparent bg-red-500/15 text-red-700 dark:text-red-400",
         yellow:
-          "border-transparent bg-yellow-500/15 text-yellow-700 dark:text-yellow-400",
+          "border-transparent bg-neutral-400/15 text-neutral-600 dark:text-neutral-400",
         amber:
-          "border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400",
+          "border-transparent bg-neutral-400/15 text-neutral-600 dark:text-neutral-400",
         gray: "border-transparent bg-gray-500/15 text-gray-700 dark:text-gray-400",
       },
     },

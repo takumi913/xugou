@@ -8,29 +8,32 @@
    设计 Token（终端 / 命令行风格，参照 CF-Server-Monitor）
    -------------------------------------------------------------------------- */
 :root {
-  /* CF-SM 表意变量（业务代码直接使用） */
-  --bg-primary: #0a0e14;
-  --bg-secondary: rgba(18, 23, 31, 0.6);
-  --bg-card: rgba(21, 27, 38, 0.6);
-  --bg-hover: rgba(26, 34, 48, 0.6);
+  /* CF-SM 表意变量（业务代码直接使用）
+     黑灰单色简约风：中性灰阶承担全部强调/状态色，红色是唯一告警彩色。
+     语义槽位保留原变量名（accent-green = 主强调/正常，blue/yellow = 用量
+     升档灰阶，red = 告警），业务代码无需改动 */
+  --bg-primary: #0c0c0c;
+  --bg-secondary: rgba(22, 22, 22, 0.6);
+  --bg-card: rgba(26, 26, 26, 0.6);
+  --bg-hover: rgba(38, 38, 38, 0.6);
 
-  --border-color: #1e2a3a;
-  --border-active: #2a3a4f;
+  --border-color: #262626;
+  --border-active: #3f3f3f;
 
-  --text-primary: #d3dae3;
-  --text-secondary: #8999af;
-  --text-muted: rgba(211, 218, 227, 0.8);
+  --text-primary: #e0e0e0;
+  --text-secondary: #8c8c8c;
+  --text-muted: rgba(224, 224, 224, 0.8);
 
-  --accent-green: #00d4aa;
-  --accent-blue: #4da6ff;
-  --accent-purple: #b392f0;
-  --accent-pink: #f778ba;
-  --accent-yellow: #ffb870;
+  --accent-green: #b8b8b8;
+  --accent-blue: #d6d6d6;
+  --accent-purple: #858585;
+  --accent-pink: #6e6e6e;
+  --accent-yellow: #f2f2f2;
   --accent-red: #f85149;
-  --accent-cyan: #39d2c0;
+  --accent-cyan: #cfcfcf;
 
-  --input-bg: #0d1117;
-  --input-border: #21262d;
+  --input-bg: #111111;
+  --input-border: #2a2a2a;
 
   /* Typography */
   --terminal-font: "JetBrains Mono", "Courier New", monospace;
@@ -39,17 +42,17 @@
   --radius: 0.25rem;
   --background: var(--bg-primary);
   --foreground: var(--text-primary);
-  --card: #11161f;
+  --card: #141414;
   --card-foreground: var(--text-primary);
-  --popover: #0d1117;
+  --popover: #111111;
   --popover-foreground: var(--text-primary);
   --primary: var(--accent-green);
-  --primary-foreground: #0a0e14;
-  --secondary: #1a2230;
+  --primary-foreground: #0c0c0c;
+  --secondary: #1f1f1f;
   --secondary-foreground: var(--text-primary);
-  --muted: #151b26;
+  --muted: #191919;
   --muted-foreground: var(--text-secondary);
-  --accent: #1a2230;
+  --accent: #1f1f1f;
   --accent-foreground: var(--text-primary);
   --destructive: var(--accent-red);
   --border: var(--border-color);
@@ -60,50 +63,50 @@
   --chart-3: var(--accent-purple);
   --chart-4: var(--accent-yellow);
   --chart-5: var(--accent-red);
-  --sidebar: #11161f;
+  --sidebar: #141414;
   --sidebar-foreground: var(--text-primary);
   --sidebar-primary: var(--accent-green);
-  --sidebar-primary-foreground: #0a0e14;
-  --sidebar-accent: #1a2230;
+  --sidebar-primary-foreground: #0c0c0c;
+  --sidebar-accent: #1f1f1f;
   --sidebar-accent-foreground: var(--text-primary);
   --sidebar-border: var(--border-color);
   --sidebar-ring: var(--accent-green);
 }
 
-/* 浅色主题（挂在 html.light 上） */
+/* 浅色主题（挂在 html.light 上）：同样黑灰单色，深灰承担强调，红色告警 */
 .light {
-  --bg-primary: #f5f5f0;
-  --bg-secondary: rgba(232, 232, 224, 0.6);
-  --bg-card: rgba(250, 250, 245, 0.6);
-  --bg-hover: rgba(240, 240, 232, 0.6);
+  --bg-primary: #f7f7f7;
+  --bg-secondary: rgba(238, 238, 238, 0.6);
+  --bg-card: rgba(255, 255, 255, 0.6);
+  --bg-hover: rgba(232, 232, 232, 0.6);
 
-  --border-color: #d4d4c8;
-  --border-active: #b8b8a8;
+  --border-color: #dcdcdc;
+  --border-active: #bdbdbd;
 
-  --text-primary: #2c2c2c;
-  --text-secondary: #5c5c5c;
-  --text-muted: rgba(10, 14, 20, 0.8);
+  --text-primary: #1f1f1f;
+  --text-secondary: #616161;
+  --text-muted: rgba(15, 15, 15, 0.8);
 
-  --accent-green: #1a7f5a;
-  --accent-blue: #2563eb;
-  --accent-purple: #7c3aed;
-  --accent-pink: #db2777;
-  --accent-yellow: #d97706;
+  --accent-green: #4a4a4a;
+  --accent-blue: #2e2e2e;
+  --accent-purple: #6b6b6b;
+  --accent-pink: #7d7d7d;
+  --accent-yellow: #111111;
   --accent-red: #dc2626;
-  --accent-cyan: #0d9488;
+  --accent-cyan: #575757;
 
   --input-bg: #ffffff;
-  --input-border: #d4d4c8;
+  --input-border: #dcdcdc;
 
-  --card: #f8f8f3;
+  --card: #ffffff;
   --popover: #ffffff;
-  --primary-foreground: #f5f5f0;
-  --secondary: #e8e8e0;
-  --muted: #eceae2;
-  --accent: #e8e8e0;
-  --sidebar: #f8f8f3;
-  --sidebar-primary-foreground: #f5f5f0;
-  --sidebar-accent: #e8e8e0;
+  --primary-foreground: #f7f7f7;
+  --secondary: #ebebeb;
+  --muted: #efefef;
+  --accent: #ebebeb;
+  --sidebar: #ffffff;
+  --sidebar-primary-foreground: #f7f7f7;
+  --sidebar-accent: #ebebeb;
 }
 
 @theme inline {
@@ -162,28 +165,6 @@
   }
 }
 
-/* CRT 扫描线效果 */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent 0 1px,
-    rgba(0, 0, 0, 0.03) 1px 2px
-  );
-  pointer-events: none;
-  z-index: 9999;
-}
-
-.light body::before {
-  background: repeating-linear-gradient(
-    0deg,
-    transparent 0 1px,
-    rgba(0, 0, 0, 0.015) 1px 2px
-  );
-}
-
 /* --------------------------------------------------------------------------
    布局容器
    -------------------------------------------------------------------------- */
@@ -233,7 +214,7 @@ body::before {
   text-underline-offset: 4px;
 }
 
-/* 终端窗口三色圆点（硬编码，不随主题） */
+/* 终端窗口三圆点（黑灰简约：由深到浅的灰阶，不随主题） */
 .terminal-dot {
   width: 12px;
   height: 12px;
@@ -242,15 +223,15 @@ body::before {
 }
 
 .terminal-dot.red {
-  background: #ff5f56;
+  background: #9e9e9e;
 }
 
 .terminal-dot.yellow {
-  background: #ffbd2e;
+  background: #757575;
 }
 
 .terminal-dot.green {
-  background: #27c93f;
+  background: #525252;
 }
 
 /* --------------------------------------------------------------------------

@@ -6,28 +6,28 @@ import type { ResolvedTheme } from "../providers/ThemeProvider";
  * 注意：这里刻意硬编码 hex 色值而非 CSS 变量——chart.js 画布无法解析
  * var(--xxx)，且透明填充需要基于真实色值计算 rgba。
  */
+// 黑灰单色简约风：数据线用不同明度的灰阶区分（深色主题亮灰在前）
 export const CHART_COLORS = {
-  cpu: "#00d4aa",
-  memory: "#b392f0",
-  disk: "#39d2c0",
-  netDown: "#00d4aa",
-  netUp: "#4da6ff",
-  process: "#f778ba",
-  secondary: "#ffb870",
+  cpu: "#d6d6d6",
+  memory: "#9e9e9e",
+  disk: "#757575",
+  netDown: "#d6d6d6",
+  netUp: "#8a8a8a",
+  process: "#b8b8b8",
+  secondary: "#6e6e6e",
 } as const;
 
 export type ChartColors = { [K in keyof typeof CHART_COLORS]: string };
 
-// 浅色主题变体（对应 global.css .light 的 accent 值：
-// green #1a7f5a / blue #2563eb / purple #7c3aed / pink #db2777 / yellow #d97706 / cyan #0d9488）
+// 浅色主题变体（深灰在前，与 global.css .light 的灰阶方向一致）
 const CHART_COLORS_LIGHT: ChartColors = {
-  cpu: "#1a7f5a",
-  memory: "#7c3aed",
-  disk: "#0d9488",
-  netDown: "#1a7f5a",
-  netUp: "#2563eb",
-  process: "#db2777",
-  secondary: "#d97706",
+  cpu: "#2e2e2e",
+  memory: "#6b6b6b",
+  disk: "#999999",
+  netDown: "#2e2e2e",
+  netUp: "#757575",
+  process: "#4a4a4a",
+  secondary: "#a3a3a3",
 };
 
 // 按解析后的主题取图表数据线色板（深色为默认）
@@ -64,10 +64,10 @@ export function getChartTheme(resolvedTheme: ResolvedTheme): ChartThemeColors {
   const isDark = resolvedTheme === "dark";
   return {
     gridColor: isDark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.08)",
-    tickColor: isDark ? "#8999af" : "#5c5c5c",
-    tooltipBg: isDark ? "#11161f" : "#f8f8f3",
-    tooltipBorder: isDark ? "#1e2a3a" : "#d4d4c8",
-    tooltipTitle: isDark ? "#00d4aa" : "#1a7f5a",
-    tooltipBody: isDark ? "#d3dae3" : "#2c2c2c",
+    tickColor: isDark ? "#8c8c8c" : "#616161",
+    tooltipBg: isDark ? "#141414" : "#ffffff",
+    tooltipBorder: isDark ? "#262626" : "#dcdcdc",
+    tooltipTitle: isDark ? "#d6d6d6" : "#2e2e2e",
+    tooltipBody: isDark ? "#e0e0e0" : "#1f1f1f",
   };
 }

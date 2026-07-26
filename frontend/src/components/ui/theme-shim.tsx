@@ -223,11 +223,12 @@ const headingSizeClass = (size?: string) => {
 
 const colorClass = (color?: string) => {
   if (!color) return "";
+  // 黑灰简约风：除红色告警外统一中性灰
   const map: Record<string, string> = {
     gray: "text-muted-foreground",
     red: "text-red-600",
-    green: "text-emerald-600",
-    blue: "text-blue-600",
+    green: "text-neutral-600 dark:text-neutral-300",
+    blue: "text-neutral-500 dark:text-neutral-400",
   };
   return map[color] ?? "";
 };
