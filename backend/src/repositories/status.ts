@@ -7,7 +7,7 @@ import {
   publicStatusSnapshots,
   agents,
 } from "../db/schema";
-import { eq, desc, asc, and, count, sql, isNull, lte, or } from "drizzle-orm";
+import { eq, ne, desc, asc, and, count, sql, isNull, lte, or } from "drizzle-orm";
 
 /**
  * 状态页相关的数据库操作
@@ -198,6 +198,28 @@ export async function isAgentSelectedForStatusPage(
     .limit(1);
 
   return rows.length > 0;
+}
+
+// 公开状态页可订阅实时广播的客户端 id 列表：
+// 勾选进状态页 + 归属该用户 + 未隐藏（口径与公开快照的白名单投影一致）
+export async function getPublicStatusPageAgentIds(userId: number) {
+  const rows = await db
+    .select({ agent_id: statusPageAgents.agent_id })
+    .from(statusPageConfig)
+    .innerJoin(
+      statusPageAgents,
+      eq(statusPageAgents.config_id, statusPageConfig.id)
+    )
+    .innerJoin(agents, eq(agents.id, statusPageAgents.agent_id))
+    .where(
+      and(
+        eq(statusPageConfig.user_id, userId),
+        eq(agents.created_by, userId),
+        or(isNull(agents.is_hidden), ne(agents.is_hidden, 1))
+      )
+    );
+
+  return rows.map((row: { agent_id: number }) => row.agent_id);
 }
 
 export async function getPublicStatusSnapshot(userId: number) {

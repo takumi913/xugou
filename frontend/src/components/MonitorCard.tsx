@@ -38,20 +38,19 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
 
   return (
     <div className="terminal-card p-4 text-[13px]">
-      {/* header：名称 + 状态徽章 */}
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span style={{ color: statusColor, flexShrink: 0 }}>●</span>
-          <span
-            className="truncate font-semibold"
-            style={{ color: "var(--text-primary)" }}
-          >
-            {monitor.name}
-          </span>
-        </div>
+      {/* header：名称 + 状态徽章（徽章跟随名称靠左，右上角留给列表页的操作按钮，
+          与 AgentStatusBar 的头部布局保持一致，避免与覆盖按钮重叠） */}
+      <div className="mb-2 flex min-w-0 items-center gap-2 pr-24">
+        <span style={{ color: statusColor, flexShrink: 0 }}>●</span>
+        <span
+          className="truncate font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
+          {monitor.name}
+        </span>
         <span
           className="status-label"
-          style={{ color: statusColor, borderColor: statusColor }}
+          style={{ color: statusColor, borderColor: statusColor, flexShrink: 0 }}
         >
           {statusText[currentStatus] ?? currentStatus}
         </span>

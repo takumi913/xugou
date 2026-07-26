@@ -86,7 +86,14 @@ function shouldPersistAgentMetrics(
     return true;
   }
 
-  return now.getTime() - lastSeenTime >= minIntervalSeconds * 1000;
+  // last_seen_at 每次上报都会刷新，按时间差判定会让上报间隔小于阈值的 agent
+  // 永远达不到落库条件（历史/rollup 一行都写不进去）。
+  // 改按对齐窗口边界判定：跨窗口即落库，每个窗口恰好持久化一次，
+  // 且与 rollup 的 bucket_start（同一 getBucketStart 对齐）天然一致。
+  return (
+    getBucketStart(now, minIntervalSeconds) !==
+    getBucketStart(new Date(lastSeenTime), minIntervalSeconds)
+  );
 }
 
 // 从上报的磁盘对象列表（stringify 之前的形态）计算峰值使用率

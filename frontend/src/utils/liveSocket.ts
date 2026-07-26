@@ -34,6 +34,11 @@ export interface LiveUpdate {
 export interface CreateLiveSocketOptions {
   /** 订阅范围："all" 或 agent id 列表 */
   subscribe: "all" | number[];
+  /**
+   * 公开状态页模式：以 ?public=<userId> 匿名连接（不携带 token），
+   * 服务端把可接收范围强制限定为该用户状态页勾选且未隐藏的客户端
+   */
+  publicUserId?: number;
   onUpdate?: (update: LiveUpdate) => void;
   onStatusChange?: (status: LiveSocketStatus) => void;
   /** 覆盖 WebSocket URL（默认由 API 基地址 / 当前页面推导） */
@@ -54,7 +59,11 @@ interface BatchUpdateMessage {
   }>;
 }
 
-function buildWsUrl(subscribeParam: string, override?: string): string {
+function buildWsUrl(
+  subscribeParam: string,
+  override?: string,
+  publicUserId?: number
+): string {
   if (override) return override;
 
   let base: URL;
@@ -69,6 +78,12 @@ function buildWsUrl(subscribeParam: string, override?: string): string {
   const wsProtocol = base.protocol === "https:" ? "wss:" : "ws:";
   const url = new URL(`${wsProtocol}//${base.host}/api/ws`);
   url.searchParams.set("subscribe", subscribeParam);
+
+  if (publicUserId != null) {
+    // 公开状态页模式：匿名连接，不携带 token
+    url.searchParams.set("public", String(publicUserId));
+    return url.toString();
+  }
 
   const token = getStoredToken();
   if (token) {
@@ -192,7 +207,9 @@ export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
   const connect = () => {
     if (manualClose) return;
     try {
-      ws = new WebSocket(buildWsUrl(subscribeParam, options.url));
+      ws = new WebSocket(
+        buildWsUrl(subscribeParam, options.url, options.publicUserId)
+      );
     } catch {
       setStatus(false, "unsupported");
       return;
