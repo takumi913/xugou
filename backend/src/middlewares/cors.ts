@@ -41,6 +41,11 @@ export const createCorsHeaders = (request: Request, env?: Partial<Bindings>) => 
  * 处理跨域资源共享并设置必要的响应头
  */
 export const corsMiddleware = async (c: Context, next: Next) => {
+  // WebSocket 升级请求直接放行：101 响应不可变，追加 CORS 头会破坏握手
+  if (c.req.header("Upgrade")?.toLowerCase() === "websocket") {
+    return next();
+  }
+
   // 如果是 OPTIONS 请求，直接返回成功响应
   if (c.req.method === "OPTIONS") {
     const headers = createCorsHeaders(c.req.raw, c.env as Partial<Bindings>);

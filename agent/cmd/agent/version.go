@@ -14,19 +14,25 @@ var (
 )
 
 func init() {
+	var short bool
+
 	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "显示版本信息",
 		Long:  `显示 Xugou Agent 的版本信息、构建日期和 Git 提交哈希`,
-		Run:   runVersion,
+		Run: func(cmd *cobra.Command, args []string) {
+			if short {
+				// 机器可读的裸版本号，selfmgmt.BinaryVersion 依赖此输出做升级前后版本对比
+				fmt.Println(Version)
+				return
+			}
+			fmt.Println("Xugou Agent 版本信息:")
+			fmt.Printf("版本: %s\n", Version)
+			fmt.Printf("Git 提交: %s\n", GitCommit)
+			fmt.Printf("构建日期: %s\n", BuildDate)
+		},
 	}
+	versionCmd.Flags().BoolVar(&short, "short", false, "仅输出版本号（机器可读）")
 
 	rootCmd.AddCommand(versionCmd)
-}
-
-func runVersion(cmd *cobra.Command, args []string) {
-	fmt.Println("Xugou Agent 版本信息:")
-	fmt.Printf("版本: %s\n", Version)
-	fmt.Printf("Git 提交: %s\n", GitCommit)
-	fmt.Printf("构建日期: %s\n", BuildDate)
 }

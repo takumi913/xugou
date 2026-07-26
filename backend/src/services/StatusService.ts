@@ -35,6 +35,43 @@ function parseSnapshot(snapshotJson: string) {
   }
 }
 
+/**
+ * 公开状态页 agent 字段白名单投影。
+ * 无鉴权接口只输出公开页确实展示的字段；新增列默认不进公开响应，
+ * 需要展示时必须在此显式加入（token/price/expire_date 等敏感字段永不加入；
+ * geo_latitude/geo_longitude/geo_city/geo_region_name 属城市级定位，按隐私
+ * 分级仅供管理端使用，绝不加入本白名单）。
+ * 导出仅供契约测试断言投影字段集，业务方请走 toPublicAgents。
+ */
+export function toPublicAgent(agent: Agent) {
+  return {
+    id: agent.id,
+    name: agent.name,
+    status: agent.status,
+    hostname: agent.hostname,
+    os: agent.os,
+    version: agent.version,
+    ip_addresses: agent.ip_addresses,
+    // 地区为粗粒度国家码（ISO 3166-1 alpha-2），公开展示合理（与 CF-SM 一致）
+    region: agent.region ?? null,
+    created_at: agent.created_at,
+    updated_at: agent.updated_at,
+    // 流量展示配置（月流量/速率数值在 metrics 内；上限与计费方式驱动 TRF 进度条）
+    traffic_limit_gb: agent.traffic_limit_gb ?? null,
+    traffic_reset_day: agent.traffic_reset_day ?? null,
+    traffic_calc_type: agent.traffic_calc_type ?? null,
+  };
+}
+
+export type PublicAgent = ReturnType<typeof toPublicAgent>;
+
+// is_hidden=1 的客户端即使被勾选进状态页也从公开响应剥离，其余走白名单投影
+function toPublicAgents(agentRows: Agent[]): PublicAgent[] {
+  return agentRows
+    .filter((agent) => agent.is_hidden !== 1)
+    .map(toPublicAgent);
+}
+
 function mapAgentRollupToMetricHistory(row: any) {
   return {
     id: row.id,
@@ -312,7 +349,7 @@ async function buildStatusPagePublicData(userId: number) {
     }));
 
   // 获取客户端的详细信息和最新指标
-  let agents: Array<Omit<Agent, "token"> & { metrics?: any }> = [];
+  let agents: Array<PublicAgent & { metrics?: any }> = [];
   if (selectedAgents && selectedAgents.length > 0) {
     const agentIds = selectedAgents.map((a: any) => a.agent_id);
     if (agentIds.length > 0) {
@@ -329,7 +366,7 @@ async function buildStatusPagePublicData(userId: number) {
       );
 
       if (Array.isArray(agentsResult)) {
-        agents = agentsResult.map(({ token, ...agent }) => ({
+        agents = toPublicAgents(agentsResult).map((agent) => ({
           ...agent,
           metrics: latestMetricsByAgent.get(agent.id) ?? null,
         }));
@@ -439,7 +476,10 @@ export async function getPublicAgentMetrics(userId: number, agentId: number) {
     agentId
   );
 
-  if (!isSelected) {
+  // is_hidden=1 的客户端历史指标同样不对公开接口暴露
+  const agent = isSelected ? await repositories.getAgentById(agentId) : null;
+
+  if (!isSelected || !agent || agent.is_hidden === 1) {
     return {
       success: false,
       status: 404,
@@ -455,7 +495,7 @@ export async function getPublicAgentMetrics(userId: number, agentId: number) {
   const metrics =
     rollups.length > 0
       ? rollups.map(mapAgentRollupToMetricHistory)
-      : await repositories.getAgentMetrics(agentId);
+      : await repositories.getAgentMetrics(agentId, undefined, agent);
 
   return {
     success: true,

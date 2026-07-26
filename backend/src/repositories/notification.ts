@@ -613,3 +613,58 @@ export const deleteNotificationChannelsByUserId = async (
     await db.delete(notificationChannels).where(inArray(notificationChannels.id, channelIds));
   }
 };
+
+// ---- Agent 通知设置解析（agent-task / expiry-task 共用的单一事实源）----
+
+export type NotificationSettingRow = typeof notificationSettings.$inferSelect;
+
+// 批量取回多个用户已启用的 agent 资源级 + global-agent 全局通知设置（一次查询）
+export const getAgentNotificationSettingsForUsers = async (
+  userIds: number[]
+): Promise<NotificationSettingRow[]> => {
+  if (userIds.length === 0) {
+    return [];
+  }
+  return await db
+    .select()
+    .from(notificationSettings)
+    .where(
+      and(
+        eq(notificationSettings.enabled, 1),
+        inArray(notificationSettings.target_type, ["agent", "global-agent"]),
+        inArray(notificationSettings.user_id, userIds)
+      )
+    )
+    .orderBy(asc(notificationSettings.id));
+};
+
+// 解析某 agent 生效的通知设置：资源级设置优先，缺省回退 global-agent 全局设置
+export const resolveEffectiveAgentNotificationSetting = (
+  rows: NotificationSettingRow[],
+  agentId: number,
+  userId: number
+): NotificationSettingRow | null => {
+  const specific = rows.find(
+    (row) =>
+      row.user_id === userId &&
+      row.target_type === "agent" &&
+      row.target_id === agentId
+  );
+  if (specific) {
+    return specific;
+  }
+  return (
+    rows.find(
+      (row) => row.user_id === userId && row.target_type === "global-agent"
+    ) ?? null
+  );
+};
+
+// 单个 agent 的便捷封装（阈值/上下线等单点通知场景）
+export const getEffectiveAgentNotificationSetting = async (
+  agentId: number,
+  userId: number
+): Promise<NotificationSettingRow | null> => {
+  const rows = await getAgentNotificationSettingsForUsers([userId]);
+  return resolveEffectiveAgentNotificationSetting(rows, agentId, userId);
+};

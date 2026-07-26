@@ -1,11 +1,20 @@
+import { readFileSync } from "fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from 'vite-plugin-pwa'; // 导入 PWA 插件
 
+// 读取 package.json version，构建时注入 __APP_VERSION__（Footer 版本号显示）
+const pkg = JSON.parse(
+  readFileSync(path.resolve(__dirname, "package.json"), "utf-8")
+) as { version?: string };
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version ?? "0.0.0"),
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -87,6 +96,7 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:8787",
         changeOrigin: true,
+        ws: true, // 支持 WebSocket 代理（/api/ws 实时链路）
         // 如果后端 API 不包含 /api 前缀，可以重写路径
         // rewrite: (path) => path.replace(/^\/api/, '')
       },

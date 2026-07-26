@@ -3,6 +3,7 @@
  */
 
 import { JWT_CONFIG } from "../config";
+import { bytesToHex } from "./hex";
 
 /**
  * 获取JWT密钥
@@ -39,9 +40,7 @@ export async function generateToken(env?: any): Promise<string> {
   // 生成随机部分
   const array = new Uint8Array(16);
   crypto.getRandomValues(array);
-  const randomPart = Array.from(array, (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
+  const randomPart = bytesToHex(array);
 
   // 添加时间戳
   const timestamp = Date.now().toString(36);
@@ -65,11 +64,7 @@ export async function generateToken(env?: any): Promise<string> {
     const msgUint8 = new TextEncoder().encode(baseToken + versionId);
 
     const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const signature = hashArray
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-      .substring(0, 16);
+    const signature = bytesToHex(new Uint8Array(hashBuffer)).substring(0, 16);
 
     // 返回带签名的令牌
     const fullToken = `${baseToken}.${signature}`;
@@ -143,11 +138,10 @@ export async function verifyToken(
     const msgUint8 = new TextEncoder().encode(baseToken + versionId);
 
     const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const calculatedSignature = hashArray
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-      .substring(0, 16);
+    const calculatedSignature = bytesToHex(new Uint8Array(hashBuffer)).substring(
+      0,
+      16
+    );
 
     // 比较计算出的签名和令牌中的签名
     if (calculatedSignature !== signature) {

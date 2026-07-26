@@ -8,6 +8,7 @@ import {
   IconButton,
   Container,
 } from "@/components/ui/theme-shim";
+import PageLoading from "../../components/PageLoading";
 
 import {
   Button,
@@ -219,13 +220,7 @@ const EditMonitor = () => {
   const showQuotaWarning = formData.interval > 0 && formData.interval < 5;
 
   if (loadingData) {
-    return (
-      <Box>
-        <Flex justify="center" align="center">
-          <Text>{t("common.loading")}</Text>
-        </Flex>
-      </Box>
-    );
+    return <PageLoading />;
   }
 
   if (error) {
@@ -256,12 +251,12 @@ const EditMonitor = () => {
           >
             <ArrowLeftIcon />
           </Button>
-          <Heading size="6">
+          <h1 className="prompt-title">
             {t("monitor.form.title.edit")}: {formData.name}
-          </Heading>
+          </h1>
         </Flex>
       </Flex>
-      <Card className="my-4 pr-4">
+      <div className="terminal-card my-4 py-4 pr-4">
         <form onSubmit={handleSubmit}>
           <Box pt="2">
             <Flex direction="column" gap="2" className="ml-4">
@@ -335,7 +330,10 @@ const EditMonitor = () => {
                     {t("monitor.form.intervalMin")}
                   </Text>
                   {showQuotaWarning && (
-                    <Text size="1" className="block mt-1 text-amber-600">
+                    <Text
+                      size="1"
+                      className="block mt-1 text-[var(--accent-yellow)]"
+                    >
                       {t("monitor.form.intervalQuotaWarning")}
                     </Text>
                   )}
@@ -474,7 +472,7 @@ const EditMonitor = () => {
             </Button>
           </Flex>
         </form>
-      </Card>
+      </div>
     </Container>
   );
 };

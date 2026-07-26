@@ -1,11 +1,5 @@
-import { Box, Flex, Text } from "@/components/ui/theme-shim";
-import {
-  CheckCircledIcon,
-  CrossCircledIcon,
-  QuestionMarkCircledIcon,
-} from "@radix-ui/react-icons";
-import { Card, Badge } from "./ui";
-import type { BadgeColor } from "./ui/badge";
+import { useMemo } from "react";
+import { monitorStatusColors, statusAccentColor } from "../utils/statusColors";
 import { MonitorWithDailyStatsAndStatusHistory } from "../types/monitors";
 import { useTranslation } from "react-i18next";
 import StatusBar from "./MonitorStatusBar";
@@ -16,39 +10,11 @@ interface MonitorCardProps {
 }
 
 /**
- * API监控卡片组件
+ * API监控卡片组件（终端条形卡风格）
  * 用于显示单个API监控服务的状态信息
  */
 const MonitorCard = ({ monitor }: MonitorCardProps) => {
   const { t } = useTranslation();
-
-  // 状态图标组件
-  const StatusIcon = ({ status }: { status: string }) => {
-    switch (status) {
-      case "up":
-        return (
-          <CheckCircledIcon width="16" height="16" color="var(--green-9)" />
-        );
-      case "pending":
-        return (
-          <QuestionMarkCircledIcon
-            width="16"
-            height="16"
-            color="var(--amber-9)"
-          />
-        );
-      case "down":
-      default:
-        return <CrossCircledIcon width="16" height="16" color="var(--red-9)" />;
-    }
-  };
-
-  // 状态颜色映射
-  const statusColors: Record<string, BadgeColor> = {
-    up: "green",
-    down: "red",
-    pending: "amber",
-  };
 
   // 状态文本映射
   const statusText: { [key: string]: string } = {
@@ -59,35 +25,73 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
 
   // 获取当前监控的状态
   const currentStatus = monitor.status || "pending";
+  const statusColor = statusAccentColor(monitorStatusColors, currentStatus);
+
+  // 最近一天的可用率（取 dailyStats 中日期最新的一条）
+  const latestAvailability = useMemo(() => {
+    if (!monitor.dailyStats || monitor.dailyStats.length === 0) return null;
+    const latest = monitor.dailyStats.reduce((acc, stat) =>
+      new Date(stat.date).getTime() > new Date(acc.date).getTime() ? stat : acc
+    );
+    return latest.availability;
+  }, [monitor.dailyStats]);
 
   return (
-    <Card>
-      <Flex justify="between" align="start" p="4" gap="2" direction="column">
-        <Flex justify="between" align="center" style={{ width: "100%" }}>
-          <Flex align="center" gap="2">
-            <StatusIcon status={currentStatus} />
-            <Text weight="medium">{monitor.name}</Text>
-          </Flex>
-          <Badge color={statusColors[currentStatus] ?? "gray"}>
-            {statusText[currentStatus]}
-          </Badge>
-        </Flex>
+    <div className="terminal-card p-4 text-[13px]">
+      {/* header：名称 + 状态徽章 */}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span style={{ color: statusColor, flexShrink: 0 }}>●</span>
+          <span
+            className="truncate font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {monitor.name}
+          </span>
+        </div>
+        <span
+          className="status-label"
+          style={{ color: statusColor, borderColor: statusColor }}
+        >
+          {statusText[currentStatus] ?? currentStatus}
+        </span>
+      </div>
 
-        {/* 状态条显示 */}
-        <Box pt="2" style={{ width: "100%" }}>
-          <StatusBar dailyStats={monitor.dailyStats} />
-        </Box>
+      {/* 响应时间 / 可用率 */}
+      <div
+        className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"
+        style={{ color: "var(--text-secondary)" }}
+      >
+        <span>
+          {t("monitorCard.responseTime")}:{" "}
+          <span style={{ color: "var(--accent-cyan)", fontWeight: 600 }}>
+            {monitor.response_time ? `${monitor.response_time}ms` : "-"}
+          </span>
+        </span>
+        {latestAvailability !== null && (
+          <span>
+            {t("monitor.history.availability")}:{" "}
+            <span style={{ color: "var(--accent-green)", fontWeight: 600 }}>
+              {latestAvailability.toFixed(2)}%
+            </span>
+          </span>
+        )}
+      </div>
 
-        {/* 响应时间图表 */}
-        <Box pt="2" style={{ width: "100%" }}>
-          <ResponseTimeChart
-            history={monitor.history}
-            height={150}
-            showTimeLabels={true}
-          />
-        </Box>
-      </Flex>
-    </Card>
+      {/* 状态条显示 */}
+      <div className="w-full pt-2">
+        <StatusBar dailyStats={monitor.dailyStats} />
+      </div>
+
+      {/* 响应时间图表 */}
+      <div className="w-full pt-2">
+        <ResponseTimeChart
+          history={monitor.history}
+          height={150}
+          showTimeLabels={true}
+        />
+      </div>
+    </div>
   );
 };
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Box, Flex, Heading, Text, Code } from "@/components/ui/theme-shim";
-import { Button, Card, Separator, Switch, Input } from "@/components/ui";
+import { Button, Separator, Switch, Input } from "@/components/ui";
 import {
   ArrowLeftIcon,
   CopyIcon,
@@ -90,10 +90,10 @@ const CreateAgent = () => {
           <Button variant="secondary" onClick={() => navigate("/agents")}>
             <ArrowLeftIcon />
           </Button>
-          <Heading size="6">{t("agent.form.title.create")}</Heading>
+          <h1 className="prompt-title">{t("agent.form.title.create")}</h1>
         </Flex>
       </Flex>
-      <Card className="my-4 pr-4">
+      <div className="terminal-card my-4 py-4 pr-4">
         <Flex direction="column" gap="4" className="ml-4">
           {/* 提示信息 */}
           <Box>
@@ -186,7 +186,7 @@ const CreateAgent = () => {
               )}
             </Flex>
 
-            <Card>
+            <div className="terminal-card">
               <Flex direction="column" gap="3" p="3">
                 <Text as="div" size="2" weight="bold" mb="1">
                   {t(
@@ -208,7 +208,7 @@ const CreateAgent = () => {
                   )}
                 </Text>
               </Flex>
-            </Card>
+            </div>
           </Box>
 
           {/* 返回按钮 */}
@@ -218,7 +218,7 @@ const CreateAgent = () => {
             </Button>
           </Flex>
         </Flex>
-      </Card>
+      </div>
     </Box>
   );
 };

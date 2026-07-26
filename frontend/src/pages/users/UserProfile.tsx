@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { Flex, Heading, Text, Box } from "@/components/ui/theme-shim";
-import { Button, Card, Input } from "@/components/ui";
+import { Flex, Text, Box } from "@/components/ui/theme-shim";
+import { Button, Input } from "@/components/ui";
+import PageLoading from "../../components/PageLoading";
 import { useAuth } from "../../providers/AuthProvider";
 import { updateUser, changePassword, getUser } from "../../api/users";
 import { UpdateUserRequest, ChangePasswordRequest } from "../../types/users";
@@ -105,20 +106,18 @@ const UserProfile = () => {
   };
 
   if (!user) {
-    return <Text>{t("common.loading")}</Text>;
+    return <PageLoading />;
   }
 
   return (
     <Box className="sm:px-6 lg:px-[8%]">
       <Flex justify="between" align="center">
-        <Heading size="6">{t("profile.title")}</Heading>
+        <h1 className="prompt-title">{t("profile.title")}</h1>
       </Flex>
 
       <Flex direction="column" gap="6" className="mt-4 mb-4">
-        <Card>
-          <Heading size="4" mb="4" className="ml-4">
-            {t("profile.basicInfo")}
-          </Heading>
+        <div className="terminal-card py-4">
+          <h2 className="group-title mx-4">{t("profile.basicInfo")}</h2>
 
           <form onSubmit={handleProfileUpdate}>
             <Flex direction="column" gap="3" className="ml-4">
@@ -157,12 +156,10 @@ const UserProfile = () => {
               </Button>
             </Flex>
           </form>
-        </Card>
+        </div>
 
-        <Card>
-          <Heading size="4" mb="4">
-            {t("profile.changePassword")}
-          </Heading>
+        <div className="terminal-card py-4">
+          <h2 className="group-title mx-4">{t("profile.changePassword")}</h2>
 
           <form onSubmit={handlePasswordChange}>
             <Flex direction="column" gap="3" className="ml-4">
@@ -218,7 +215,7 @@ const UserProfile = () => {
               </Button>
             </Flex>
           </form>
-        </Card>
+        </div>
       </Flex>
     </Box>
   );

@@ -132,3 +132,6 @@ Thumbs.db # Windows
 
 /mobile/service-account-key.json
 .alma-snapshots
+
+# 本地参照项目(独立仓库,不纳入版本控制)
+CF-Server-Monitor/

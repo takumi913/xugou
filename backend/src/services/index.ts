@@ -5,3 +5,4 @@ export * from './NotificationService';
 export * from './StatusService';
 export * from './UserService';
 export * from './SettingsService';
+export * from './BroadcastService';

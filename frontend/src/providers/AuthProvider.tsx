@@ -12,6 +12,7 @@ import {
   getCurrentUser,
 } from "../api/auth";
 import { getAllowNewUserRegistration } from "../api/settings"; // 新增
+import { getStoredToken } from "../api/client";
 import { User, LoginRequest, RegisterRequest, AuthContextType } from "../types";
 import { useTranslation } from "react-i18next";
 
@@ -54,7 +55,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
   useEffect(() => {
     // 从 localStorage 获取 token 和 user
-    const storedToken = localStorage.getItem("token");
+    const storedToken = getStoredToken();
     const storedUser = localStorage.getItem("user");
 
     if (storedToken && storedUser) {

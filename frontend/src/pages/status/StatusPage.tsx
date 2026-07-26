@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
-import { Box, Flex, Heading, Text, Grid, Theme } from "@/components/ui/theme-shim";
+import { useCallback, useRef, useState } from "react";
+import { Box, Grid } from "@/components/ui/theme-shim";
 import { getPublicAgentMetrics, getStatusPageData } from "../../api/status";
+import PageLoading from "../../components/PageLoading";
 import AgentCard from "../../components/AgentCard";
 import MonitorCard from "../../components/MonitorCard";
 import AgentStatusBar from "../../components/AgentStatusBar";
@@ -23,7 +24,9 @@ const StatusPage = () => {
     monitors: [],
     agents: [],
   });
-  const [loading, setLoading] = useState(false);
+  // 仅首次加载显示整页加载态，后续轮询静默刷新
+  const [loading, setLoading] = useState(true);
+  const initialLoadDone = useRef(false);
   const [pageTitle, setPageTitle] = useState<string>(t("statusPage.title"));
   const [pageDescription, setPageDescription] = useState<string>(
     t("statusPage.allOperational")
@@ -39,7 +42,9 @@ const StatusPage = () => {
   // 获取数据
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     if (!userId) return;
-    setLoading(true);
+    if (!initialLoadDone.current) {
+      setLoading(true);
+    }
     try {
       const response = await getStatusPageData(parseInt(userId, 10), signal);
       if (signal?.aborted) return;
@@ -64,6 +69,7 @@ const StatusPage = () => {
       }
     } finally {
       if (!signal?.aborted) {
+        initialLoadDone.current = true;
         setLoading(false);
       }
     }
@@ -96,115 +102,102 @@ const StatusPage = () => {
   // 错误显示
   if (error) {
     return (
-      <Theme appearance="light">
-        <Box>
-          <div className="page-container">
-            <Flex justify="center" align="center">
-              <Text size="3">{error}</Text>
-            </Flex>
-          </div>
-        </Box>
-      </Theme>
+      <Box>
+        <div className="page-container">
+          <div className="empty-state">{error}</div>
+        </div>
+      </Box>
     );
   }
 
   if (loading) {
     return (
-      <Theme appearance="light">
-        <Box>
-          <div className="page-container">
-            <Flex justify="center" align="center">
-              <Text size="3">{t("common.loading")}</Text>
-            </Flex>
-          </div>
-        </Box>
-      </Theme>
+      <Box>
+        <div className="page-container">
+          <PageLoading />
+        </div>
+      </Box>
     );
   }
 
   return (
-    <Theme appearance="light">
-      <Box>
-        <div className="page-container sm:px-6 lg:px-[8%] px-4">
-          {/* 状态页标题区域 */}
-          <Flex
-            direction="column"
-            align="center"
-            justify="center"
-            py="9"
-            gap="5"
-          >
-            <Heading size="9" align="center">
-              {pageTitle}
-            </Heading>
-            <Text
-              size="5"
-              align="center"
-              className="whitespace-pre-wrap"
-            >
-              {pageDescription}
-            </Text>
-          </Flex>
-
-          {/* 客户端监控状态 */}
-          {data.agents.length > 0 && (
-            <Box py="6">
-              <Heading size="5" mb="4">
-                {t("statusPage.agentStatus")}
-              </Heading>
-              <div className="grid grid-cols-1 gap-4">
-                {data.agents.map((agent) => (
-                  <div key={agent.id}>
-                    <div
-                      className="cursor-pointer transition hover:scale-[1.01]"
-                      onClick={() => handleAgentClick(agent)}
-                    >
-                      <AgentStatusBar
-                        latestMetric={agent.metrics}
-                        agent={agent}
-                      />
-                    </div>
-                    {/* 展开的详情区域 */}
-                    {selectedAgent?.id === agent.id && (
-                      <div className="mt-4">
-                        {cardLoading ? (
-                          <div className="flex items-center justify-center h-40">
-                            <span className="text-lg text-gray-500">
-                              {t("common.loading")}
-                            </span>
-                          </div>
-                        ) : (
-                          <AgentCard
-                            agent={{
-                              ...selectedAgent,
-                              metrics: selectedAgentMetrics || [],
-                            }}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Box>
-          )}
-
-          {/* API服务状态 */}
-          {data.monitors.length > 0 && (
-            <Box py="6">
-              <Heading size="5" mb="4">
-                {t("statusPage.apiServices")}
-              </Heading>
-              <Grid columns={{ initial: "1" }} gap="4">
-                {data.monitors.map((monitor) => (
-                  <MonitorCard monitor={monitor} key={monitor.id} />
-                ))}
-              </Grid>
-            </Box>
-          )}
+    <Box>
+      <div className="page-container sm:px-6 lg:px-[8%] px-4">
+        {/* 状态页标题区域：终端窗口条（三色圆点 + $ 标题） */}
+        <div className="terminal-card mt-6 mb-8">
+          <div className="flex items-center gap-2 border-b border-[var(--border-color)] px-4 py-3">
+            <span className="terminal-dot red" />
+            <span className="terminal-dot yellow" />
+            <span className="terminal-dot green" />
+            <h1 className="prompt-title ml-2 truncate">{pageTitle}</h1>
+          </div>
+          <p className="whitespace-pre-wrap px-4 py-3 text-[var(--text-secondary)]">
+            {pageDescription}
+          </p>
         </div>
-      </Box>
-    </Theme>
+
+        {/* 客户端监控状态 */}
+        {data.agents.length > 0 && (
+          <section className="mb-6">
+            <h2 className="group-title">
+              {t("statusPage.agentStatus")}{" "}
+              <span className="group-count">[{data.agents.length}]</span>
+            </h2>
+            <div className="grid grid-cols-1 gap-4">
+              {data.agents.map((agent) => (
+                <div key={agent.id}>
+                  <div
+                    className="cursor-pointer transition hover:scale-[1.01]"
+                    onClick={() => handleAgentClick(agent)}
+                  >
+                    <AgentStatusBar
+                      latestMetric={agent.metrics}
+                      agent={agent}
+                    />
+                  </div>
+                  {/* 展开的详情区域 */}
+                  {selectedAgent?.id === agent.id && (
+                    <div className="mt-4">
+                      {cardLoading ? (
+                        <PageLoading />
+                      ) : (
+                        <AgentCard
+                          agent={{
+                            ...selectedAgent,
+                            metrics: selectedAgentMetrics || [],
+                          }}
+                          liveMetric={selectedAgent.metrics}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* API服务状态 */}
+        {data.monitors.length > 0 && (
+          <section className="mb-6">
+            <h2 className="group-title">
+              {t("statusPage.apiServices")}{" "}
+              <span className="group-count">[{data.monitors.length}]</span>
+            </h2>
+            <Grid columns={{ initial: "1" }} gap="4">
+              {data.monitors.map((monitor) => (
+                <MonitorCard monitor={monitor} key={monitor.id} />
+              ))}
+            </Grid>
+          </section>
+        )}
+
+        {/* 空状态 */}
+        {data.agents.length === 0 && data.monitors.length === 0 && (
+          <div className="empty-state">{t("common.noData")}</div>
+        )}
+      </div>
+    </Box>
   );
 };
 

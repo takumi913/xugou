@@ -32,6 +32,21 @@ export interface D1Result<T = unknown> {
   meta?: object;
 }
 
+// Durable Object 命名空间的最小结构化类型
+// （tsconfig 未启用 @cloudflare/workers-types 全局声明，避免与 @types/node 冲突）
+export interface DurableObjectIdLike {
+  toString(): string;
+}
+
+export interface DurableObjectStubLike {
+  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+}
+
+export interface DurableObjectNamespaceLike {
+  idFromName(name: string): DurableObjectIdLike;
+  get(id: DurableObjectIdLike): DurableObjectStubLike;
+}
+
 // 版本元数据类型定义
 export interface VersionMetadata {
   id?: string;
@@ -43,6 +58,7 @@ export interface VersionMetadata {
 // 通用绑定类型
 export type Bindings = {
   DB: D1Database;
+  METRICS_BROADCASTER?: DurableObjectNamespaceLike;
   CF_VERSION_METADATA?: VersionMetadata;
   ASSETS: Fetcher;
   ALLOWED_ORIGINS?: string;
@@ -60,4 +76,6 @@ export type Bindings = {
   MONITOR_ROLLUP_RETENTION_DAYS?: string;
   MONITOR_INCIDENT_RETENTION_DAYS?: string;
   FREE_MODE?: string;
+  // 最新探针版本（语义化版本，空/缺失=不触发自升级）
+  LATEST_AGENT_VERSION?: string;
 };

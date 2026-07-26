@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xugou/agent/pkg/config"
@@ -24,10 +26,19 @@ func setDefaultHeaders(req *http.Request) {
 	req.Header.Set("Referer", "https://www.google.com/")
 }
 
+// setConfigHeaders 上报请求附带配置协议头：协议版本 + 本地配置规范化串的 MD5 + 探针版本
+func setConfigHeaders(req *http.Request) {
+	req.Header.Set(config.HeaderConfigSchema, strconv.Itoa(config.SchemaVersion))
+	req.Header.Set(config.HeaderConfigMd5, config.CurrentConfigMD5())
+	if config.AgentVersion != "" {
+		req.Header.Set(config.HeaderAgentVersion, config.AgentVersion)
+	}
+}
+
 // Reporter 定义数据上报器接口
 type Reporter interface {
-	Report(ctx context.Context, info *model.SystemInfo) error            // 上报单个采集的系统信息
-	ReportBatch(ctx context.Context, infoList []*model.SystemInfo) error // 上报批量采集的系统信息
+	// ReportBatch 上报批量采集的系统信息；服务端下发新配置时返回非 nil 的 RemoteConfig
+	ReportBatch(ctx context.Context, infoList []*model.SystemInfo) (*config.RemoteConfig, error)
 }
 
 type DefaultReporter struct {
@@ -70,84 +81,88 @@ func NewHTTPReporter() *model.HTTPReporter {
 	return reporter
 }
 
-func (r *DefaultReporter) Report(ctx context.Context, info *model.SystemInfo) error {
-	if !r.reporter.Registered {
-		// 客户端未注册，先注册
-		if err := r.register(ctx, info); err != nil {
-			log.Printf("注册客户端失败: %v", err)
-			return err
-		}
-	}
-	reportURL := fmt.Sprintf("%s/api/agents/status", r.reporter.ServerURL)
-	reportPaylod, err := json.Marshal(info)
-
-	if err != nil {
-		log.Println("注册客户端失败: ", err)
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", reportURL, bytes.NewBuffer(reportPaylod))
-	if err != nil {
-		log.Println("创建请求失败：", err)
-		return err
-	}
-	setDefaultHeaders(req)
-
-	resp, err := r.reporter.Client.Do(req)
-	if err != nil {
-		log.Println("上报数据失败：", err)
-		return err
-	}
-	defer resp.Body.Close()
-	if err := checkResponse(resp, "上报数据失败"); err != nil {
-		log.Println(err)
-		return err
-	}
-	log.Printf("上报数据成功: hostname=%s timestamp=%s", info.Hostname, info.Timestamp.Format(time.RFC3339))
-	return nil
-}
-
-// ReportBatch 将多个系统信息批量上报到服务器
-func (r *DefaultReporter) ReportBatch(ctx context.Context, infoList []*model.SystemInfo) error {
+// ReportBatch 将多个系统信息批量上报到服务器。
+// 上报体为 {<最新样本的全部字段>, samples: [...]}：顶层保持旧协议形态（旧服务端忽略未知的
+// samples 字段），samples 承载整个窗口内的全部采集样本。
+// 服务端通过 204/200+form 串下发配置：有新配置且校验通过时返回非 nil 的 RemoteConfig。
+func (r *DefaultReporter) ReportBatch(ctx context.Context, infoList []*model.SystemInfo) (*config.RemoteConfig, error) {
 	if len(infoList) == 0 {
-		return errors.New("没有可上报的系统信息")
+		return nil, errors.New("没有可上报的系统信息")
 	}
 
 	if !r.reporter.Registered {
 		// 客户端未注册，先注册
 		if err := r.register(ctx, infoList[0]); err != nil {
 			log.Printf("注册客户端失败: %v", err)
-			return err
+			return nil, err
 		}
 	}
 
+	samples := make([]*model.Sample, 0, len(infoList))
+	for _, info := range infoList {
+		samples = append(samples, model.NewSample(info))
+	}
+
+	payload := &model.StatusReport{
+		SystemInfo: infoList[len(infoList)-1],
+		Samples:    samples,
+	}
+
 	reportURL := fmt.Sprintf("%s/api/agents/status", r.reporter.ServerURL)
-	reportPaylod, err := json.Marshal(infoList)
+	reportPaylod, err := json.Marshal(payload)
 
 	if err != nil {
-		log.Println("注册客户端失败: ", err)
-		return err
+		log.Println("序列化上报数据失败: ", err)
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", reportURL, bytes.NewBuffer(reportPaylod))
 	if err != nil {
 		log.Println("创建请求失败：", err)
-		return err
+		return nil, err
 	}
 	setDefaultHeaders(req)
+	setConfigHeaders(req)
 
 	resp, err := r.reporter.Client.Do(req)
 	if err != nil {
 		log.Println("上报数据失败：", err)
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if err := checkResponse(resp, "上报数据失败"); err != nil {
 		log.Println(err)
-		return err
+		return nil, err
 	}
 	log.Printf("批量上报数据成功: count=%d", len(infoList))
-	return nil
+	return parseConfigResponse(resp), nil
+}
+
+// parseConfigResponse 解析上报响应中的配置下发：
+// 204 表示配置无变化；200 + application/x-www-form-urlencoded 为新配置串，
+// 整体校验失败时丢弃并继续使用旧配置（下次上报会重新获取）；其余响应（旧协议 JSON）忽略。
+func parseConfigResponse(resp *http.Response) *config.RemoteConfig {
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if resp.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+		return nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		log.Println("读取配置下发响应失败: ", err)
+		return nil
+	}
+
+	remote, err := config.ParseRemoteConfig(strings.TrimSpace(string(body)))
+	if err != nil {
+		log.Println("服务端下发配置校验失败，已整体丢弃: ", err)
+		return nil
+	}
+	return remote
 }
 
 func (r *DefaultReporter) register(ctx context.Context, info *model.SystemInfo) error {

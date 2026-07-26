@@ -9,6 +9,9 @@ import * as jobs from "./jobs";
 import * as api from "./api";
 import * as config from "./config";
 
+// 导出 Durable Object 类供 Cloudflare Workers 运行时使用
+export { MetricsBroadcaster } from "./durable/MetricsBroadcaster";
+
 // 创建Hono应用
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -35,6 +38,7 @@ app.route("/api/status", api.status);
 app.route("/api/notifications", api.notifications);
 app.route("/api/dashboard", api.dashboard);
 app.route("/api/settings", api.settings);
+app.route("/api/ws", api.ws);
 
 // 静态文件路由 - 处理所有非 API 请求，返回前端应用
 app.get("*", async (c) => {

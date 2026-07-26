@@ -42,6 +42,8 @@ export const monitors = sqliteTable(
     next_check_at: text("next_check_at"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
+    // 手动排序权重（列表按 sort_order asc, id asc）
+    sort_order: int("sort_order").default(0),
   },
   (table) => ({
     activeNextCheckAtIdx: index("monitors_active_next_check_at_idx").on(
@@ -131,6 +133,40 @@ export const agents = sqliteTable(
     last_seen_at: text("last_seen_at"),
     last_state_changed_at: text("last_state_changed_at"),
     next_offline_at: text("next_offline_at"),
+    // 历史指标分区 ID（1-900），历史行主键 = partitionId * 10^13 + YYMMDDHHmmss
+    history_partition_id: int("history_partition_id").default(0),
+    // 服务端下发给探针的采集/上报间隔（秒），上报响应中按 MD5 协商下发
+    collect_interval: int("collect_interval").default(60),
+    report_interval: int("report_interval").default(300),
+    // 上报来源地区（Cloudflare request.cf.country，ISO 3166-1 两位码）
+    region: text("region"),
+    // 上报来源地理位置（Cloudflare request.cf.latitude/longitude/city/region，
+    // 城市级精度，仅管理端使用；公开状态页白名单绝不输出这些字段）
+    geo_latitude: real("geo_latitude"),
+    geo_longitude: real("geo_longitude"),
+    geo_city: text("geo_city"),
+    geo_region_name: text("geo_region_name"),
+    // 主机启动时间（Unix 秒，探针上报的稳定元数据）
+    boot_time: int("boot_time"),
+    // 账单信息：价格/币种/计费周期（monthly/quarterly/yearly/once）/到期日（YYYY-MM-DD）/自动续费
+    price: real("price"),
+    currency: text("currency").default("USD"),
+    billing_cycle: text("billing_cycle"),
+    expire_date: text("expire_date"),
+    auto_renewal: int("auto_renewal").default(0),
+    // 公开状态页隐藏开关（1=即使被勾选进状态页也不对外展示）
+    is_hidden: int("is_hidden").default(0),
+    // 流量管理：月流量上限（GB，空=不限）/ 重置日（1-28，UTC）/ 计费方式（sum|rx|tx）
+    traffic_limit_gb: real("traffic_limit_gb"),
+    traffic_reset_day: int("traffic_reset_day").default(1),
+    traffic_calc_type: text("traffic_calc_type").default("sum"),
+    // 服务端触发探针自升级开关（协议 v3 起在上报响应中附加 update=1）
+    auto_update: int("auto_update").default(0),
+    // 分组名（空=归入默认「客户端监控」段）与标签（逗号分隔）
+    group_name: text("group_name"),
+    tags: text("tags"),
+    // 手动排序权重（列表按 sort_order asc, id asc）
+    sort_order: int("sort_order").default(0),
   },
   (table) => ({
     createdByCreatedAtIdx: index("agents_created_by_created_at_idx").on(
@@ -161,7 +197,25 @@ export const agentLatestMetrics = sqliteTable(
     cpu_usage: real("cpu_usage"),
     memory_usage_rate: real("memory_usage_rate"),
     disk_usage_rate: real("disk_usage_rate"),
+    swap_total: int("swap_total"),
+    swap_used: int("swap_used"),
+    process_count: int("process_count"),
+    tcp_connections: int("tcp_connections"),
+    udp_connections: int("udp_connections"),
+    ping_json: text("ping_json"),
+    ipv4_reachable: int("ipv4_reachable"),
+    ipv6_reachable: int("ipv6_reachable"),
     updated_at: text("updated_at").notNull(),
+    // 服务端计算的实时网速（bytes/s，无法计算时为空）
+    network_rx_speed: real("network_rx_speed"),
+    network_tx_speed: real("network_tx_speed"),
+    // 月流量累计状态（字节；last_total_* 为上次上报的累计计数器基准）
+    month_rx: int("month_rx").default(0),
+    month_tx: int("month_tx").default(0),
+    last_total_rx: int("last_total_rx"),
+    last_total_tx: int("last_total_tx"),
+    // 当前流量周期起点（UTC，YYYY-MM-DD）
+    month_reset_at: text("month_reset_at"),
   },
   (table) => ({
     reportedAtIdx: index("agent_latest_metrics_reported_at_idx").on(
@@ -200,6 +254,41 @@ export const agentMetrics24h = sqliteTable(
     ),
   })
 );
+
+// 客户端历史指标表（整型分区主键：partitionId * 10^13 + YYMMDDHHmmss）
+// 注意：该表不建任何二级索引，查询全部走主键 BETWEEN 范围扫描；
+// 每周轮换出的 agent_metrics_history_old 表由运行时裸 SQL 管理，不进 drizzle schema。
+// ⚠️ 本表是列清单的单一事实源：轮换建表 DDL 由此运行时生成（jobs/rotation-task.ts），
+// 但 repositories/agent.ts 的 insertAgentMetricsHistory 插入映射与 queryHistoryRows
+// 聚合 SELECT 仍为手写，增删列时必须同步更新那两处。
+export const agentMetricsHistory = sqliteTable("agent_metrics_history", {
+  id: int("id").primaryKey(),
+  agent_id: int("agent_id").notNull(),
+  timestamp: text("timestamp"),
+  cpu_usage: real("cpu_usage"),
+  cpu_cores: int("cpu_cores"),
+  cpu_model: text("cpu_model"),
+  memory_total: int("memory_total"),
+  memory_used: int("memory_used"),
+  memory_free: int("memory_free"),
+  memory_usage_rate: real("memory_usage_rate"),
+  load_1: real("load_1"),
+  load_5: real("load_5"),
+  load_15: real("load_15"),
+  disk_metrics: text("disk_metrics"),
+  network_metrics: text("network_metrics"),
+  swap_total: int("swap_total"),
+  swap_used: int("swap_used"),
+  process_count: int("process_count"),
+  tcp_connections: int("tcp_connections"),
+  udp_connections: int("udp_connections"),
+  ping_json: text("ping_json"),
+  ipv4_reachable: int("ipv4_reachable"),
+  ipv6_reachable: int("ipv6_reachable"),
+  // 服务端计算的实时网速（bytes/s，无法计算时为空）
+  network_rx_speed: real("network_rx_speed"),
+  network_tx_speed: real("network_tx_speed"),
+});
 
 // 客户端聚合指标表
 export const agentMetricRollups = sqliteTable(

@@ -70,12 +70,13 @@ func initConfig() {
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("XUGOU")
 
-	// 如果找到配置文件，则读取它
+	// 如果找到配置文件，则读取它。
+	// 诊断信息走 stderr，保证 `version --short` 等机器可读输出的 stdout 干净。
 	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("使用配置文件:", viper.ConfigFileUsed())
+		fmt.Fprintln(os.Stderr, "使用配置文件:", viper.ConfigFileUsed())
 	} else {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			fmt.Println("警告: 配置文件读取错误:", err)
+			fmt.Fprintln(os.Stderr, "警告: 配置文件读取错误:", err)
 		}
 	}
 }

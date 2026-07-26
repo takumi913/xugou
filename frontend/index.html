@@ -9,6 +9,26 @@
     <!-- 移除了 manifest 链接，插件会自动注入 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>XUGOU - 轻量化监控平台</title>
+    <!-- 首帧防闪烁：在 React 挂载前按主题偏好挂 .light 类（逻辑与 ThemeProvider 保持一致） -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme_preference");
+          var preference =
+            stored === "dark" || stored === "light" || stored === "auto"
+              ? stored
+              : "auto";
+          var light =
+            preference === "light" ||
+            (preference === "auto" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: light)").matches);
+          if (light) document.documentElement.classList.add("light");
+        } catch (e) {
+          /* localStorage 不可用时保持默认深色 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

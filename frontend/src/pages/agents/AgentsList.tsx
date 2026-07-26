@@ -1,9 +1,8 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
   Flex,
-  Heading,
   Text,
   IconButton,
   Grid,
@@ -36,23 +35,24 @@ import {
   LayoutIcon,
   ViewGridIcon,
   TrashIcon,
+  DownloadIcon,
+  UploadIcon,
 } from "@radix-ui/react-icons";
+import { toast } from "sonner";
 import {
   getAllAgentsWithLatestMetricsWithSignal,
   deleteAgent,
+  updateAgentsOrder,
+  exportAgents,
+  importAgents,
 } from "../../api/agents";
 import AgentStatusBar from "../../components/AgentStatusBar";
+import PageLoading from "../../components/PageLoading";
 import { useTranslation } from "react-i18next";
 import { AgentWithLatestMetrics } from "../../types";
 import { usePolling } from "../../hooks/usePolling";
-
-// 定义客户端状态颜色映射
-const statusColors: Record<string, "red" | "green" | "yellow" | "gray"> = {
-  active: "green",
-  inactive: "red",
-  connecting: "yellow",
-  unknown: "gray",
-};
+import { agentStatusColors } from "../../utils/statusColors";
+import { downloadJson, readJsonArrayFile } from "../../utils/importExport";
 
 const AgentsList = () => {
   const navigate = useNavigate();
@@ -62,6 +62,10 @@ const AgentsList = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<"table" | "card">("card"); // 默认使用卡片视图
+  // 拖拽排序状态（仅卡片视图启用）
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const { t } = useTranslation();
 
   // 获取客户端数据
@@ -99,6 +103,62 @@ const AgentsList = () => {
     fetchAgents();
   };
 
+  // 拖拽落点：本地乐观重排 → 调 order 接口，失败回滚并 toast
+  const handleDrop = async (targetId: number) => {
+    const sourceId = draggingId;
+    setDraggingId(null);
+    setDragOverId(null);
+    if (sourceId === null || sourceId === targetId) return;
+
+    const fromIndex = agents.findIndex((agent) => agent.id === sourceId);
+    const toIndex = agents.findIndex((agent) => agent.id === targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+
+    const previous = agents;
+    const next = [...agents];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setAgents(next);
+
+    const response = await updateAgentsOrder(next.map((agent) => agent.id));
+    if (!response.success) {
+      setAgents(previous);
+      toast.error(t("common.orderSaveError"));
+    }
+  };
+
+  // 导出为 JSON 文件下载
+  const handleExport = async () => {
+    try {
+      const data = await exportAgents();
+      downloadJson(data, "xugou-agents.json");
+    } catch (err) {
+      console.error("导出客户端失败:", err);
+      toast.error(t("common.exportError"));
+    }
+  };
+
+  // 导入：读取文件 → POST → toast 显示 {created, skipped}
+  const handleImportFile = async (file: File) => {
+    const items = await readJsonArrayFile(file);
+    if (!items) {
+      toast.error(t("common.importInvalidFile"));
+      return;
+    }
+    const response = await importAgents(items);
+    if (response.success) {
+      toast.success(
+        t("common.importResult", {
+          created: response.created ?? 0,
+          skipped: response.skipped ?? 0,
+        })
+      );
+      fetchAgents();
+    } else {
+      toast.error(response.message || t("common.importError"));
+    }
+  };
+
   // 打开删除确认对话框
   const handleDeleteClick = (agentId: number) => {
     setSelectedAgentId(agentId);
@@ -129,12 +189,42 @@ const AgentsList = () => {
     }
   };
 
-  // 展示卡片视图
+  // 展示卡片视图（原生 HTML5 拖拽排序）
   const renderCardView = () => {
     return (
       <Grid columns={{ initial: "1" }} gap="4">
         {agents.map((agent) => (
-          <Box key={agent.id} className="relative">
+          <Box
+            key={agent.id}
+            className={`relative drag-item${
+              draggingId === agent.id ? " dragging" : ""
+            }${
+              dragOverId === agent.id && draggingId !== agent.id
+                ? " drag-over"
+                : ""
+            }`}
+            draggable
+            onDragStart={(e: DragEvent<HTMLDivElement>) => {
+              setDraggingId(agent.id);
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDragEnd={() => {
+              setDraggingId(null);
+              setDragOverId(null);
+            }}
+            onDragOver={(e: DragEvent<HTMLDivElement>) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (dragOverId !== agent.id) setDragOverId(agent.id);
+            }}
+            onDragLeave={() => {
+              if (dragOverId === agent.id) setDragOverId(null);
+            }}
+            onDrop={(e: DragEvent<HTMLDivElement>) => {
+              e.preventDefault();
+              handleDrop(agent.id);
+            }}
+          >
             <AgentStatusBar latestMetric={agent.metrics} agent={agent} />
             <Flex gap="2" className="absolute top-4 right-4">
               <IconButton
@@ -212,7 +302,7 @@ const AgentsList = () => {
                 </Text>
               </TableCell>
               <TableCell>
-                <Badge color={statusColors[agent.status || "unknown"]}>
+                <Badge color={agentStatusColors[agent.status || "unknown"] ?? "gray"}>
                   {agent.status === "active"
                     ? t("agent.status.online")
                     : agent.status === "connecting"
@@ -258,13 +348,7 @@ const AgentsList = () => {
 
   // 加载中显示
   if (loading) {
-    return (
-      <Box>
-        <Flex justify="center" align="center" p="4">
-          <Text>{t("common.loading")}</Text>
-        </Flex>
-      </Box>
-    );
+    return <PageLoading />;
   }
 
   // 错误显示
@@ -286,7 +370,7 @@ const AgentsList = () => {
   return (
     <Container size="4">
       <Flex justify="between" align="start" direction={{ initial: "column", sm: "row" }}>
-        <Heading size="6">{t("agents.pageTitle")}</Heading>
+        <h1 className="prompt-title">{t("agents.pageTitle")}</h1>
         <Flex className="mt-4 space-x-2">
           <Tabs defaultValue="card">
             <TabsList>
@@ -314,6 +398,28 @@ const AgentsList = () => {
             <ReloadIcon />
             {t("common.refresh")}
           </Button>
+          <Button variant="secondary" onClick={handleExport}>
+            <DownloadIcon />
+            {t("common.export")}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => importInputRef.current?.click()}
+          >
+            <UploadIcon />
+            {t("common.import")}
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) handleImportFile(file);
+            }}
+          />
           <Button
             variant="secondary"
             onClick={() => navigate("/agents/create")}
@@ -327,14 +433,8 @@ const AgentsList = () => {
       <Box className="my-4 space-x-2">
         {agents.length === 0 ? (
           <Card>
-            <Flex
-              direction="column"
-              align="center"
-              justify="center"
-              p="6"
-              gap="3"
-            >
-              <Text>{t("agents.noAgents")}</Text>
+            <Flex direction="column" align="center" justify="center" gap="3" pb="6">
+              <div className="empty-state">{t("agents.noAgents")}</div>
               <Button onClick={() => navigate("/agents/create")}>
                 <PlusIcon />
                 {t("agents.create")}

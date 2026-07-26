@@ -42,6 +42,7 @@ import {
   createNotificationChannel,
   updateNotificationChannel,
   deleteNotificationChannel,
+  testNotificationChannel,
   createNotificationTemplate,
   updateNotificationTemplate,
   deleteNotificationTemplate,
@@ -52,6 +53,50 @@ import type {
   NotificationTemplate as ApiNotificationTemplate,
 } from "../../types/notification";
 import ChannelSelector from "../../components/ChannelSelector";
+
+// 渠道表单 config 的空值（扁平结构，按渠道类型取用对应字段）
+const emptyChannelConfig = {
+  botToken: "",
+  chatId: "",
+  apiKey: "",
+  from: "",
+  to: "",
+  webhookUrl: "",
+  webhook_url: "",
+  secret: "",
+  server_url: "",
+  device_key: "",
+  sound: "",
+  group: "",
+  send_key: "",
+  app_token: "",
+  uids: "",
+  topic_ids: "",
+  priority: "",
+  // OneBot（QQ）
+  api_url: "",
+  access_token: "",
+  message_type: "private",
+  target_id: "",
+};
+
+const emptyChannelFormErrors = {
+  name: "",
+  botToken: "",
+  chatId: "",
+  apiKey: "",
+  from: "",
+  to: "",
+  webhookUrl: "",
+  webhook_url: "",
+  server_url: "",
+  device_key: "",
+  send_key: "",
+  app_token: "",
+  wxpusherTarget: "",
+  api_url: "",
+  target_id: "",
+};
 
 const NotificationsConfig = () => {
   // 状态管理
@@ -77,25 +122,15 @@ const NotificationsConfig = () => {
   const [channelForm, setChannelForm] = useState({
     name: "",
     type: "telegram",
-    config: {
-      botToken: "",
-      chatId: "",
-      apiKey: "",
-      from: "",
-      to: "",
-      webhookUrl: "",
-    },
+    config: { ...emptyChannelConfig },
     enabled: true,
   });
   const [channelFormErrors, setChannelFormErrors] = useState({
-    name: "",
-    botToken: "",
-    chatId: "",
-    apiKey: "",
-    from: "",
-    to: "",
-    webhookUrl: "",
+    ...emptyChannelFormErrors,
   });
+  const [testingChannelId, setTestingChannelId] = useState<number | null>(
+    null
+  );
 
   // 模板管理状态
   const [isTemplateDialogOpen, setIsTemplateDialogOpen] = useState(false);
@@ -325,25 +360,10 @@ const NotificationsConfig = () => {
     setChannelForm({
       name: "",
       type: "telegram",
-      config: {
-        botToken: "",
-        chatId: "",
-        apiKey: "",
-        from: "",
-        to: "",
-        webhookUrl: "",
-      },
+      config: { ...emptyChannelConfig },
       enabled: true,
     });
-    setChannelFormErrors({
-      name: "",
-      botToken: "",
-      chatId: "",
-      apiKey: "",
-      from: "",
-      to: "",
-      webhookUrl: "",
-    });
+    setChannelFormErrors({ ...emptyChannelFormErrors });
     setIsAddChannelOpen(true);
   };
 
@@ -373,7 +393,11 @@ const NotificationsConfig = () => {
         : {};
 
     const readString = (value: unknown) =>
-      typeof value === "string" ? value : "";
+      typeof value === "string"
+        ? value
+        : typeof value === "number"
+          ? String(value)
+          : "";
 
     setChannelForm({
       name: channel.name,
@@ -385,18 +409,26 @@ const NotificationsConfig = () => {
         from: readString(normalizedConfig.from),
         to: readString(normalizedConfig.to),
         webhookUrl: readString(normalizedConfig.webhookUrl),
+        webhook_url: readString(normalizedConfig.webhook_url),
+        secret: readString(normalizedConfig.secret),
+        server_url: readString(normalizedConfig.server_url),
+        device_key: readString(normalizedConfig.device_key),
+        sound: readString(normalizedConfig.sound),
+        group: readString(normalizedConfig.group),
+        send_key: readString(normalizedConfig.send_key),
+        app_token: readString(normalizedConfig.app_token),
+        uids: readString(normalizedConfig.uids),
+        topic_ids: readString(normalizedConfig.topic_ids),
+        priority: readString(normalizedConfig.priority),
+        api_url: readString(normalizedConfig.api_url),
+        access_token: readString(normalizedConfig.access_token),
+        message_type:
+          normalizedConfig.message_type === "group" ? "group" : "private",
+        target_id: readString(normalizedConfig.target_id),
       },
       enabled: channel.enabled,
     });
-    setChannelFormErrors({
-      name: "",
-      botToken: "",
-      chatId: "",
-      apiKey: "",
-      from: "",
-      to: "",
-      webhookUrl: "",
-    });
+    setChannelFormErrors({ ...emptyChannelFormErrors });
     setIsEditChannelOpen(true);
   };
 
@@ -414,15 +446,7 @@ const NotificationsConfig = () => {
 
   // 验证渠道表单
   const validateChannelForm = (): boolean => {
-    const errors = {
-      name: "",
-      botToken: "",
-      chatId: "",
-      apiKey: "",
-      from: "",
-      to: "",
-      webhookUrl: "",
-    };
+    const errors = { ...emptyChannelFormErrors };
 
     let isValid = true;
 
@@ -461,6 +485,77 @@ const NotificationsConfig = () => {
       if (!channelForm.config.webhookUrl.trim()) {
         errors.webhookUrl = t(
           "notifications.channels.errors.webhookUrlRequired"
+        );
+        isValid = false;
+      }
+    }
+
+    if (channelForm.type === "dingtalk") {
+      if (!channelForm.config.webhook_url.trim()) {
+        errors.webhook_url = t(
+          "notifications.channels.errors.webhookUrlRequired"
+        );
+        isValid = false;
+      }
+    }
+
+    if (channelForm.type === "bark") {
+      if (!channelForm.config.device_key.trim()) {
+        errors.device_key = t(
+          "notifications.channels.errors.deviceKeyRequired"
+        );
+        isValid = false;
+      }
+    }
+
+    if (channelForm.type === "serverchan") {
+      if (!channelForm.config.send_key.trim()) {
+        errors.send_key = t("notifications.channels.errors.sendKeyRequired");
+        isValid = false;
+      }
+    }
+
+    if (channelForm.type === "wxpusher") {
+      if (!channelForm.config.app_token.trim()) {
+        errors.app_token = t(
+          "notifications.channels.errors.appTokenRequired"
+        );
+        isValid = false;
+      }
+      if (
+        !channelForm.config.uids.trim() &&
+        !channelForm.config.topic_ids.trim()
+      ) {
+        errors.wxpusherTarget = t(
+          "notifications.channels.errors.uidsOrTopicIdsRequired"
+        );
+        isValid = false;
+      }
+    }
+
+    if (channelForm.type === "gotify") {
+      if (!channelForm.config.server_url.trim()) {
+        errors.server_url = t(
+          "notifications.channels.errors.serverUrlRequired"
+        );
+        isValid = false;
+      }
+      if (!channelForm.config.app_token.trim()) {
+        errors.app_token = t(
+          "notifications.channels.errors.appTokenRequired"
+        );
+        isValid = false;
+      }
+    }
+
+    if (channelForm.type === "onebot") {
+      if (!channelForm.config.api_url.trim()) {
+        errors.api_url = t("notifications.channels.errors.apiUrlRequired");
+        isValid = false;
+      }
+      if (!/^\d+$/.test(channelForm.config.target_id.trim())) {
+        errors.target_id = t(
+          "notifications.channels.errors.targetIdRequired"
         );
         isValid = false;
       }
@@ -509,6 +604,32 @@ const NotificationsConfig = () => {
       toast.error(t("notifications.channels.saveError"));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // 发送测试通知
+  const handleTestChannelClick = async (channelId: number) => {
+    if (channelId === undefined || channelId === null) {
+      console.error("无效的渠道ID:", channelId);
+      toast.error(t("notifications.channels.invalidId"));
+      return;
+    }
+
+    setTestingChannelId(channelId);
+    try {
+      const response = await testNotificationChannel(channelId);
+      if (response.success) {
+        toast.success(t("notifications.channels.testSuccess"));
+      } else {
+        toast.error(
+          response.message || t("notifications.channels.testError")
+        );
+      }
+    } catch (err) {
+      console.error("发送测试通知失败", err);
+      toast.error(t("notifications.channels.testError"));
+    } finally {
+      setTestingChannelId(null);
     }
   };
 
@@ -635,7 +756,7 @@ const NotificationsConfig = () => {
 
     return (
       <Flex direction="column" gap="2">
-        <Text className="text-sm text-gray-600">
+        <Text className="text-sm text-[var(--text-secondary)]">
           {t("notifications.channels.tabDescription")}
         </Text>
 
@@ -654,7 +775,7 @@ const NotificationsConfig = () => {
 
           <Box>
             <Flex py="2" direction="column" gap="2">
-              <Text className="text-gray-600 mb-3">
+              <Text className="text-[var(--text-secondary)] mb-3">
                 {t("notifications.channels.description")}
               </Text>
 
@@ -665,17 +786,27 @@ const NotificationsConfig = () => {
               ) : (
                 <Flex direction="column" gap="2">
                   {channels.map((channel) => (
-                    <Card key={channel.id} className="px-2">
+                    <Card key={channel.id} className="terminal-card px-2">
                       <Flex className="justify-between items-center">
                         <Flex direction="column" gap="1" className="grow">
                           <Flex gap="2" align="center" className="break-all">
                             <Text className="text-lg">{channel.name}</Text>
                           </Flex>
-                          <Text className="text-xs text-gray-600">
+                          <Text className="text-xs text-[var(--text-secondary)]">
                             {t(`notifications.channels.type.${channel.type}`)}
                           </Text>
                         </Flex>
                         <Flex gap="2">
+                          <Button
+                            variant="secondary"
+                            className="ml-auto"
+                            onClick={() => handleTestChannelClick(channel.id)}
+                            disabled={testingChannelId === channel.id}
+                          >
+                            {testingChannelId === channel.id
+                              ? t("notifications.channels.testing")
+                              : t("notifications.channels.test")}
+                          </Button>
                           <Button
                             variant="secondary"
                             className="ml-auto"
@@ -734,7 +865,7 @@ const NotificationsConfig = () => {
             ) : (
               <Flex direction="column" gap="3">
                 {templates.map((template) => (
-                  <Card key={template.id} className="px-4">
+                  <Card key={template.id} className="terminal-card px-4">
                     <Flex direction="column" gap="3">
                       <Flex justify="between" align="center">
                         <Flex gap="2" align="center">
@@ -797,7 +928,7 @@ const NotificationsConfig = () => {
           <Text className="text-lg">
             {t("notifications.settings.monitors")}
           </Text>
-          <Card className="mt-2">
+          <Card className="terminal-card mt-2">
             <Box p="1">
               <Flex direction="column" gap="1" className="px-2">
                 <Flex justify="between" align="center">
@@ -805,7 +936,7 @@ const NotificationsConfig = () => {
                     <Text className="text-base">
                       {t("notifications.settings.monitors")}
                     </Text>
-                    <Text className="text-sm text-gray-600">
+                    <Text className="text-sm text-[var(--text-secondary)]">
                       {t("notifications.settings.monitors.description")}
                     </Text>
                   </Box>
@@ -872,7 +1003,7 @@ const NotificationsConfig = () => {
           <Text className="text-lg mb-2">
             {t("notifications.settings.agents")}
           </Text>
-          <Card className="mt-2">
+          <Card className="terminal-card mt-2">
             <Box p="1">
               <Flex direction="column" gap="4" className="px-2">
                 <Flex justify="between" align="center">
@@ -880,7 +1011,7 @@ const NotificationsConfig = () => {
                     <Text className="text-base">
                       {t("notifications.settings.agents")}
                     </Text>
-                    <Text className="text-sm text-gray-600">
+                    <Text className="text-sm text-[var(--text-secondary)]">
                       {t("notifications.settings.agents.description")}
                     </Text>
                   </Box>
@@ -1084,7 +1215,7 @@ const NotificationsConfig = () => {
           };
 
           return (
-            <Card key={monitorId} className="px-4">
+            <Card key={monitorId} className="terminal-card px-4">
               <Flex direction="column" gap="3">
                 <Flex justify="between" align="center">
                   <Flex direction="column">
@@ -1206,7 +1337,7 @@ const NotificationsConfig = () => {
           };
 
           return (
-            <Card key={agentId} className="px-4">
+            <Card key={agentId} className="terminal-card px-4">
               <Flex direction="column" gap="3">
                 <Flex justify="between" align="center">
                   <Flex direction="column">
@@ -1430,6 +1561,39 @@ const NotificationsConfig = () => {
   };
 
   // 渲染渠道对话框
+  // 渲染单个渠道 config 输入框（新渠道类型共用）
+  const renderChannelConfigInput = (
+    key: keyof typeof emptyChannelConfig,
+    label: string,
+    placeholder: string,
+    errorKey?: keyof typeof emptyChannelFormErrors
+  ) => (
+    <Box>
+      <Text as="div" size="2" mb="2" weight="bold">
+        {label}
+      </Text>
+      <Input
+        className="h-10"
+        placeholder={placeholder}
+        value={channelForm.config[key]}
+        onChange={(e) =>
+          setChannelForm({
+            ...channelForm,
+            config: {
+              ...channelForm.config,
+              [key]: e.target.value,
+            },
+          })
+        }
+      />
+      {errorKey && channelFormErrors[errorKey] && (
+        <Text size="1" color="red">
+          {channelFormErrors[errorKey]}
+        </Text>
+      )}
+    </Box>
+  );
+
   const renderChannelDialog = () => {
     const isOpen = isAddChannelOpen || isEditChannelOpen;
     const title = isEditChannelOpen
@@ -1446,9 +1610,9 @@ const NotificationsConfig = () => {
           }
         }}
       >
-        <DialogContent style={{ maxWidth: 500 }}>
+        <DialogContent className="sm:max-w-[500px]">
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription className="text-sm text-gray-500 mb-4">
+          <DialogDescription className="text-sm text-[var(--text-secondary)] mb-4">
             {t("notifications.channels.dialogDescription")}
           </DialogDescription>
           <Flex direction="column" gap="5">
@@ -1497,20 +1661,35 @@ const NotificationsConfig = () => {
                   <SelectItem value="wecom">
                     {t("notifications.channels.type.wecom")}
                   </SelectItem>
+                  <SelectItem value="dingtalk">
+                    {t("notifications.channels.type.dingtalk")}
+                  </SelectItem>
+                  <SelectItem value="bark">
+                    {t("notifications.channels.type.bark")}
+                  </SelectItem>
+                  <SelectItem value="serverchan">
+                    {t("notifications.channels.type.serverchan")}
+                  </SelectItem>
+                  <SelectItem value="wxpusher">
+                    {t("notifications.channels.type.wxpusher")}
+                  </SelectItem>
+                  <SelectItem value="gotify">
+                    {t("notifications.channels.type.gotify")}
+                  </SelectItem>
+                  <SelectItem value="onebot">
+                    {t("notifications.channels.type.onebot")}
+                  </SelectItem>
                   <SelectItem value="webhook" disabled>
                     {t("notifications.channels.type.webhook")} (Coming Soon)
                   </SelectItem>
                   <SelectItem value="slack" disabled>
                     {t("notifications.channels.type.slack")} (Coming Soon)
                   </SelectItem>
-                  <SelectItem value="dingtalk" disabled>
-                    {t("notifications.channels.type.dingtalk")} (Coming Soon)
-                  </SelectItem>
                 </SelectContent>
               </Select>
             </Box>
 
-            <Card className="p-4 bg-gray-50">
+            <Card className="terminal-card p-4">
               <Flex direction="column" gap="4">
                 {channelForm.type === "telegram" && (
                   <>
@@ -1668,6 +1847,149 @@ const NotificationsConfig = () => {
                       </Text>
                     )}
                   </Box>
+                )}
+                {channelForm.type === "dingtalk" && (
+                  <>
+                    {renderChannelConfigInput(
+                      "webhook_url",
+                      t("notifications.channels.webhookUrl"),
+                      "https://oapi.dingtalk.com/robot/send?access_token=...",
+                      "webhook_url"
+                    )}
+                    {renderChannelConfigInput(
+                      "secret",
+                      t("notifications.channels.secret"),
+                      "SEC..."
+                    )}
+                  </>
+                )}
+                {channelForm.type === "bark" && (
+                  <>
+                    {renderChannelConfigInput(
+                      "server_url",
+                      t("notifications.channels.serverUrl"),
+                      "https://api.day.app"
+                    )}
+                    {renderChannelConfigInput(
+                      "device_key",
+                      t("notifications.channels.deviceKey"),
+                      "abcDEF123...",
+                      "device_key"
+                    )}
+                    {renderChannelConfigInput(
+                      "sound",
+                      t("notifications.channels.sound"),
+                      "alarm"
+                    )}
+                    {renderChannelConfigInput(
+                      "group",
+                      t("notifications.channels.group"),
+                      "XUGOU"
+                    )}
+                  </>
+                )}
+                {channelForm.type === "serverchan" &&
+                  renderChannelConfigInput(
+                    "send_key",
+                    t("notifications.channels.sendKey"),
+                    "SCT...",
+                    "send_key"
+                  )}
+                {channelForm.type === "wxpusher" && (
+                  <>
+                    {renderChannelConfigInput(
+                      "app_token",
+                      t("notifications.channels.appToken"),
+                      "AT_...",
+                      "app_token"
+                    )}
+                    {renderChannelConfigInput(
+                      "uids",
+                      t("notifications.channels.uids"),
+                      "UID_xxx,UID_yyy"
+                    )}
+                    {renderChannelConfigInput(
+                      "topic_ids",
+                      t("notifications.channels.topicIds"),
+                      "123,456"
+                    )}
+                    {channelFormErrors.wxpusherTarget && (
+                      <Text size="1" color="red">
+                        {channelFormErrors.wxpusherTarget}
+                      </Text>
+                    )}
+                  </>
+                )}
+                {channelForm.type === "gotify" && (
+                  <>
+                    {renderChannelConfigInput(
+                      "server_url",
+                      t("notifications.channels.serverUrl"),
+                      "https://gotify.example.com",
+                      "server_url"
+                    )}
+                    {renderChannelConfigInput(
+                      "app_token",
+                      t("notifications.channels.appToken"),
+                      "A....",
+                      "app_token"
+                    )}
+                    {renderChannelConfigInput(
+                      "priority",
+                      t("notifications.channels.priority"),
+                      "5"
+                    )}
+                  </>
+                )}
+                {channelForm.type === "onebot" && (
+                  <>
+                    {renderChannelConfigInput(
+                      "api_url",
+                      t("notifications.channels.onebotApiUrl"),
+                      "http://127.0.0.1:3000",
+                      "api_url"
+                    )}
+                    {renderChannelConfigInput(
+                      "access_token",
+                      t("notifications.channels.onebotAccessToken"),
+                      "token..."
+                    )}
+                    <Box>
+                      <Text as="div" size="2" mb="2" weight="bold">
+                        {t("notifications.channels.onebotMessageType")}
+                      </Text>
+                      <Select
+                        value={channelForm.config.message_type}
+                        onValueChange={(value) =>
+                          setChannelForm({
+                            ...channelForm,
+                            config: {
+                              ...channelForm.config,
+                              message_type: value,
+                            },
+                          })
+                        }
+                      >
+                        <SelectTrigger className="h-10">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="private">
+                            {t("notifications.channels.onebotPrivate")}
+                          </SelectItem>
+                          <SelectItem value="group">
+                            {t("notifications.channels.onebotGroup")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Box>
+                    {renderChannelConfigInput(
+                      "target_id",
+                      t("notifications.channels.onebotTargetId"),
+                      "10000",
+                      "target_id"
+                    )}
+                  </>
                 )}
               </Flex>
             </Card>
@@ -1837,9 +2159,7 @@ const NotificationsConfig = () => {
           <Flex className="flex justify-between items-center detail-header">
             <Flex align="center" gap="2">
               <BellIcon width="20" height="20" />
-              <Heading size="5" weight="medium">
-                {t("notifications.title")}
-              </Heading>
+              <h1 className="prompt-title">{t("notifications.title")}</h1>
             </Flex>
             <Button
               className="ml-auto"
@@ -1858,7 +2178,7 @@ const NotificationsConfig = () => {
         {loading ? (
           <Text>{t("common.loading")}...</Text>
         ) : (
-          <Card className="mb-4">
+          <Card className="terminal-card mb-4">
             <Tabs defaultValue="global">
               <TabsList className="overflow-auto">
                 <TabsTrigger value="global">

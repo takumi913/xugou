@@ -1,6 +1,15 @@
 // 导出所有定时任务
 import monitorTask from "./monitor-task";
 import agentTask from "./agent-task";
+import {
+  isRotationWindow,
+  shouldRunWeeklyRotation,
+  weeklyRotation,
+} from "./rotation-task";
+import {
+  checkExpiringAgents,
+  shouldRunDailyExpiryCheck,
+} from "./expiry-task";
 import { db } from "../config";
 import * as schema from "../db/schema";
 import { and, lt, sql } from "drizzle-orm";
@@ -13,18 +22,31 @@ const DEFAULT_MONITOR_INCIDENT_RETENTION_DAYS = 180;
 // 统一的定时任务处理函数
 export const runScheduledTasks = async (event: any, env: any, ctx: any) => {
   try {
+    const now = new Date();
+
     // 执行监控检查任务
     await monitorTask.scheduled(event, env, ctx);
 
-    // 执行客户端状态检查任务
-    await agentTask.scheduled(event, env, ctx);
+    // 每周日 UTC 00:00 执行历史指标周表轮换（RENAME + DROP 代替按行 DELETE）
+    if (shouldRunWeeklyRotation(now)) {
+      await weeklyRotation();
+    }
+
+    // 执行客户端状态检查任务；轮换保护窗口（周日 0:00-0:05 UTC）内跳过离线检测防误报
+    if (!isRotationWindow(now)) {
+      await agentTask.scheduled(event, env, ctx);
+    }
 
     // 执行清理任务 - 每天执行一次
-    const now = new Date();
     const hour = now.getUTCHours();
     const minute = now.getUTCMinutes();
     if (hour === 0 && minute === 30) {
       await cleanupOldRecords(env);
+    }
+
+    // 客户端账单到期检测/自动续费 - 每天 UTC 12:00 执行一次
+    if (shouldRunDailyExpiryCheck(now)) {
+      await checkExpiringAgents();
     }
   } catch (error) {
     console.error("定时任务执行出错:", error);

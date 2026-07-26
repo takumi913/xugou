@@ -520,3 +520,100 @@ export async function getAllMonitorDailyStats(userId: number) {
     status: 200,
   };
 }
+
+// ---- C3：手动排序 / 导入导出 ----
+
+/**
+ * 按前端给定的 id 顺序批量写 sort_order。
+ * 全部 id 必须归属当前用户（admin 可跨用户），任一无权访问则整体拒绝。
+ */
+export async function updateMonitorsOrder(
+  ids: number[],
+  userId: number,
+  userRole?: string
+) {
+  try {
+    const uniqueIds = Array.from(new Set(ids));
+    const rows =
+      userRole === "admin"
+        ? await repositories.getMonitorsByIdsAnyOwner(uniqueIds)
+        : await repositories.getMonitorsByIds(uniqueIds, userId);
+
+    if (rows.length !== uniqueIds.length) {
+      return { success: false, message: "监控不存在或无权访问", status: 400 };
+    }
+
+    await repositories.updateMonitorsOrder(uniqueIds);
+    return { success: true, message: "排序已更新", status: 200 };
+  } catch (error) {
+    console.error("更新监控排序错误:", error);
+    return { success: false, message: "更新监控排序失败", status: 500 };
+  }
+}
+
+/**
+ * 导出当前用户的全部监控配置（不含运行时状态与历史数据）。
+ */
+export async function exportMonitors(userId: number) {
+  const monitors = await repositories.getAllMonitors(userId);
+  return (monitors || []).map((monitor: models.Monitor) => ({
+    name: monitor.name,
+    url: monitor.url,
+    method: monitor.method,
+    interval: monitor.interval,
+    timeout: monitor.timeout,
+    expected_status: monitor.expected_status,
+    headers: monitor.headers ?? {},
+    body: monitor.body ?? "",
+    active: Boolean(monitor.active),
+    sort_order: (monitor as { sort_order?: number | null }).sort_order ?? 0,
+  }));
+}
+
+/**
+ * 导入监控：按 name 去重（已存在则跳过，不覆盖）。返回 {created, skipped}。
+ */
+export async function importMonitors(
+  items: Array<Record<string, unknown>>,
+  userId: number,
+  env?: any
+) {
+  const existing = await repositories.getAllMonitors(userId);
+  const existingNames = new Set(
+    (existing || []).map((monitor: models.Monitor) => monitor.name)
+  );
+  let created = 0;
+  let skipped = 0;
+
+  for (const item of items) {
+    const name = String(item.name ?? "");
+    if (existingNames.has(name)) {
+      skipped++;
+      continue;
+    }
+
+    const result = await createMonitor(item, userId, env);
+    if (!result.success) {
+      // 单条创建失败按跳过计（zod 已整体校验，此处仅数据库异常）
+      console.error("导入监控失败:", name, result.message);
+      skipped++;
+      continue;
+    }
+
+    if (
+      typeof item.sort_order === "number" &&
+      Number.isInteger(item.sort_order) &&
+      result.monitor
+    ) {
+      await repositories.setMonitorSortOrder(
+        result.monitor.id,
+        item.sort_order
+      );
+    }
+
+    existingNames.add(name);
+    created++;
+  }
+
+  return { created, skipped };
+}

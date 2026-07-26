@@ -1,7 +1,5 @@
-import { Flex, Heading, Text } from "@/components/ui/theme-shim";
 import { Button } from "@/components/ui";
 import { Link } from "react-router-dom";
-import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { useTranslation } from "react-i18next";
 
 const NotFound = () => {
@@ -9,27 +7,18 @@ const NotFound = () => {
 
   return (
     <div className="page-container">
-      <Flex
-        direction="column"
-        align="center"
-        justify="center"
-        style={{ minHeight: "calc(100vh - 200px)" }}
-        gap="4"
-      >
-        <ExclamationTriangleIcon
-          width="48"
-          height="48"
-          color="var(--amber-9)"
-        />
-        <Heading size="9">404</Heading>
-        <Heading size="6">{t("notFound.title")}</Heading>
-        <Text align="center" style={{ maxWidth: "500px" }}>
+      <div className="flex min-h-[calc(100vh-200px)] flex-col items-center justify-center gap-4 text-center">
+        <p className="text-2xl font-semibold text-[var(--text-primary)]">
+          <span className="text-[var(--accent-yellow)]">[!]</span> 404 -{" "}
+          {t("notFound.title")}
+        </p>
+        <p className="max-w-[500px] text-[var(--text-secondary)]">
           {t("notFound.message")}
-        </Text>
+        </p>
         <Button asChild>
           <Link to="/">{t("notFound.button")}</Link>
         </Button>
-      </Flex>
+      </div>
     </div>
   );
 };

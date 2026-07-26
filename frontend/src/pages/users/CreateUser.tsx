@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text } from "@/components/ui/theme-shim";
+import { Box, Flex, Text } from "@/components/ui/theme-shim";
 import {
   Button,
-  Card,
   Select,
   SelectContent,
   SelectItem,
@@ -66,10 +65,10 @@ const CreateUser = () => {
           <Button variant="secondary" onClick={() => navigate("/users")}>
             <ArrowLeftIcon />
           </Button>
-          <Heading size="6">{t("users.create")}</Heading>
+          <h1 className="prompt-title">{t("users.create")}</h1>
         </Flex>
       </Flex>
-      <Card className="my-4 pr-4">
+      <div className="terminal-card my-4 py-4 pr-4">
         <form onSubmit={handleSubmit}>
           <Box pt="2">
             <Flex direction="column" gap="3" className="ml-4">
@@ -142,7 +141,7 @@ const CreateUser = () => {
             </Flex>
           </Box>
         </form>
-      </Card>
+      </div>
     </Box>
   );
 };

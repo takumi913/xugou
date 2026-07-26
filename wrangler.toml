@@ -22,11 +22,25 @@ PUBLIC_METRICS_CACHE_TTL_SECONDS = "120"
 AGENT_ROLLUP_RETENTION_DAYS = "30"
 MONITOR_ROLLUP_RETENTION_DAYS = "90"
 MONITOR_INCIDENT_RETENTION_DAYS = "180"
+# 最新探针版本号（如 "1.2.0"）。留空则不触发探针自升级；
+# 填写后，开启了「自动升级」的 agent 上报版本低于此值时，
+# 服务端会在配置下发响应中附加 update=1 触发探针自升级。
+LATEST_AGENT_VERSION = ""
 
 [[d1_databases]]
 binding = "DB"
 database_name = "${D1_DATABASE_NAME}" # 使用占位符
 database_id = "${D1_DATABASE_ID}" # 使用占位符
+
+# Durable Objects：实时指标广播中心（WebSocket Hibernation）
+[[durable_objects.bindings]]
+name = "METRICS_BROADCASTER"
+class_name = "MetricsBroadcaster"
+
+# 使用 SQLite-backed DO 以兼容免费计划
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MetricsBroadcaster"]
 
 [assets]
 binding = "ASSETS"

@@ -97,45 +97,21 @@ const ChannelSelector = ({
       <Box
         ref={triggerRef}
         onClick={() => setIsOpen(!isOpen)}
-        style={{
-          borderRadius: "6px",
-          border: "1px solid var(--gray-7)",
-          padding: "8px 12px",
-          cursor: "pointer",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          backgroundColor: "white",
-          width: "100%",
-        }}
+        className="flex w-full cursor-pointer items-center justify-between rounded-[4px] border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
       >
         <Text>{getSelectedText()}</Text>
-        <div
-          style={{
-            borderLeft: "5px solid transparent",
-            borderRight: "5px solid transparent",
-            borderTop: "5px solid var(--gray-11)",
-            marginLeft: "8px",
-          }}
-        ></div>
+        <div className="ml-2 border-x-[5px] border-t-[5px] border-x-transparent border-t-[var(--text-secondary)]"></div>
       </Box>
 
       {isOpen &&
         createPortal(
           <Box
             ref={selectContentRef}
+            className="absolute z-[9999] max-h-[250px] overflow-y-auto rounded-[4px] border border-[var(--border-color)] bg-popover text-popover-foreground shadow-md"
             style={{
-              position: "absolute",
               top: `${position.top}px`,
               left: `${position.left}px`,
               width: `${position.width}px`,
-              backgroundColor: "white",
-              border: "1px solid var(--gray-6)",
-              borderRadius: "6px",
-              boxShadow: "0 4px 16px rgba(0, 0, 0, 0.15)",
-              zIndex: 9999,
-              maxHeight: "250px",
-              overflowY: "auto",
             }}
           >
             {channels.length === 0 ? (
@@ -150,18 +126,7 @@ const ChannelSelector = ({
                   <Box
                     key={channel.id}
                     onClick={() => handleItemClick(channel.id)}
-                    style={{
-                      padding: "8px 12px",
-                      cursor: "pointer",
-                      borderBottom: "1px solid var(--gray-4)",
-                      backgroundColor: "white",
-                    }}
-                    onMouseOver={(e: React.MouseEvent<HTMLDivElement>) => {
-                      e.currentTarget.style.backgroundColor = "var(--gray-3)";
-                    }}
-                    onMouseOut={(e: React.MouseEvent<HTMLDivElement>) => {
-                      e.currentTarget.style.backgroundColor = "white";
-                    }}
+                    className="cursor-pointer border-b border-[var(--border-color)] px-3 py-2 last:border-b-0 hover:bg-[var(--bg-hover)]"
                   >
                     <Flex justify="between" align="center" width="100%">
                       <Flex gap="1" align="center">

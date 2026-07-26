@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text, IconButton } from "@/components/ui/theme-shim";
+import { Box, Flex, Text, IconButton } from "@/components/ui/theme-shim";
 import {
   Button,
-  Card,
   Textarea,
   Select,
   SelectContent,
@@ -144,10 +143,10 @@ const CreateMonitor = () => {
           <Button variant="secondary" onClick={() => navigate("/monitors")}>
             <ArrowLeftIcon />
           </Button>
-          <Heading size="6">{t("monitor.form.title.create")}</Heading>
+          <h1 className="prompt-title">{t("monitor.form.title.create")}</h1>
         </Flex>
       </Flex>
-      <Card className="my-4 pr-4">
+      <div className="terminal-card my-4 py-4 pr-4">
         <form onSubmit={handleSubmit}>
           <Box pt="2">
             <Flex direction="column" gap="2" className="ml-4">
@@ -221,7 +220,10 @@ const CreateMonitor = () => {
                     {t("monitor.form.intervalMin")}
                   </Text>
                   {showQuotaWarning && (
-                    <Text size="1" className="block mt-1 text-amber-600">
+                    <Text
+                      size="1"
+                      className="block mt-1 text-[var(--accent-yellow)]"
+                    >
                       {t("monitor.form.intervalQuotaWarning")}
                     </Text>
                   )}
@@ -354,7 +356,7 @@ const CreateMonitor = () => {
             </Button>
           </Flex>
         </form>
-      </Card>
+      </div>
     </Box>
   );
 };

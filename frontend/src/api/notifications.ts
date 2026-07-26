@@ -1,3 +1,4 @@
+import axios from "axios";
 import api from "./client";
 import type { AxiosResponse } from "axios";
 import type {
@@ -614,6 +615,39 @@ export const deleteNotificationChannel = async (
     return {
       success: false,
       message: "删除通知渠道失败",
+    };
+  }
+};
+
+// 发送测试通知（验证渠道配置是否可用）
+export const testNotificationChannel = async (
+  id: number
+): Promise<{
+  success: boolean;
+  message?: string;
+}> => {
+  try {
+    const response = await api.post<{
+      success: boolean;
+      message?: string;
+    }>(`/api/notifications/channels/${id}/test`);
+
+    return response.data;
+  } catch (error) {
+    console.error("发送测试通知失败:", error);
+    // 尽量透出后端返回的具体失败原因（例如渠道配置错误）
+    if (
+      axios.isAxiosError(error) &&
+      typeof error.response?.data?.message === "string"
+    ) {
+      return {
+        success: false,
+        message: error.response.data.message,
+      };
+    }
+    return {
+      success: false,
+      message: "发送测试通知失败",
     };
   }
 };

@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Flex, Heading, Text } from "@/components/ui/theme-shim";
+import { Box, Flex, Text } from "@/components/ui/theme-shim";
 import {
   Button,
-  Card,
   Select,
   SelectContent,
   SelectItem,
@@ -12,6 +11,7 @@ import {
   Input,
 } from "@/components/ui";
 import { ArrowLeftIcon } from "@radix-ui/react-icons";
+import PageLoading from "../../components/PageLoading";
 import { getUser, updateUser } from "../../api/users";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -83,7 +83,7 @@ const EditUser = () => {
   };
 
   if (loading) {
-    return <Text>{t("common.loading")}</Text>;
+    return <PageLoading />;
   }
 
   return (
@@ -93,12 +93,12 @@ const EditUser = () => {
           <Button variant="secondary" onClick={() => navigate("/users")}>
             <ArrowLeftIcon />
           </Button>
-          <Heading size="6">
+          <h1 className="prompt-title">
             {t("common.edit")} {t("users.title")}
-          </Heading>
+          </h1>
         </Flex>
       </Flex>
-      <Card className="my-4 pr-4">
+      <div className="terminal-card my-4 py-4 pr-4">
         <form onSubmit={handleSubmit}>
           <Box pt="2">
             <Flex direction="column" gap="3" className="ml-4">
@@ -169,7 +169,7 @@ const EditUser = () => {
             </Flex>
           </Box>
         </form>
-      </Card>
+      </div>
     </Box>
   );
 };

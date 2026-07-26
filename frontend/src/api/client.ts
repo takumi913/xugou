@@ -1,6 +1,11 @@
 import axios from "axios";
 import { ENV_API_BASE_URL, ENV_API_TIMEOUT } from "../config";
 
+// 统一的登录态 token 读取（api client / liveSocket / AuthProvider 共用）
+export function getStoredToken(): string | null {
+  return localStorage.getItem("token");
+}
+
 // 创建 axios 实例
 const api = axios.create({
   baseURL: ENV_API_BASE_URL || "", // 从配置中获取API基础URL
@@ -16,7 +21,7 @@ const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     // 从 localStorage 获取 token
-    const token = localStorage.getItem("token");
+    const token = getStoredToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }

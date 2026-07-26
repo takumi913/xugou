@@ -3,7 +3,10 @@ import { JwtPayload } from "../types";
 import { z } from "zod";
 import { Bindings } from "../models/db";
 import * as NotificationService from "../services/NotificationService";
-import { notificationSettingsSchema } from "./schemas";
+import {
+  notificationSettingsSchema,
+  validateNotificationChannelConfig,
+} from "./schemas";
 
 const notifications = new Hono<{ Bindings: Bindings; Variables: { jwtPayload: JwtPayload } }>();
 
@@ -118,11 +121,26 @@ notifications.post("/channels", async (c) => {
 
     const validatedData = schema.parse(body);
 
+    // 按渠道类型校验 config 结构
+    const configValidation = validateNotificationChannelConfig(
+      validatedData.type,
+      validatedData.config
+    );
+    if (!configValidation.success) {
+      return c.json(
+        {
+          success: false,
+          message: configValidation.message || "渠道配置无效",
+        },
+        400
+      );
+    }
+
     // 创建渠道
     const result = await NotificationService.createNotificationChannel({
       name: validatedData.name,
       type: validatedData.type,
-      config: JSON.stringify(validatedData.config),
+      config: JSON.stringify(configValidation.config),
       enabled:
         validatedData.enabled !== undefined ? validatedData.enabled : true,
       created_by: userId,
@@ -191,7 +209,38 @@ notifications.put("/channels/:id", async (c) => {
 
     const validatedData = schema.parse(body);
     if (validatedData.config) {
-        validatedData.config = JSON.stringify(validatedData.config)
+      // 按渠道类型校验 config 结构（type 未随请求提供时取现有渠道类型）
+      let channelType = validatedData.type;
+      if (!channelType) {
+        const existingChannel =
+          await NotificationService.getNotificationChannelById(id, userId);
+        if (!existingChannel) {
+          return c.json(
+            {
+              success: false,
+              message: "通知渠道不存在",
+            },
+            404
+          );
+        }
+        channelType = existingChannel.type;
+      }
+
+      const configValidation = validateNotificationChannelConfig(
+        channelType,
+        validatedData.config
+      );
+      if (!configValidation.success) {
+        return c.json(
+          {
+            success: false,
+            message: configValidation.message || "渠道配置无效",
+          },
+          400
+        );
+      }
+
+      validatedData.config = JSON.stringify(configValidation.config);
     }
 
     // 更新渠道
@@ -274,6 +323,52 @@ notifications.delete("/channels/:id", async (c) => {
   }
 });
 
+
+// 发送测试通知（验证渠道配置是否可用）
+notifications.post("/channels/:id/test", async (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    const payload = c.get("jwtPayload") as JwtPayload;
+    const userId = payload.id;
+
+    if (isNaN(id)) {
+      return c.json(
+        {
+          success: false,
+          message: "无效的渠道ID",
+        },
+        400
+      );
+    }
+
+    const result = await NotificationService.sendTestNotification(id, userId);
+
+    if (!result.success) {
+      return c.json(
+        {
+          success: false,
+          message: result.error || "测试通知发送失败",
+        },
+        result.error === "通知渠道不存在" ? 404 : 500
+      );
+    }
+
+    return c.json({
+      success: true,
+      message: "测试通知发送成功",
+    });
+  } catch (error) {
+    console.error("发送测试通知失败:", error);
+    return c.json(
+      {
+        success: false,
+        message: "发送测试通知失败",
+        error: error instanceof Error ? error.message : String(error),
+      },
+      500
+    );
+  }
+});
 
 // 获取通知模板列表
 notifications.get("/templates", async (c) => {

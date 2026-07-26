@@ -26,11 +26,39 @@ import {
   HamburgerMenuIcon,
   DownloadIcon,
 } from "@radix-ui/react-icons";
+import { Moon, Sun, SunMoon } from "lucide-react";
 import { useAuth } from "../providers/AuthProvider";
+import { useTheme } from "../providers/ThemeProvider";
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import LanguageSelector from "./LanguageSelector";
 import { promptPWAInstall } from "@/utils/pwaInstallHandler";
+
+// 主题切换按钮：三档循环（auto / dark / light），图标随当前档变化
+const ThemeToggleButton = () => {
+  const { theme, toggleTheme } = useTheme();
+  const { t } = useTranslation();
+
+  const icon =
+    theme === "dark" ? (
+      <Moon size={14} />
+    ) : theme === "light" ? (
+      <Sun size={14} />
+    ) : (
+      <SunMoon size={14} />
+    );
+
+  return (
+    <Button
+      variant="ghost"
+      onClick={toggleTheme}
+      title={t(`navbar.theme.${theme}`)}
+      aria-label={t(`navbar.theme.${theme}`)}
+    >
+      {icon}
+    </Button>
+  );
+};
 
 const Navbar = () => {
   const navigate = useNavigate();
@@ -147,14 +175,16 @@ const Navbar = () => {
                 </>
               ) : null}
 
-              {/* Logo 部分 */}
+              {/* Logo 部分：终端窗口三色圆点 + 站点标题 */}
               <Flex align="center" className="ml-3">
                 <Link to="/">
-                  <Flex align="center" gap="2">
-                    <Box>
-                      <PieChartIcon width="20" height="20" />
-                    </Box>
-                    <Text size="4" weight="bold">
+                  <Flex align="center" gap="3">
+                    <Flex align="center" gap="2">
+                      <span className="terminal-dot red" />
+                      <span className="terminal-dot yellow" />
+                      <span className="terminal-dot green" />
+                    </Flex>
+                    <Text size="2" weight="bold" className="tracking-wider">
                       XUGOU
                     </Text>
                   </Flex>
@@ -253,6 +283,9 @@ const Navbar = () => {
                     className="!h-6 hidden lg:block"
                   />
 
+                  {/* 主题切换 */}
+                  <ThemeToggleButton />
+
                   {/* 语言选择器 */}
                   <LanguageSelector />
 
@@ -327,6 +360,9 @@ const Navbar = () => {
                 </>
               ) : (
                 <Flex gap="2" align="center">
+                  {/* 主题切换 */}
+                  <ThemeToggleButton />
+
                   {/* 语言选择器 */}
                   <LanguageSelector />
 

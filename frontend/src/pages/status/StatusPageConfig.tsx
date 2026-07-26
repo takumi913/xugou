@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { Box, Flex, Heading, Text, Container } from "@/components/ui/theme-shim";
+import { Box, Flex, Text, Container } from "@/components/ui/theme-shim";
+import PageLoading from "../../components/PageLoading";
 import {
-  Card,
   Button,
   Tabs,
   TabsContent,
@@ -195,9 +195,7 @@ const StatusPageConfig = () => {
     return (
       <Box>
         <div className="page-container detail-page">
-          <Flex justify="center" align="center" style={{ minHeight: "50vh" }}>
-            <Text size="3">{t("common.loading")}</Text>
-          </Flex>
+          <PageLoading />
         </div>
       </Box>
     );
@@ -212,9 +210,7 @@ const StatusPageConfig = () => {
           direction={{ initial: "column", sm: "row" }}
         >
           <Flex align="center">
-            <Heading size="5" weight="medium">
-              {t("statusPageConfig.title")}
-            </Heading>
+            <h1 className="prompt-title">{t("statusPageConfig.title")}</h1>
           </Flex>
           <Flex align="center" className="mt-2">
             <Button
@@ -228,15 +224,7 @@ const StatusPageConfig = () => {
             <Button variant="secondary" onClick={handleSave} disabled={saving}>
               {saving ? (
                 <>
-                  <span
-                    style={{
-                      width: "16px",
-                      height: "16px",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
+                  <span className="inline-flex h-4 w-4 items-center justify-center">
                     <svg
                       width="14"
                       height="14"
@@ -270,7 +258,7 @@ const StatusPageConfig = () => {
           </Flex>
         </Flex>
       </Box>
-      <Card className="mt-4">
+      <div className="terminal-card mt-4 p-4">
         <Tabs defaultValue="general">
           <TabsList className="overflow-auto">
             <TabsTrigger value="general">
@@ -340,7 +328,7 @@ const StatusPageConfig = () => {
                       )}
                     </Button>
                   </Flex>
-                  <Text className="text-xs text-gray-500">
+                  <Text className="text-xs text-[var(--text-secondary)]">
                     {t("statusPageConfig.publicUrlHelp")}
                   </Text>
                 </Box>
@@ -355,17 +343,22 @@ const StatusPageConfig = () => {
 
             <TabsContent value="services">
               <Flex direction="column">
-                <Text>{t("statusPageConfig.selectServicesPrompt")}</Text>
+                <h2 className="group-title">
+                  {t("statusPageConfig.selectServicesPrompt")}{" "}
+                  <span className="group-count">
+                    [{config.monitors.length}]
+                  </span>
+                </h2>
 
                 {config.monitors.length === 0 ? (
-                  <Text>{t("monitors.noMonitors")}</Text>
+                  <div className="empty-state">{t("monitors.noMonitors")}</div>
                 ) : (
                   <Box>
                     {config.monitors.map((monitor) => {
                       return (
                         <Flex
                           key={monitor.id}
-                          className="items-center justify-between p-2 hover:bg-gray-50 rounded-md"
+                          className="items-center justify-between p-2 hover:bg-[var(--bg-hover)] rounded-md"
                         >
                           <Text>{monitor.name}</Text>
                           <Checkbox
@@ -387,17 +380,20 @@ const StatusPageConfig = () => {
 
             <TabsContent value="agents">
               <Flex direction="column">
-                <Text>{t("statusPageConfig.selectAgentsPrompt")}</Text>
+                <h2 className="group-title">
+                  {t("statusPageConfig.selectAgentsPrompt")}{" "}
+                  <span className="group-count">[{config.agents.length}]</span>
+                </h2>
 
                 {config.agents.length === 0 ? (
-                  <Text color="gray">{t("agents.noAgents")}</Text>
+                  <div className="empty-state">{t("agents.noAgents")}</div>
                 ) : (
                   <Box>
                     {config.agents.map((agent) => {
                       return (
                         <Flex
                           key={agent.id}
-                          className="items-center justify-between p-2 hover:bg-gray-50 rounded-md"
+                          className="items-center justify-between p-2 hover:bg-[var(--bg-hover)] rounded-md"
                         >
                           <Text size="3">{agent.name}</Text>
                           <Checkbox
@@ -418,7 +414,7 @@ const StatusPageConfig = () => {
             </TabsContent>
           </Box>
         </Tabs>
-      </Card>
+      </div>
     </Container>
   );
 };

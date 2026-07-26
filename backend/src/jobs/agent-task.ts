@@ -4,12 +4,12 @@ import {
   getAgentById,
   getFormattedIPAddresses,
 } from "../services";
-import { getAgentsToMarkOffline } from "../repositories";
+import {
+  getAgentsToMarkOffline,
+  getEffectiveAgentNotificationSetting,
+} from "../repositories";
 import { shouldSendNotification, sendNotification } from "../services";
 import { Hono } from "hono";
-import { db } from "../config";
-import { and, eq,lt } from "drizzle-orm";
-import { notificationSettings, agentMetrics24h } from "../db/schema";
 import { getEnvNumber } from "../utils/env";
 
 const agentTask = new Hono<{}>();
@@ -231,35 +231,11 @@ export async function handleAgentThresholdNotifications(
 
     const userId = agent.created_by; // 获取 userId
 
-    // 查询特定设置
-    const settings = await db
-      .select()
-      .from(notificationSettings)
-      .where(
-        and(
-          eq(notificationSettings.enabled, 1),
-          eq(notificationSettings.target_id, agentId),
-          eq(notificationSettings.target_type, "agent"),
-          eq(notificationSettings.user_id, userId) // 增加 userId 过滤
-        )
-      );
-
-    // 如果没有特定设置，查询全局设置
-    const globalSettings = settings.length === 0
-      ? await db
-          .select()
-          .from(notificationSettings)
-          .where(
-            and(
-              eq(notificationSettings.enabled, 1),
-              eq(notificationSettings.target_type, "global-agent"),
-              eq(notificationSettings.user_id, userId) // 增加 userId 过滤
-            )
-          )
-      : null;
-    
-    // 使用特定设置或全局设置
-    const finalSettings = settings.length === 0 ? globalSettings?.[0] : settings[0];
+    // 资源级设置优先、缺省回退 global-agent 全局设置（与 expiry-task 共用同一实现）
+    const finalSettings = await getEffectiveAgentNotificationSetting(
+      agentId,
+      userId
+    );
 
     if (!finalSettings) {
       return;
@@ -302,7 +278,7 @@ export async function handleAgentThresholdNotifications(
     // 获取通知渠道
     let channels = [];
     try {
-      channels = JSON.parse(finalSettings.channels);
+      channels = JSON.parse(finalSettings.channels || "[]");
     } catch (e) {
       console.error(`解析通知渠道失败 (${agent.name}, ID: ${agentId}):`, e);
       return;
@@ -356,23 +332,14 @@ export async function handleAgentThresholdNotifications(
 }
 
 // 在 Cloudflare Workers 中设置定时触发器
+// 历史指标已切换为 agent_metrics_history 周表轮换（见 rotation-task.ts），
+// 不再对 agent_metrics_24h 做按行 DELETE 清理。
 export default {
   async scheduled(event: any, env: any, ctx: any) {
     const c = { env };
 
     // 默认执行监控检查任务
-    let result: any = await checkAgentsStatus(c);
-    // 获取24小时前的时间
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const hour = new Date().getUTCHours();
-    const minute = new Date().getUTCMinutes();
-    // 每隔6小时清理一次 metrics 24h 表数据
-
-    if (hour % 6 === 0 && minute === 5) {
-      await db.delete(agentMetrics24h).where(lt(agentMetrics24h.timestamp, yesterday));
-    }
-
-    return result;
+    return await checkAgentsStatus(c);
   },
   fetch: agentTask.fetch,
 };

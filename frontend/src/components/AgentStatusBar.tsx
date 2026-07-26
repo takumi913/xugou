@@ -1,6 +1,11 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { MetricHistory, AgentWithLatestMetrics } from "../types";
 import { Badge } from "./ui/badge";
+import { ProgressBar } from "./StatBar";
+import { formatBytes } from "../utils/format";
+import { memoryPercent, parseDiskUsage } from "../utils/metrics";
+import { regionFlagEmoji, regionLabel } from "../utils/region";
 import {
   Apple,
   Laptop,
@@ -15,16 +20,6 @@ interface AgentStatusBarProps {
   agent: AgentWithLatestMetrics;
 }
 
-interface DiskMetric {
-  device: string;
-  mount_point: string;
-  total: number;
-  used: number;
-  free: number;
-  usage_rate: number;
-  fs_type: string;
-}
-
 interface NetworkMetric {
   interface: string;
   bytes_sent: number;
@@ -33,53 +28,36 @@ interface NetworkMetric {
   packets_recv: number;
 }
 
-const formatBytes = (bytes: number | undefined, decimals = 2): string => {
-  if (bytes === undefined || bytes === 0) return "0 B";
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
-};
-
 const formatPercent = (val: number | undefined, decimals = 2) =>
   val !== undefined ? `${val.toFixed(decimals)}%` : "-";
-
-const ProgressBar = ({
-  percent,
-  color,
-}: {
-  percent: number;
-  color: string;
-}) => (
-  <div className="w-full h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-    <div
-      style={{ width: `${percent}%`, background: color }}
-      className="h-full transition-all duration-300 rounded-full"
-    />
-  </div>
-);
 
 const MetricCard = ({
   label,
   value,
   subValue,
   percent,
-  color,
 }: {
   label: string;
   value: string;
   subValue?: string;
   percent?: number;
-  color?: string;
 }) => (
   <div className="flex flex-col space-y-1 min-w-[80px] flex-1">
-    <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>
-    <span className="text-base font-semibold">{value}</span>
-    {subValue && <span className="text-xs text-gray-500">{subValue}</span>}
-    {percent !== undefined && color && (
-      <ProgressBar percent={percent} color={color} />
+    <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+      {label}
+    </span>
+    <span
+      className="text-base font-semibold"
+      style={{ color: "var(--text-primary)" }}
+    >
+      {value}
+    </span>
+    {subValue && (
+      <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+        {subValue}
+      </span>
     )}
+    {percent !== undefined && <ProgressBar percent={percent} />}
   </div>
 );
 
@@ -97,64 +75,67 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
   latestMetric,
   agent,
 }) => {
+  const { t } = useTranslation();
   const OsIcon = getOsIcon(agent.os);
 
-  // 计算存储总量和使用情况
-  let totalStorage = 0;
-  let usedStorage = 0;
-  let storageUsageRate = 0;
+  // 聚合存储总量和使用情况
+  const diskUsage = parseDiskUsage(latestMetric);
+  const totalStorage = diskUsage?.total ?? 0;
+  const usedStorage = diskUsage?.used ?? 0;
+  const storageUsageRate = diskUsage?.percent ?? 0;
+
+  // 内存使用率（优先用后端算好的字段，缺失时按 used/total 派生）
+  const memoryUsageRate = memoryPercent(latestMetric);
 
   // 计算网络总量
   let totalUpload = 0;
   let totalDownload = 0;
 
-  if (latestMetric) {
-    // 解析并聚合所有磁盘数据
-    if (latestMetric.disk_metrics) {
-      try {
-        const disks = JSON.parse(latestMetric.disk_metrics) as DiskMetric[];
-        disks.forEach((disk) => {
-          totalStorage += disk.total;
-          usedStorage += disk.used;
-        });
-        storageUsageRate = (usedStorage / totalStorage) * 100;
-      } catch (e) {
-        console.error("解析磁盘数据失败:", e);
-      }
-    }
-
+  if (latestMetric?.network_metrics) {
     // 解析并聚合所有网络接口数据
-    if (latestMetric.network_metrics) {
-      try {
-        const networks = JSON.parse(
-          latestMetric.network_metrics
-        ) as NetworkMetric[];
-        networks.forEach((network) => {
-          totalUpload += network.bytes_sent;
-          totalDownload += network.bytes_recv;
-        });
-      } catch (e) {
-        console.error("解析网络数据失败:", e);
-      }
+    try {
+      const networks = JSON.parse(
+        latestMetric.network_metrics
+      ) as NetworkMetric[];
+      networks.forEach((network) => {
+        totalUpload += network.bytes_sent;
+        totalDownload += network.bytes_recv;
+      });
+    } catch (e) {
+      console.error("解析网络数据失败:", e);
     }
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 transition-all">
+    <div className="terminal-card p-4 transition-all">
       {/* 顶部信息栏 */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Badge variant="secondary" className="flex items-center gap-1">
             <OsIcon className="size-4" />
           </Badge>
-          <span className="text-lg font-bold dark:text-white">
+          <span
+            className="text-lg font-bold"
+            style={{ color: "var(--text-primary)" }}
+          >
             {agent.name}
           </span>
+          {regionFlagEmoji(agent.region) && (
+            <span
+              className="text-xs"
+              style={{ color: "var(--text-secondary)" }}
+              title={regionLabel(agent.region) ?? undefined}
+            >
+              {regionFlagEmoji(agent.region)} {regionLabel(agent.region)}
+            </span>
+          )}
           <Badge
             variant="outline"
             color={agent.status === "active" ? "green" : "gray"}
           >
-            {agent.status === "active" ? "在线" : "离线"}
+            {agent.status === "active"
+              ? t("agent.status.online")
+              : t("agent.status.offline")}
           </Badge>
         </div>
       </div>
@@ -166,32 +147,31 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
           value={formatPercent(latestMetric?.cpu_usage)}
           subValue={latestMetric?.cpu_model}
           percent={latestMetric?.cpu_usage}
-          color="#2d8cf0"
         />
         <MetricCard
-          label="内存"
-          value={formatPercent(latestMetric?.memory_usage_rate)}
+          label={t("agent.metrics.memory.title")}
+          value={formatPercent(memoryUsageRate)}
           subValue={
             latestMetric
-              ? `${formatBytes(latestMetric.memory_used)} / ${formatBytes(
-                  latestMetric.memory_total
+              ? `${formatBytes(latestMetric.memory_used, 2)} / ${formatBytes(
+                  latestMetric.memory_total,
+                  2
                 )}`
               : undefined
           }
-          percent={latestMetric?.memory_usage_rate}
-          color="#faad14"
+          percent={memoryUsageRate}
         />
         <MetricCard
-          label="存储"
+          label={t("agentStatusBar.storage")}
           value={formatPercent(storageUsageRate)}
-          subValue={`${formatBytes(usedStorage)} / ${formatBytes(
-            totalStorage
+          subValue={`${formatBytes(usedStorage, 2)} / ${formatBytes(
+            totalStorage,
+            2
           )}`}
           percent={storageUsageRate}
-          color="#13c2c2"
         />
         <MetricCard
-          label="系统负载"
+          label={t("agent.metrics.load.title")}
           value={latestMetric?.load_1?.toFixed(2) || "-"}
           subValue={
             latestMetric
@@ -204,10 +184,19 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
       </div>
 
       {/* 底部统计信息 */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm text-gray-600 dark:text-gray-300">
+      <div
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm"
+        style={{ color: "var(--text-secondary)" }}
+      >
         <div className="flex items-center gap-4">
-          <span>总上传：{formatBytes(totalUpload)}</span>
-          <span>总下载：{formatBytes(totalDownload)}</span>
+          <span>
+            <span className="net-up">▲</span>{" "}
+            {t("agentStatusBar.totalUpload")}: {formatBytes(totalUpload, 2)}
+          </span>
+          <span>
+            <span className="net-down">▼</span>{" "}
+            {t("agentStatusBar.totalDownload")}: {formatBytes(totalDownload, 2)}
+          </span>
         </div>
       </div>
     </div>

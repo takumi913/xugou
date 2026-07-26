@@ -383,5 +383,131 @@ ALTER TABLE \`agents\` ADD \`last_state_changed_at\` text;
 ALTER TABLE \`agents\` ADD \`next_offline_at\` text;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS \`agents_status_next_offline_at_idx\` ON \`agents\` (\`status\`,\`next_offline_at\`);`
+  },
+  {
+    name: "0010_flaky_morg.sql",
+    sql: `CREATE TABLE IF NOT EXISTS \`agent_metrics_history\` (
+	\`id\` integer PRIMARY KEY NOT NULL,
+	\`agent_id\` integer NOT NULL,
+	\`timestamp\` text,
+	\`cpu_usage\` real,
+	\`cpu_cores\` integer,
+	\`cpu_model\` text,
+	\`memory_total\` integer,
+	\`memory_used\` integer,
+	\`memory_free\` integer,
+	\`memory_usage_rate\` real,
+	\`load_1\` real,
+	\`load_5\` real,
+	\`load_15\` real,
+	\`disk_metrics\` text,
+	\`network_metrics\` text
+);
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`history_partition_id\` integer DEFAULT 0;`
+  },
+  {
+    name: "0011_uneven_champions.sql",
+    sql: `ALTER TABLE \`agents\` ADD \`collect_interval\` integer DEFAULT 60;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`report_interval\` integer DEFAULT 300;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`region\` text;`
+  },
+  {
+    name: "0012_watery_earthquake.sql",
+    sql: `ALTER TABLE \`agent_latest_metrics\` ADD \`swap_total\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`swap_used\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`process_count\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`tcp_connections\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`udp_connections\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`ping_json\` text;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`ipv4_reachable\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`ipv6_reachable\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`swap_total\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`swap_used\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`process_count\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`tcp_connections\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`udp_connections\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`ping_json\` text;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`ipv4_reachable\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`ipv6_reachable\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`boot_time\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`price\` real;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`currency\` text DEFAULT 'USD';
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`billing_cycle\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`expire_date\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`auto_renewal\` integer DEFAULT 0;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`is_hidden\` integer DEFAULT 0;`
+  },
+  {
+    name: "0013_conscious_santa_claus.sql",
+    sql: `ALTER TABLE \`agent_latest_metrics\` ADD \`network_rx_speed\` real;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`network_tx_speed\` real;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`month_rx\` integer DEFAULT 0;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`month_tx\` integer DEFAULT 0;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`last_total_rx\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`last_total_tx\` integer;
+--> statement-breakpoint
+ALTER TABLE \`agent_latest_metrics\` ADD \`month_reset_at\` text;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`network_rx_speed\` real;
+--> statement-breakpoint
+ALTER TABLE \`agent_metrics_history\` ADD \`network_tx_speed\` real;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`traffic_limit_gb\` real;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`traffic_reset_day\` integer DEFAULT 1;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`traffic_calc_type\` text DEFAULT 'sum';`
+  },
+  {
+    name: "0014_pretty_barracuda.sql",
+    sql: `ALTER TABLE \`agents\` ADD \`auto_update\` integer DEFAULT 0;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`group_name\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`tags\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`sort_order\` integer DEFAULT 0;
+--> statement-breakpoint
+ALTER TABLE \`monitors\` ADD \`sort_order\` integer DEFAULT 0;`
+  },
+  {
+    name: "0015_blushing_norman_osborn.sql",
+    sql: `ALTER TABLE \`agents\` ADD \`geo_latitude\` real;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`geo_longitude\` real;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`geo_city\` text;
+--> statement-breakpoint
+ALTER TABLE \`agents\` ADD \`geo_region_name\` text;`
   }
 ];

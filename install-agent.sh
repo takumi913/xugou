@@ -139,6 +139,20 @@ detect_os_arch() {
   esac
 }
 
+# --- 内置自管理命令提示 ---
+# $1: agent 命令路径（如 xugou-agent 或 ./xugou-agent）
+# $2: 是否需要 sudo（"sudo" 或空）
+print_builtin_commands() {
+  local agent_cmd="$1"
+  local sudo_prefix="$2"
+  [ -n "$sudo_prefix" ] && sudo_prefix="${sudo_prefix} "
+  echo ""
+  echo "常用命令 (Agent 已内置自管理命令):"
+  echo "  ${agent_cmd} status                查看运行状态与配置"
+  echo "  ${sudo_prefix}${agent_cmd} update             一条命令升级到最新版本"
+  echo "  ${sudo_prefix}${agent_cmd} uninstall          一条命令卸载 Agent"
+}
+
 # --- 安装 Agent ---
 do_install() {
   detect_os_arch
@@ -262,6 +276,7 @@ WantedBy=multi-user.target"
     echo "  sudo systemctl status ${SERVICE_NAME}"
     echo "查看日志:"
     echo "  sudo journalctl -u ${SERVICE_NAME} -f"
+    print_builtin_commands "${AGENT_NAME}" "sudo"
   else
     echo "Agent 已下载到 ${LOCAL_AGENT_DOWNLOAD_PATH}"
     if [ "$PLATFORM" = "darwin" ]; then
@@ -274,14 +289,53 @@ WantedBy=multi-user.target"
         echo "您可以这样运行 Agent:"
         echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\""
     fi
+    print_builtin_commands "${LOCAL_AGENT_DOWNLOAD_PATH}" ""
   fi
   echo "安装完成。"
   set_env_vars
 }
 
+# --- 内置命令委托 ---
+# 查找已安装的 agent 二进制：优先系统安装路径，其次当前目录，最后 PATH
+find_installed_agent() {
+  if [ -x "${AGENT_INSTALL_PATH}" ]; then
+    echo "${AGENT_INSTALL_PATH}"
+  elif [ -x "./${AGENT_NAME}${EXTENSION}" ]; then
+    echo "./${AGENT_NAME}${EXTENSION}"
+  else
+    command -v "${AGENT_NAME}" 2>/dev/null || true
+  fi
+}
+
+# 探测二进制是否支持内置子命令（旧版二进制对未知子命令的 --help 会报错退出）
+# $1: 二进制路径  $2: 子命令名
+agent_supports_command() {
+  "$1" "$2" --help >/dev/null 2>&1
+}
+
+# 若已安装的二进制内置了指定子命令，则直接 exec 委托执行（不再返回）
+# $1: 子命令名  其余参数原样传给子命令
+try_delegate_to_agent() {
+  local subcmd="$1"
+  shift
+  local bin
+  bin=$(find_installed_agent)
+  if [ -n "$bin" ] && agent_supports_command "$bin" "$subcmd"; then
+    echo "检测到 Agent 已内置 ${subcmd} 命令，委托执行: ${bin} ${subcmd} $*"
+    if [ "$bin" = "${AGENT_INSTALL_PATH}" ] && [ -n "$SUDO_CMD" ]; then
+      exec ${SUDO_CMD} "$bin" "$subcmd" "$@"
+    fi
+    exec "$bin" "$subcmd" "$@"
+  fi
+  echo "未检测到内置 ${subcmd} 命令（旧版二进制或未安装），使用脚本内置流程继续。"
+}
+
 # --- 更新 Agent ---
 do_update() {
   detect_os_arch
+
+  # 新版二进制内置自升级命令，优先委托；旧版二进制回退到下方 shell 流程
+  try_delegate_to_agent update
 
   read_env_vars
   if [ -z "$XUGOU_SERVER" ] || [ -z "$XUGOU_TOKEN" ]; then
@@ -365,6 +419,9 @@ WantedBy=multi-user.target"
 # --- 卸载 Agent ---
 do_uninstall() {
   detect_os_arch # Needed to know if we are on Linux for service removal
+
+  # 新版二进制内置自卸载命令，优先委托；旧版二进制回退到下方 shell 流程
+  try_delegate_to_agent uninstall --yes
 
   echo "开始卸载 ${AGENT_NAME}..."
 

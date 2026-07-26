@@ -15,29 +15,6 @@ export interface ChannelSelectorProps {
   placeholder?: string;
 }
 
-// StatusSummaryCard 组件类型
-export interface StatusItem {
-  id: string;
-  name: string;
-  status:
-    | "up"
-    | "down"
-    | "pending"
-    | "unknown"
-    | "active"
-    | "inactive"
-    | "online"
-    | "offline"
-    | "error";
-  time?: string;
-}
-
-export interface StatusSummaryCardProps {
-  title: string;
-  items: StatusItem[];
-  type: "monitors" | "agents";
-}
-
 // MonitorCard 组件类型
 export interface MonitorCardProps {
   monitor: Monitor;
@@ -53,6 +30,8 @@ export interface StatusCodeSelectProps {
 export interface AgentCardProps {
   agent: Agent;
   metrics?: MetricHistory[];
+  // 实时/最新样本（WS 或最新指标接口），优先于历史里的最新一条（速率/月流量等）
+  liveMetric?: Partial<MetricHistory> | null;
   showIpAddress?: boolean; // 是否显示IP地址
   showHostname?: boolean; // 是否显示主机名
   showLastUpdated?: boolean; // 是否显示最后更新时间

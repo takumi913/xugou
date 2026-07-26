@@ -109,7 +109,7 @@ export async function getAllMonitors(userId: number) {
     .select()
     .from(monitors)
     .where(eq(monitors.created_by, userId))
-    .orderBy(desc(monitors.created_at));
+    .orderBy(asc(monitors.sort_order), asc(monitors.id));
 
   // 解析所有监控的 headers 字段
   if (result) {
@@ -128,6 +128,32 @@ export async function getAllMonitors(userId: number) {
   }
 
   return result;
+}
+
+// 写入单个监控的 sort_order（导入时回填导出文件中的排序权重）
+export async function setMonitorSortOrder(id: number, sortOrder: number) {
+  await db
+    .update(monitors)
+    .set({ sort_order: sortOrder })
+    .where(eq(monitors.id, id));
+}
+
+// 按给定 id 顺序批量写 sort_order（归属权已在服务层校验）
+export async function updateMonitorsOrder(ids: number[]) {
+  await Promise.all(
+    ids.map((id, index) =>
+      db.update(monitors).set({ sort_order: index }).where(eq(monitors.id, id))
+    )
+  );
+}
+
+// 批量获取监控（不限归属，供 admin 排序校验用）
+export async function getMonitorsByIdsAnyOwner(monitorIds: number[]) {
+  if (monitorIds.length === 0) return [];
+  return await db
+    .select()
+    .from(monitors)
+    .where(inArray(monitors.id, monitorIds));
 }
 
 // 批量获取指定用户的监控

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"; // 导入 useEffect
 import { useNavigate, Link } from "react-router-dom";
-import { Flex, Heading, Text } from "@/components/ui/theme-shim";
-import { Button, Card, Input } from "@/components/ui"; // 导入 Input 组件
+import { Flex, Text } from "@/components/ui/theme-shim";
+import { Button, Input } from "@/components/ui"; // 导入 Input 组件
 import { useAuth } from "../../providers/AuthProvider";
 import { useTranslation } from "react-i18next";
 import { getAllowNewUserRegistration } from "../../api/settings"; // 导入 API
@@ -72,16 +72,14 @@ const Register = () => {
       <Flex
         justify="center"
         align="center"
-        style={{ minHeight: "calc(100vh - 130px)", padding: "2rem 0" }}
+        className="min-h-[calc(100vh-130px)] py-8"
       >
-        <Card style={{ width: "400px", padding: "2rem" }}>
+        <div className="terminal-card w-[400px] max-w-full p-8">
           <Flex direction="column" gap="4">
-            <Heading align="center" size="6">
-              {t("register.title")}
-            </Heading>
+            <h1 className="prompt-title text-center">{t("register.title")}</h1>
 
             {error && (
-              <Text color="red" align="center">
+              <Text align="center" className="text-[var(--accent-red)]">
                 {error}
               </Text>
             )}
@@ -129,13 +127,13 @@ const Register = () => {
               {t("register.loginLink")}{" "}
               <Link
                 to="/login"
-                style={{ color: "var(--accent-9)", textDecoration: "none" }}
+                className="text-[var(--accent-green)] no-underline hover:underline"
               >
                 {t("navbar.login")}
               </Link>
             </Text>
           </Flex>
-        </Card>
+        </div>
       </Flex>
     </div>
   );

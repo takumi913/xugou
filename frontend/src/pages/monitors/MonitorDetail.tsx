@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text, Grid, Container } from "@/components/ui/theme-shim";
-import { Button, Card, Badge } from "@/components/ui";
+import { Box, Flex, Text, Grid } from "@/components/ui/theme-shim";
+import { Button, Badge } from "@/components/ui";
 import {
   ArrowLeftIcon,
   Pencil1Icon,
@@ -19,8 +19,10 @@ import {
 import { MonitorWithDailyStatsAndStatusHistory } from "../../types/monitors";
 import { useTranslation } from "react-i18next";
 import ResponseTimeChart from "../../components/ResponseTimeChart";
+import PageLoading from "../../components/PageLoading";
 import StatusBar from "../../components/MonitorStatusBar";
 import { usePolling } from "../../hooks/usePolling";
+import { monitorStatusColors } from "../../utils/statusColors";
 
 // 将范围状态码转换为可读形式（2 -> 2xx, 3 -> 3xx 等）
 const formatStatusCode = (code: number | undefined): string => {
@@ -120,27 +122,16 @@ const MonitorDetail = () => {
     }
   };
 
-  // 状态颜色映射
-  const statusColors: { [key: string]: "green" | "red" | "gray" } = {
-    up: "green",
-    down: "red",
-    pending: "gray",
-  };
-
   // 加载中显示
   if (loading) {
-    return (
-      <Box className="monitor-detail" p="4">
-        <Text>{t("common.loading")}</Text>
-      </Box>
-    );
+    return <PageLoading />;
   }
 
   // 错误显示
   if (error || !monitor) {
     return (
       <Box className="monitor-detail" p="4">
-        <Text style={{ color: "var(--red-9)" }}>
+        <Text style={{ color: "var(--accent-red)" }}>
           {error || t("monitor.notExist")}
         </Text>
         <Button variant="secondary" onClick={() => navigate("/monitors")}>
@@ -151,14 +142,14 @@ const MonitorDetail = () => {
   }
 
   return (
-    <Container className="sm:px-6 lg:px-[8%]">
+    <Box className="page-container">
       <Flex justify="between" align="start" direction={{ initial: "column", sm: "row" }} gap="4">
         <Flex align="center" gap="2">
           <Button variant="secondary" onClick={() => navigate("/monitors")}>
             <ArrowLeftIcon />
           </Button>
-          <Heading size="6">{monitor.name}</Heading>
-          <Badge color={statusColors[monitor.status]}>
+          <h1 className="prompt-title">{monitor.name}</h1>
+          <Badge color={monitorStatusColors[monitor.status] ?? "gray"}>
             {monitor.status === "up"
               ? t("monitor.status.normal")
               : monitor.status === "down"
@@ -185,9 +176,9 @@ const MonitorDetail = () => {
         </Flex>
       </Flex>
       <Flex py="4" gap="4" direction="column" >
-        <Card>
-          <Flex direction="column" gap="2" className="ml-4">
-            <Heading size="4">{t("monitor.detailInfo")}</Heading>
+        <div className="terminal-card p-4">
+          <Flex direction="column" gap="2">
+            <h2 className="group-title">{t("monitor.detailInfo")}</h2>
             <Grid columns="2" gap="3">
               <Text>URL:</Text>
               <Text>{monitor.url}</Text>
@@ -206,37 +197,37 @@ const MonitorDetail = () => {
               <Text>{t("monitor.createTime")}:</Text>
               <Text>{monitor.created_at}</Text>
               <Text>{t("monitor.headers")}:</Text>
-              <Text style={{ overflowWrap: "break-word" }}>
+              <Text className="break-words">
                 {typeof monitor.headers === "string"
                   ? monitor.headers
                   : JSON.stringify(monitor.headers)}
               </Text>
               <Text>{t("monitor.body")}:</Text>
-              <Text style={{ overflowWrap: "break-word" }}>
+              <Text className="break-words">
                 {monitor.body || "-"}
               </Text>
             </Grid>
           </Flex>
-        </Card>
+        </div>
         {/* 添加响应时间图表 */}
-        <Card className="pr-4">
-          <Flex direction="column" gap="2" className="ml-4">
-            <Heading size="4">{t("monitor.oneDayHistory")}</Heading>
+        <div className="terminal-card p-4">
+          <Flex direction="column" gap="2">
+            <h2 className="group-title">{t("monitor.oneDayHistory")}</h2>
             <Box>
               <ResponseTimeChart history={monitor.history || []} height={220} />
             </Box>
           </Flex>
-        </Card>
-        <Card className="pr-4">
-          <Flex direction="column" gap="2" className="ml-4">
-            <Heading size="4">{t("monitor.MonthsHistory")}</Heading>
+        </div>
+        <div className="terminal-card p-4">
+          <Flex direction="column" gap="2">
+            <h2 className="group-title">{t("monitor.MonthsHistory")}</h2>
             <Box>
               <StatusBar dailyStats={monitor.dailyStats || []} />
             </Box>
           </Flex>
-        </Card>
+        </div>
       </Flex>
-    </Container>
+    </Box>
   );
 };
 

@@ -3,6 +3,14 @@ import { Box } from "@/components/ui/theme-shim";
 import { MonitorStatusHistory } from "../types/monitors";
 import { useTranslation } from "react-i18next";
 import { Line } from "react-chartjs-2";
+import { useTheme } from "../providers/ThemeProvider";
+import {
+  CHART_FILL_ALPHA,
+  CHART_FONT_FAMILY,
+  getChartColors,
+  getChartTheme,
+  hexToRgba,
+} from "../utils/chartTheme";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -47,6 +55,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
   showTimeLabels = true,
 }) => {
   const { t } = useTranslation();
+  const { resolvedTheme } = useTheme();
   const chartRef = useRef<ChartJS<"line">>(null);
 
   // 格式化时间的函数使用 useCallback 缓存
@@ -103,8 +112,10 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
     };
   }, [t, formatTime]);
 
-  // 使用 useMemo 缓存基础图表选项，只有在显示标签更改时才更新
+  // 使用 useMemo 缓存基础图表选项（resolvedTheme 变化时重建，驱动图表换轴色）
   const baseChartOptions = useMemo<ChartOptions<"line">>(() => {
+    const themeColors = getChartTheme(resolvedTheme);
+
     return {
       responsive: true,
       maintainAspectRatio: false,
@@ -123,20 +134,24 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           display: false,
         },
         tooltip: {
-          backgroundColor: "rgba(0, 0, 0, 0.6)",
-          titleColor: "white",
-          bodyColor: "white",
+          backgroundColor: themeColors.tooltipBg,
+          titleColor: themeColors.tooltipTitle,
+          bodyColor: themeColors.tooltipBody,
+          borderColor: themeColors.tooltipBorder,
+          borderWidth: 1,
           titleAlign: "left" as const,
           bodyAlign: "left" as const,
           titleFont: {
-            size: 14,
+            size: 12,
             weight: "bold" as const,
+            family: CHART_FONT_FAMILY,
           },
           bodyFont: {
-            size: 12,
+            size: 11,
+            family: CHART_FONT_FAMILY,
           },
           padding: 10,
-          cornerRadius: 6,
+          cornerRadius: 2,
           displayColors: false,
           animation: {
             duration: 200,
@@ -148,9 +163,10 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           display: true,
           text: t("monitor.history.responseTime"),
           align: "start",
-          color: "#888",
+          color: themeColors.tickColor,
           font: {
-            size: 14,
+            size: 12,
+            family: CHART_FONT_FAMILY,
           },
           padding: { top: 10, bottom: 10 },
         },
@@ -160,13 +176,14 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           type: "linear",
           display: showTimeLabels,
           grid: {
-            color: "#e0e0e0",
+            color: themeColors.gridColor,
             lineWidth: 0.5,
           },
           ticks: {
-            color: "#888",
+            color: themeColors.tickColor,
             font: {
-              size: 10,
+              size: 11,
+              family: CHART_FONT_FAMILY,
             },
             maxRotation: 0,
             autoSkip: false,
@@ -185,13 +202,14 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
         y: {
           beginAtZero: true,
           grid: {
-            color: "#e0e0e0",
+            color: themeColors.gridColor,
             lineWidth: 0.5,
           },
           ticks: {
-            color: "#888",
+            color: themeColors.tickColor,
             font: {
-              size: 10,
+              size: 11,
+              family: CHART_FONT_FAMILY,
             },
             callback: (value) => `${value}ms`,
           },
@@ -220,7 +238,10 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       },
       events: ["mouseout", "mousemove", "touchstart", "touchmove"],
     };
-  }, [t, showTimeLabels, tooltipCallbacks]);
+  }, [t, showTimeLabels, tooltipCallbacks, resolvedTheme]);
+
+  // 数据线色板随明暗主题切换（浅色主题用更深的变体，与终端 accent 一致）
+  const chartColors = getChartColors(resolvedTheme);
 
   // 处理数据并生成图表数据，使用 useMemo 缓存结果
   const { chartData, timeRange, yAxisMax } = useMemo(() => {
@@ -230,9 +251,9 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           datasets: [
             {
               data: [],
-              borderColor: "rgba(72, 161, 245, 0.8)",
+              borderColor: chartColors.cpu,
               borderWidth: 2,
-              backgroundColor: "rgba(72, 161, 245, 0.1)",
+              backgroundColor: hexToRgba(chartColors.cpu, CHART_FILL_ALPHA),
               pointBackgroundColor: [],
               pointBorderColor: [],
               pointRadius: [],
@@ -336,9 +357,9 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           datasets: [
             {
               data: [],
-              borderColor: "rgba(72, 161, 245, 0.8)",
+              borderColor: chartColors.cpu,
               borderWidth: 2,
-              backgroundColor: "rgba(72, 161, 245, 0.1)",
+              backgroundColor: hexToRgba(chartColors.cpu, CHART_FILL_ALPHA),
               pointBackgroundColor: [],
               pointBorderColor: [],
               pointRadius: [],
@@ -396,16 +417,16 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
         datasets: [
           {
             data: responseTimeData,
-            borderColor: "rgba(128, 128, 128, 0.8)",
+            borderColor: chartColors.cpu,
             borderWidth: 2,
-            backgroundColor: "rgba(128, 128, 128, 0.1)",
+            backgroundColor: hexToRgba(chartColors.cpu, CHART_FILL_ALPHA),
             pointBackgroundColor: pointBackgroundColors,
             pointBorderColor: pointBorderColors,
             pointRadius: pointRadii,
             tension: 0.4,
             pointHoverRadius: 5,
-            pointHoverBackgroundColor: "rgba(128, 128, 128, 0.7)",
-            pointHoverBorderColor: "rgba(128, 128, 128, 0.9)",
+            pointHoverBackgroundColor: chartColors.cpu,
+            pointHoverBorderColor: chartColors.cpu,
             pointHoverBorderWidth: 2,
             pointHitRadius: pointHitRadii,
           },
@@ -414,7 +435,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       timeRange: timeRangeData,
       yAxisMax: calculatedYAxisMax,
     };
-  }, [history]);
+  }, [history, chartColors]);
 
   // 合并基础选项和动态选项，使用 useMemo 缓存最终选项
   const finalChartOptions = useMemo<ChartOptions<"line">>(() => {
@@ -457,10 +478,11 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          backgroundColor: "var(--gray-1)",
+          backgroundColor: "var(--bg-card)",
+          border: "1px solid var(--border-color)",
           borderRadius: "4px",
-          color: "gray",
-          fontSize: "14px",
+          color: "var(--text-secondary)",
+          fontSize: "13px",
         }}
       >
         {t("monitor.noResponseTimeData")}
@@ -483,7 +505,6 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
           width: "100%",
           height: `${height}px`,
           borderRadius: "4px",
-          backgroundColor: "var(--gray-1)",
         }}
       >
         <Line ref={chartRef} data={chartData} options={finalChartOptions} />

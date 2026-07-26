@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/xugou/agent/pkg/buffer"
 	"github.com/xugou/agent/pkg/collector"
 	"github.com/xugou/agent/pkg/config"
 	"github.com/xugou/agent/pkg/model"
@@ -34,6 +35,9 @@ func runStart(cmd *cobra.Command, args []string) {
 	config.CollectInterval = viper.GetInt("collect-interval")
 	config.ReportInterval = viper.GetInt("report-interval")
 	config.ProxyURL = viper.GetString("proxy")
+	config.ConfigFilePath = cfgFile
+	// 上报请求以 X-Agent-Version 携带探针版本（服务端据此判断是否触发自升级）
+	config.AgentVersion = Version
 	// 检查必要的配置
 	if config.Interval <= 0 {
 		config.Interval = 60
@@ -87,20 +91,21 @@ func runStart(cmd *cobra.Command, args []string) {
 
 	fmt.Println("Xugou Agent 已启动，按 Ctrl+C 停止")
 
-	samples := make([]*model.SystemInfo, 0, 1)
-	collectSample(ctx, dataCollector, &samples)
-	reportSamples(ctx, dataReporter, &samples)
+	// 采集样本进内存环形缓冲（上限 300 条），上报失败时保留待下轮重报
+	samples := buffer.NewRing[*model.SystemInfo](buffer.DefaultCapacity)
+	collectSample(ctx, dataCollector, samples)
+	reportSamples(ctx, dataReporter, samples, collectTicker, reportTicker)
 
 	// 主循环
 	for {
 		select {
 		case <-collectTicker.C:
-			collectSample(ctx, dataCollector, &samples)
+			collectSample(ctx, dataCollector, samples)
 		case <-reportTicker.C:
-			if len(samples) == 0 {
-				collectSample(ctx, dataCollector, &samples)
+			if samples.Len() == 0 {
+				collectSample(ctx, dataCollector, samples)
 			}
-			reportSamples(ctx, dataReporter, &samples)
+			reportSamples(ctx, dataReporter, samples, collectTicker, reportTicker)
 		case sig := <-sigCh:
 			fmt.Printf("收到信号 %v，正在停止...\n", sig)
 			return
@@ -108,11 +113,8 @@ func runStart(cmd *cobra.Command, args []string) {
 	}
 }
 
-func collectSample(ctx context.Context, c collector.Collector, samples *[]*model.SystemInfo) {
-	timeoutSeconds := config.CollectInterval
-	if timeoutSeconds < 15 {
-		timeoutSeconds = 15
-	}
+func collectSample(ctx context.Context, c collector.Collector, samples *buffer.Ring[*model.SystemInfo]) {
+	timeoutSeconds := max(config.CollectInterval, 15)
 	roundCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -122,30 +124,70 @@ func collectSample(ctx context.Context, c collector.Collector, samples *[]*model
 		return
 	}
 
-	*samples = append(*samples, info)
-	if len(*samples) > 100 {
-		*samples = (*samples)[len(*samples)-100:]
-	}
-	fmt.Printf("采集到系统信息，缓冲区样本数: %d\n", len(*samples))
+	samples.Push(info)
+	fmt.Printf("采集到系统信息，缓冲区样本数: %d\n", samples.Len())
 }
 
-func reportSamples(ctx context.Context, r reporter.Reporter, samples *[]*model.SystemInfo) {
-	if len(*samples) == 0 {
+func reportSamples(
+	ctx context.Context,
+	r reporter.Reporter,
+	samples *buffer.Ring[*model.SystemInfo],
+	collectTicker *time.Ticker,
+	reportTicker *time.Ticker,
+) {
+	if samples.Len() == 0 {
 		return
 	}
 
-	timeoutSeconds := config.ReportInterval
-	if timeoutSeconds < 15 {
-		timeoutSeconds = 15
-	}
+	timeoutSeconds := max(config.ReportInterval, 15)
 	roundCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	err := r.ReportBatch(roundCtx, *samples)
+	// 先快照上报，成功后再清空，失败时样本保留在缓冲中等待下轮
+	pending := samples.Snapshot()
+	remoteConfig, err := r.ReportBatch(roundCtx, pending)
 	if err != nil {
 		fmt.Printf("上报系统信息失败: %v\n", err)
 		return
 	}
-	*samples = (*samples)[:0]
+	samples.Clear()
 	fmt.Printf("系统信息已收集并上报，时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+
+	if remoteConfig != nil {
+		applyRemoteConfig(remoteConfig, collectTicker, reportTicker)
+		// v3 update 指令：异步触发自升级（互斥防重入，失败只记日志，不落配置文件）
+		if remoteConfig.Update {
+			TriggerRemoteUpdate()
+		}
+	}
+}
+
+// applyRemoteConfig 应用服务端下发的新配置：原子持久化 + 热更新运行中的定时器。
+// 持久化失败只告警，内存配置仍然生效（本地 MD5 随内存值变化，重启后会重新拉取）。
+func applyRemoteConfig(
+	remote *config.RemoteConfig,
+	collectTicker *time.Ticker,
+	reportTicker *time.Ticker,
+) {
+	if remote.CollectInterval == config.CollectInterval &&
+		remote.ReportInterval == config.ReportInterval {
+		return
+	}
+
+	fmt.Printf(
+		"收到服务端配置下发: 采集间隔 %d秒 -> %d秒, 上报间隔 %d秒 -> %d秒\n",
+		config.CollectInterval, remote.CollectInterval,
+		config.ReportInterval, remote.ReportInterval,
+	)
+
+	if err := config.PersistIntervals(
+		config.ConfigFilePath, remote.CollectInterval, remote.ReportInterval,
+	); err != nil {
+		fmt.Printf("警告: 持久化服务端配置失败（仅内存生效）: %v\n", err)
+	}
+
+	config.CollectInterval = remote.CollectInterval
+	config.ReportInterval = remote.ReportInterval
+	collectTicker.Reset(time.Duration(config.CollectInterval) * time.Second)
+	reportTicker.Reset(time.Duration(config.ReportInterval) * time.Second)
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Table, Text, Flex, Heading, Box } from "@/components/ui/theme-shim";
+import { Table, Text, Flex, Box } from "@/components/ui/theme-shim";
 import {
   Button,
   AlertDialog,
@@ -9,9 +9,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
   AlertDialogAction,
-  Card, // 导入 Card
   Switch, // 导入 Switch
 } from "@/components/ui";
+import PageLoading from "../../components/PageLoading";
 import { getAllUsers, deleteUser } from "../../api/users";
 import { getAllSettings, updateAllowNewUserRegistration } from "../../api/settings"; // 导入 settings API
 import { User } from "../../types";
@@ -116,15 +116,15 @@ const UsersList = () => {
   return (
     <Box className="sm:px-6 lg:px-[8%]">
       <Flex justify="between" align="center" mb="4">
-        <Heading size="6">{t("users.title")}</Heading>
+        <h1 className="prompt-title">{t("users.title")}</h1>
         <Button variant="secondary" onClick={() => navigate("/users/create")}>
           {t("users.create")}
         </Button>
       </Flex>
-      
+
       {/* 管理员设置 */}
       {currentUser?.role === 'admin' && (
-        <Card className="my-4 p-4">
+        <div className="terminal-card my-4 p-4">
             <Flex justify="between" align="center">
                 <Box>
                     <Text as="label" htmlFor="allow-registration-switch" className="font-medium">
@@ -141,19 +141,19 @@ const UsersList = () => {
                     disabled={settingsLoading}
                 />
             </Flex>
-        </Card>
+        </div>
       )}
 
 
       {/* 错误信息现在通过 toast 显示，如果需要也可以保留这里的 Text 组件 */}
       {error && (
-        <Text color="red" mb="4">
+        <Text mb="4" className="text-[var(--accent-red)]">
           {`错误: ${error}`}
         </Text>
       )}
 
       {loading ? (
-        <Text>{t("common.loading")}</Text>
+        <PageLoading />
       ) : (
         <Table.Root variant="surface">
           <Table.Header>
@@ -174,7 +174,7 @@ const UsersList = () => {
             {users.length === 0 ? (
               <Table.Row>
                 <Table.Cell colSpan={5}>
-                  <Text align="center">{t("users.noUsers")}</Text>
+                  <div className="empty-state">{t("users.noUsers")}</div>
                 </Table.Cell>
               </Table.Row>
             ) : (

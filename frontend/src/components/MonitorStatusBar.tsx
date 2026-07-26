@@ -13,6 +13,11 @@ import {
 } from "./ui";
 import { useTranslation } from "react-i18next";
 import { DailyStats } from "../types/monitors";
+import {
+  getUptimeColor,
+  monitorStatusColors,
+  statusAccentColor,
+} from "../utils/statusColors";
 
 // 扩展 DailyStats 类型以匹配 dailyHistory 中的结构
 interface EnrichedDailyStats extends DailyStats {
@@ -33,39 +38,11 @@ const StatusBar: React.FC<StatusBarProps> = ({ dailyStats = [] }) => {
     useState<EnrichedDailyStats | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // 根据状态或百分比确定颜色
-  const getColor = (value: string | number, isHover = false) => {
-    // 如果值是百分比字符串，转换为数字
-    const numValue =
-      typeof value === "string"
-        ? parseFloat(value)
-        : typeof value === "number"
-        ? value
-        : 0;
-
-    // 根据状态或百分比确定颜色
-    if (typeof value === "string") {
-      switch (value) {
-        case "up":
-          return isHover ? "var(--green-6)" : "var(--green-5)";
-        case "down":
-          return isHover ? "var(--red-6)" : "var(--red-5)";
-        default:
-          return isHover ? "var(--gray-6)" : "var(--gray-5)";
-      }
-    } else {
-      // 根据百分比确定颜色
-      if (numValue >= 99) {
-        return isHover ? "var(--green-6)" : "var(--green-5)";
-      } else if (numValue >= 95) {
-        return isHover ? "var(--yellow-6)" : "var(--yellow-5)";
-      } else if (numValue >= 90) {
-        return isHover ? "var(--orange-6)" : "var(--orange-5)";
-      } else {
-        return isHover ? "var(--red-6)" : "var(--red-5)";
-      }
-    }
-  };
+  // 根据状态或可用率百分比确定颜色（终端主题 accent 变量）
+  const getColor = (value: string | number) =>
+    typeof value === "string"
+      ? statusAccentColor(monitorStatusColors, value)
+      : getUptimeColor(value);
 
   // 按天聚合数据 - 优先使用每日统计数据，如果没有则使用历史记录
   const dailyHistory = useMemo(() => {

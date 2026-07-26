@@ -14,9 +14,49 @@ const getMigrationStatements = (sql: string): string[] => {
     .filter(Boolean);
 };
 
+// settings 表里记录已应用的最高迁移名，用于 isolate 首请求的轻量短路检查
+const APPLIED_MIGRATION_SETTING_KEY = "applied_migration_latest";
+
+// 迁移检查短路：读 settings 中记录的最高迁移名，与打包内最新迁移一致则跳过逐条检查
+async function isMigrationUpToDate(d1: Bindings["DB"], latestName: string): Promise<boolean> {
+  if (!latestName) return false;
+  try {
+    const row = await d1
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .bind(APPLIED_MIGRATION_SETTING_KEY)
+      .first<{ value: string | null }>();
+    return row?.value === latestName;
+  } catch {
+    // settings 表尚不存在（全新库）等情况，走完整迁移检查
+    return false;
+  }
+}
+
+// 迁移完成后记录最高迁移名（幂等 upsert；settings 表由迁移创建，失败不影响主流程）
+async function recordAppliedMigration(d1: Bindings["DB"], latestName: string): Promise<void> {
+  if (!latestName) return;
+  try {
+    await d1
+      .prepare(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      )
+      .bind(APPLIED_MIGRATION_SETTING_KEY, latestName)
+      .run();
+  } catch (error) {
+    console.error("记录迁移版本失败:", error);
+  }
+}
+
 // 执行所有迁移脚本
 export async function runMigrations(d1: Bindings["DB"]): Promise<void> {
   try {
+    const latestName = MIGRATIONS[MIGRATIONS.length - 1]?.name ?? "";
+
+    // 版本一致则短路，只花费一次轻量 SELECT
+    if (await isMigrationUpToDate(d1, latestName)) {
+      return;
+    }
+
     // 检查迁移记录表是否存在
     const migrationsTableExists = await tableExists(d1, "migrations");
     if (!migrationsTableExists) {
@@ -43,6 +83,9 @@ export async function runMigrations(d1: Bindings["DB"]): Promise<void> {
       // 写入迁移记录
       await d1.prepare("INSERT INTO migrations (name, timestamp) VALUES (?, ?)").bind(migration.name, new Date().toISOString()).run();
     }
+
+    // 全部迁移执行完成后记录最高迁移名，供后续 isolate 短路
+    await recordAppliedMigration(d1, latestName);
   } catch (error) {
     console.error("执行迁移脚本时出错:", error);
     throw error;

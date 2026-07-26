@@ -96,6 +96,43 @@ export const getAllMonitorHistory =
     return response.data;
   };
 
+// 手动排序：按数组顺序保存 sort_order
+export const updateMonitorsOrder = async (
+  ids: number[]
+): Promise<{ success: boolean; message?: string }> => {
+  try {
+    const response = await api.put("/api/monitors/order", { ids });
+    return response.data;
+  } catch (error) {
+    console.error("保存监控排序失败:", error);
+    return { success: false, message: "保存监控排序失败" };
+  }
+};
+
+// 导出监控配置（JSON 数组）
+export const exportMonitors = async (): Promise<unknown[]> => {
+  const response = await api.get("/api/monitors/export");
+  return response.data;
+};
+
+// 导入监控配置，返回 {created, skipped}
+export const importMonitors = async (
+  items: unknown[]
+): Promise<{
+  success: boolean;
+  created?: number;
+  skipped?: number;
+  message?: string;
+}> => {
+  try {
+    const response = await api.post("/api/monitors/import", items);
+    return response.data;
+  } catch (error) {
+    console.error("导入监控失败:", error);
+    return { success: false, message: "导入监控失败" };
+  }
+};
+
 // 手动检查监控
 export const checkMonitor = async (
   id: number

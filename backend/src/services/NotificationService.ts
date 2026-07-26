@@ -376,6 +376,39 @@ interface WeComConfig {
   webhookUrl: string;
 }
 
+// 钉钉机器人配置接口
+interface DingTalkConfig {
+  webhook_url: string;
+  secret?: string;
+}
+
+// Bark 配置接口
+interface BarkConfig {
+  server_url?: string;
+  device_key: string;
+  sound?: string;
+  group?: string;
+}
+
+// Server 酱配置接口
+interface ServerChanConfig {
+  send_key: string;
+}
+
+// WxPusher 配置接口
+interface WxPusherConfig {
+  app_token: string;
+  uids?: string;
+  topic_ids?: string;
+}
+
+// Gotify 配置接口
+interface GotifyConfig {
+  server_url: string;
+  app_token: string;
+  priority?: number | string;
+}
+
 /**
  * 解析通知渠道配置
  */
@@ -753,6 +786,462 @@ async function sendWeComNotification(
 }
 
 registerSender("wecom", sendWeComNotification);
+
+/**
+ * 钉钉加签：HMAC-SHA256(secret, `${timestamp}\n${secret}`) -> Base64 -> URL 编码
+ */
+async function signDingTalkWebhookUrl(
+  webhookUrl: string,
+  secret: string
+): Promise<string> {
+  const timestamp = Date.now();
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(`${timestamp}\n${secret}`)
+  );
+  const sign = btoa(String.fromCharCode(...new Uint8Array(signature)));
+  const separator = webhookUrl.includes("?") ? "&" : "?";
+  return `${webhookUrl}${separator}timestamp=${timestamp}&sign=${encodeURIComponent(sign)}`;
+}
+
+/**
+ * 发送钉钉机器人通知
+ */
+async function sendDingTalkNotification(
+  channel: models.NotificationChannel,
+  subject: string,
+  content: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const config = parseChannelConfig<DingTalkConfig>(channel);
+
+    if (!config.webhook_url) {
+      console.error("[钉钉通知] Webhook URL 不能为空");
+      return { success: false, error: "钉钉 Webhook URL 不能为空" };
+    }
+
+    // secret 非空则加签，否则直接使用原始 webhook
+    const requestUrl = config.secret
+      ? await signDingTalkWebhookUrl(config.webhook_url, config.secret)
+      : config.webhook_url;
+
+    const message = {
+      msgtype: "markdown",
+      markdown: {
+        title: subject,
+        text: `**${subject}**\n\n${content}`,
+      },
+    };
+
+    const response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(message),
+    });
+
+    const responseData = await response.json();
+
+    if (responseData.errcode === 0) {
+      return { success: true };
+    } else {
+      console.error("[钉钉通知] 发送失败");
+      return {
+        success: false,
+        error: `错误码: ${responseData.errcode}, 错误信息: ${responseData.errmsg}`,
+      };
+    }
+  } catch (error) {
+    console.error("发送钉钉通知异常:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+registerSender("dingtalk", sendDingTalkNotification);
+
+const BARK_DEFAULT_SERVER_URL = "https://api.day.app";
+
+/**
+ * 发送 Bark 通知（支持官方 api.day.app 或自建服务端）
+ */
+async function sendBarkNotification(
+  channel: models.NotificationChannel,
+  subject: string,
+  content: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const config = parseChannelConfig<BarkConfig>(channel);
+
+    if (!config.device_key) {
+      console.error("[Bark通知] 缺少必要参数: device_key");
+      return { success: false, error: "Bark Device Key 不能为空" };
+    }
+
+    const serverUrl = (config.server_url || BARK_DEFAULT_SERVER_URL).replace(
+      /\/+$/,
+      ""
+    );
+
+    const requestBody: Record<string, string> = {
+      title: subject,
+      body: content,
+      device_key: config.device_key,
+    };
+    if (config.sound) requestBody.sound = config.sound;
+    if (config.group) requestBody.group = config.group;
+
+    const response = await fetch(`${serverUrl}/push`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    const responseData = await response.json();
+
+    if (response.ok && (responseData.code === 200 || responseData.code === undefined)) {
+      return { success: true };
+    } else {
+      console.error("[Bark通知] 发送失败");
+      return {
+        success: false,
+        error:
+          responseData.message || `发送失败，HTTP状态码: ${response.status}`,
+      };
+    }
+  } catch (error) {
+    console.error("发送Bark通知异常:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+registerSender("bark", sendBarkNotification);
+
+/**
+ * 发送 Server 酱通知
+ */
+async function sendServerChanNotification(
+  channel: models.NotificationChannel,
+  subject: string,
+  content: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const config = parseChannelConfig<ServerChanConfig>(channel);
+
+    if (!config.send_key) {
+      console.error("[Server酱通知] 缺少必要参数: send_key");
+      return { success: false, error: "Server酱 SendKey 不能为空" };
+    }
+
+    const response = await fetch(
+      `https://sctapi.ftqq.com/${encodeURIComponent(config.send_key)}.send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: subject,
+          desp: content,
+        }),
+      }
+    );
+
+    const responseData = await response.json();
+
+    if (responseData.code === 0) {
+      return { success: true };
+    } else {
+      console.error("[Server酱通知] 发送失败");
+      return {
+        success: false,
+        error:
+          responseData.message || `发送失败，HTTP状态码: ${response.status}`,
+      };
+    }
+  } catch (error) {
+    console.error("发送Server酱通知异常:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+registerSender("serverchan", sendServerChanNotification);
+
+/**
+ * 发送 WxPusher 通知
+ */
+async function sendWxPusherNotification(
+  channel: models.NotificationChannel,
+  subject: string,
+  content: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const config = parseChannelConfig<WxPusherConfig>(channel);
+
+    if (!config.app_token) {
+      console.error("[WxPusher通知] 缺少必要参数: app_token");
+      return { success: false, error: "WxPusher App Token 不能为空" };
+    }
+
+    const uids = (config.uids || "")
+      .split(",")
+      .map((uid) => uid.trim())
+      .filter((uid) => uid.length > 0);
+    const topicIds = (config.topic_ids || "")
+      .split(",")
+      .map((id) => Number(id.trim()))
+      .filter((id) => Number.isInteger(id) && id > 0);
+
+    if (uids.length === 0 && topicIds.length === 0) {
+      console.error("[WxPusher通知] uids 与 topic_ids 至少需要填写一个");
+      return {
+        success: false,
+        error: "WxPusher uids 与 topic_ids 至少需要填写一个",
+      };
+    }
+
+    const response = await fetch(
+      "https://wxpusher.zjiecode.com/api/send/message",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          appToken: config.app_token,
+          content: `${subject}\n\n${content}`,
+          summary: subject.slice(0, 99),
+          contentType: 1,
+          uids,
+          topicIds,
+        }),
+      }
+    );
+
+    const responseData = await response.json();
+
+    // WxPusher 成功码为 1000
+    if (responseData.code === 1000) {
+      return { success: true };
+    } else {
+      console.error("[WxPusher通知] 发送失败");
+      return {
+        success: false,
+        error:
+          responseData.msg || `发送失败，HTTP状态码: ${response.status}`,
+      };
+    }
+  } catch (error) {
+    console.error("发送WxPusher通知异常:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+registerSender("wxpusher", sendWxPusherNotification);
+
+/**
+ * 发送 Gotify 通知
+ */
+async function sendGotifyNotification(
+  channel: models.NotificationChannel,
+  subject: string,
+  content: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const config = parseChannelConfig<GotifyConfig>(channel);
+
+    if (!config.server_url) {
+      console.error("[Gotify通知] 缺少必要参数: server_url");
+      return { success: false, error: "Gotify 服务器地址不能为空" };
+    }
+
+    if (!config.app_token) {
+      console.error("[Gotify通知] 缺少必要参数: app_token");
+      return { success: false, error: "Gotify App Token 不能为空" };
+    }
+
+    const serverUrl = config.server_url.replace(/\/+$/, "");
+    const parsedPriority = Number(config.priority);
+    const priority =
+      config.priority !== undefined &&
+      config.priority !== "" &&
+      Number.isFinite(parsedPriority)
+        ? parsedPriority
+        : 5;
+
+    const response = await fetch(
+      `${serverUrl}/message?token=${encodeURIComponent(config.app_token)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: subject,
+          message: content,
+          priority,
+        }),
+      }
+    );
+
+    if (response.ok) {
+      return { success: true };
+    }
+
+    let errorMessage = `发送失败，HTTP状态码: ${response.status}`;
+    try {
+      const responseData = (await response.json()) as {
+        error?: string;
+        errorDescription?: string;
+      };
+      errorMessage =
+        responseData.errorDescription || responseData.error || errorMessage;
+    } catch {
+      // 忽略响应体解析失败，保留 HTTP 状态码错误信息
+    }
+
+    console.error("[Gotify通知] 发送失败");
+    return { success: false, error: errorMessage };
+  } catch (error) {
+    console.error("发送Gotify通知异常:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+registerSender("gotify", sendGotifyNotification);
+
+// OneBot v11 HTTP（QQ）配置接口
+interface OneBotConfig {
+  api_url: string;
+  access_token?: string;
+  message_type?: "private" | "group";
+  target_id: string;
+}
+
+/**
+ * 发送 OneBot（QQ）通知：POST {api_url}/send_private_msg 或 /send_group_msg，
+ * 请求体 {user_id|group_id, message}；有 access_token 时带 Bearer 头；
+ * 响应 retcode === 0 判成功。
+ */
+async function sendOneBotNotification(
+  channel: models.NotificationChannel,
+  subject: string,
+  content: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const config = parseChannelConfig<OneBotConfig>(channel);
+
+    if (!config.api_url) {
+      console.error("[OneBot通知] 缺少必要参数: api_url");
+      return { success: false, error: "OneBot API 地址不能为空" };
+    }
+
+    const targetId = Number(config.target_id);
+    if (!Number.isInteger(targetId) || targetId <= 0) {
+      console.error("[OneBot通知] target_id 无效");
+      return { success: false, error: "OneBot 目标 QQ 号/群号无效" };
+    }
+
+    const isGroup = config.message_type === "group";
+    const apiUrl = config.api_url.replace(/\/+$/, "");
+    const endpoint = isGroup
+      ? `${apiUrl}/send_group_msg`
+      : `${apiUrl}/send_private_msg`;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (config.access_token) {
+      headers.Authorization = `Bearer ${config.access_token}`;
+    }
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        ...(isGroup ? { group_id: targetId } : { user_id: targetId }),
+        message: `${subject}\n${content}`,
+      }),
+    });
+
+    let responseData: { retcode?: number; wording?: string; msg?: string } = {};
+    try {
+      responseData = await response.json();
+    } catch {
+      // 忽略响应体解析失败，走下方错误分支
+    }
+
+    if (responseData.retcode === 0) {
+      return { success: true };
+    }
+
+    console.error("[OneBot通知] 发送失败");
+    return {
+      success: false,
+      error:
+        responseData.wording ||
+        responseData.msg ||
+        `发送失败，HTTP状态码: ${response.status}`,
+    };
+  } catch (error) {
+    console.error("发送OneBot通知异常:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+registerSender("onebot", sendOneBotNotification);
+
+/**
+ * 发送测试通知：绕过模板/冷却，直接向指定渠道发送一条固定内容的消息，
+ * 用于验证渠道配置是否可用。
+ */
+export async function sendTestNotification(
+  channelId: number,
+  userId: number
+): Promise<{ success: boolean; error?: string }> {
+  const channel = await repositories.getNotificationChannelById(
+    channelId,
+    userId
+  );
+
+  if (!channel) {
+    return { success: false, error: "通知渠道不存在" };
+  }
+
+  const subject = "【测试】XUGOU 通知测试";
+  const content = `这是一条测试通知，用于验证渠道 ${channel.name} (${channel.type}) 的配置是否正确。\n\n发送时间: ${new Date().toISOString()}`;
+
+  return await sendNotificationByChannel(channel, subject, content);
+}
 
 export async function sendNotification(
   type: "monitor" | "agent" | "system",

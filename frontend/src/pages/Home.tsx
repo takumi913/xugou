@@ -21,9 +21,14 @@ const Home = () => {
         {/* 英雄区域 */}
         <Flex direction="column" align="center" justify="center" py="9" gap="5">
           <Heading size="9" align="center">
+            <span className="text-[var(--accent-green)]">$ </span>
             {t("home.title")}
           </Heading>
-          <Text size="5" align="center" style={{ maxWidth: "800px" }}>
+          <Text
+            size="5"
+            align="center"
+            className="max-w-[800px] text-[var(--text-secondary)]"
+          >
             {t("home.subtitle")}
           </Text>
 
@@ -64,32 +69,56 @@ const Home = () => {
             {t("home.features.title")}
           </Heading>
           <Grid columns={{ initial: "1", sm: "2", md: "4" }} gap="4">
-            <Card>
+            <Card className="terminal-card">
               <Flex direction="column" gap="2" align="center" p="4">
-                <ActivityLogIcon width="32" height="32" />
+                <ActivityLogIcon
+                  width="32"
+                  height="32"
+                  className="text-[var(--accent-green)]"
+                />
                 <Heading size="4">{t("home.features.monitoring")}</Heading>
-                <Text align="center">{t("home.features.monitoring.desc")}</Text>
+                <Text align="center" className="text-[var(--text-secondary)]">
+                  {t("home.features.monitoring.desc")}
+                </Text>
               </Flex>
             </Card>
-            <Card>
+            <Card className="terminal-card">
               <Flex direction="column" gap="2" align="center" p="4">
-                <DesktopIcon width="32" height="32" />
+                <DesktopIcon
+                  width="32"
+                  height="32"
+                  className="text-[var(--accent-blue)]"
+                />
                 <Heading size="4">{t("home.features.dashboard")}</Heading>
-                <Text align="center">{t("home.features.dashboard.desc")}</Text>
+                <Text align="center" className="text-[var(--text-secondary)]">
+                  {t("home.features.dashboard.desc")}
+                </Text>
               </Flex>
             </Card>
-            <Card>
+            <Card className="terminal-card">
               <Flex direction="column" gap="2" align="center" p="4">
-                <LightningBoltIcon width="32" height="32" />
+                <LightningBoltIcon
+                  width="32"
+                  height="32"
+                  className="text-[var(--accent-yellow)]"
+                />
                 <Heading size="4">{t("home.features.alerts")}</Heading>
-                <Text align="center">{t("home.features.alerts.desc")}</Text>
+                <Text align="center" className="text-[var(--text-secondary)]">
+                  {t("home.features.alerts.desc")}
+                </Text>
               </Flex>
             </Card>
-            <Card>
+            <Card className="terminal-card">
               <Flex direction="column" gap="2" align="center" p="4">
-                <MixerHorizontalIcon width="32" height="32" />
+                <MixerHorizontalIcon
+                  width="32"
+                  height="32"
+                  className="text-[var(--accent-purple)]"
+                />
                 <Heading size="4">{t("home.features.statusPage")}</Heading>
-                <Text align="center">{t("home.features.statusPage.desc")}</Text>
+                <Text align="center" className="text-[var(--text-secondary)]">
+                  {t("home.features.statusPage.desc")}
+                </Text>
               </Flex>
             </Card>
           </Grid>

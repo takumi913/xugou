@@ -1,9 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
   Flex,
-  Heading,
   Text,
   IconButton,
   Grid,
@@ -39,17 +38,26 @@ import {
   ViewGridIcon,
   ReloadIcon,
   InfoCircledIcon,
+  DownloadIcon,
+  UploadIcon,
 } from "@radix-ui/react-icons";
+import { toast } from "sonner";
 import {
   getAllMonitors,
   deleteMonitor,
   getAllDailyStats,
   getAllMonitorHistory,
+  updateMonitorsOrder,
+  exportMonitors,
+  importMonitors,
 } from "../../api/monitors";
+import { downloadJson, readJsonArrayFile } from "../../utils/importExport";
 import { MonitorWithDailyStatsAndStatusHistory } from "../../types/monitors";
 import MonitorCard from "../../components/MonitorCard";
+import PageLoading from "../../components/PageLoading";
 import { useTranslation } from "react-i18next";
 import { usePolling } from "../../hooks/usePolling";
+import { monitorStatusColors } from "../../utils/statusColors";
 
 const MonitorsList = () => {
   const navigate = useNavigate();
@@ -63,6 +71,10 @@ const MonitorsList = () => {
   const [selectedMonitorId, setSelectedMonitorId] = useState<number | null>(
     null
   );
+  // 拖拽排序状态（仅卡片视图启用）
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const { t } = useTranslation();
 
   // 获取监控数据
@@ -138,6 +150,64 @@ const MonitorsList = () => {
     fetchData();
   };
 
+  // 拖拽落点：本地乐观重排 → 调 order 接口，失败回滚并 toast
+  const handleDrop = async (targetId: number) => {
+    const sourceId = draggingId;
+    setDraggingId(null);
+    setDragOverId(null);
+    if (sourceId === null || sourceId === targetId) return;
+
+    const fromIndex = monitors.findIndex((monitor) => monitor.id === sourceId);
+    const toIndex = monitors.findIndex((monitor) => monitor.id === targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+
+    const previous = monitors;
+    const next = [...monitors];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setMonitors(next);
+
+    const response = await updateMonitorsOrder(
+      next.map((monitor) => monitor.id)
+    );
+    if (!response.success) {
+      setMonitors(previous);
+      toast.error(t("common.orderSaveError"));
+    }
+  };
+
+  // 导出为 JSON 文件下载
+  const handleExport = async () => {
+    try {
+      const data = await exportMonitors();
+      downloadJson(data, "xugou-monitors.json");
+    } catch (err) {
+      console.error("导出监控失败:", err);
+      toast.error(t("common.exportError"));
+    }
+  };
+
+  // 导入：读取文件 → POST → toast 显示 {created, skipped}
+  const handleImportFile = async (file: File) => {
+    const items = await readJsonArrayFile(file);
+    if (!items) {
+      toast.error(t("common.importInvalidFile"));
+      return;
+    }
+    const response = await importMonitors(items);
+    if (response.success) {
+      toast.success(
+        t("common.importResult", {
+          created: response.created ?? 0,
+          skipped: response.skipped ?? 0,
+        })
+      );
+      fetchData();
+    } else {
+      toast.error(response.message || t("common.importError"));
+    }
+  };
+
   // 打开删除确认对话框
   const handleDeleteClick = (id: number) => {
     setSelectedMonitorId(id);
@@ -174,30 +244,19 @@ const MonitorsList = () => {
   const StatusIcon = ({ status }: { status: string }) => {
     switch (status) {
       case "up":
-        return <CheckCircledIcon style={{ color: "var(--green-9)" }} />;
+        return <CheckCircledIcon style={{ color: "var(--accent-green)" }} />;
       case "down":
-        return <CrossCircledIcon style={{ color: "var(--red-9)" }} />;
+        return <CrossCircledIcon style={{ color: "var(--accent-red)" }} />;
       default:
-        return <QuestionMarkCircledIcon style={{ color: "var(--gray-9)" }} />;
+        return (
+          <QuestionMarkCircledIcon style={{ color: "var(--text-secondary)" }} />
+        );
     }
-  };
-
-  // 状态颜色映射
-  const statusColors: { [key: string]: "green" | "red" | "gray" } = {
-    up: "green",
-    down: "red",
-    pending: "gray",
   };
 
   // 加载中显示
   if (loading) {
-    return (
-      <Box>
-        <Flex justify="center" align="center" p="4">
-          <Text>{t("common.loading")}</Text>
-        </Flex>
-      </Box>
-    );
+    return <PageLoading />;
   }
 
   // 错误显示
@@ -219,7 +278,7 @@ const MonitorsList = () => {
   return (
     <Container className="sm:px-6 lg:px-[8%]">
       <Flex justify="between" align="start" direction={{ initial: "column", sm: "row" }}>
-        <Heading size="6">{t("monitors.pageTitle")}</Heading>
+        <h1 className="prompt-title">{t("monitors.pageTitle")}</h1>
         <Flex className="mt-4 space-x-2">
           <Tabs defaultValue="grid">
             <TabsList>
@@ -239,6 +298,28 @@ const MonitorsList = () => {
             <ReloadIcon />
             {t("monitors.refresh")}
           </Button>
+          <Button variant="secondary" onClick={handleExport}>
+            <DownloadIcon />
+            {t("common.export")}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => importInputRef.current?.click()}
+          >
+            <UploadIcon />
+            {t("common.import")}
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) handleImportFile(file);
+            }}
+          />
           <Button
             variant="secondary"
             onClick={() => navigate("/monitors/create")}
@@ -252,14 +333,8 @@ const MonitorsList = () => {
       <Container className="my-4 space-x-2">
         {monitors.length === 0 ? (
           <Card>
-            <Flex
-              direction="column"
-              align="center"
-              justify="center"
-              p="6"
-              gap="3"
-            >
-              <Text>{t("monitors.notFound")}</Text>
+            <Flex direction="column" align="center" justify="center" gap="3" pb="6">
+              <div className="empty-state">{t("monitors.notFound")}</div>
               <Button onClick={() => navigate("/monitors/create")}>
                 <PlusIcon />
                 {t("monitors.addOne")}
@@ -291,7 +366,7 @@ const MonitorsList = () => {
                   <TableCell>
                     <Flex align="center" gap="2">
                       <StatusIcon status={monitor.status} />
-                      <Badge color={statusColors[monitor.status]}>
+                      <Badge color={monitorStatusColors[monitor.status] ?? "gray"}>
                         {monitor.status === "up"
                           ? t("monitors.status.up")
                           : monitor.status === "down"
@@ -338,10 +413,40 @@ const MonitorsList = () => {
             </TableBody>
           </Table>
         ) : (
-          // 网格视图 - 使用 MonitorCard 组件
+          // 网格视图 - 使用 MonitorCard 组件（原生 HTML5 拖拽排序）
           <Grid columns={{ initial: "1" }} gap="4">
             {monitors.map((monitor) => (
-              <Box key={`${monitor.id}-${Math.random()}`} className="relative">
+              <Box
+                key={monitor.id}
+                className={`relative drag-item${
+                  draggingId === monitor.id ? " dragging" : ""
+                }${
+                  dragOverId === monitor.id && draggingId !== monitor.id
+                    ? " drag-over"
+                    : ""
+                }`}
+                draggable
+                onDragStart={(e: DragEvent<HTMLDivElement>) => {
+                  setDraggingId(monitor.id);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setDraggingId(null);
+                  setDragOverId(null);
+                }}
+                onDragOver={(e: DragEvent<HTMLDivElement>) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (dragOverId !== monitor.id) setDragOverId(monitor.id);
+                }}
+                onDragLeave={() => {
+                  if (dragOverId === monitor.id) setDragOverId(null);
+                }}
+                onDrop={(e: DragEvent<HTMLDivElement>) => {
+                  e.preventDefault();
+                  handleDrop(monitor.id);
+                }}
+              >
                 <MonitorCard monitor={monitor} />
                 <Flex gap="2" className="absolute top-4 right-4">
                   <IconButton

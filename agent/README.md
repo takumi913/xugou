@@ -40,6 +40,18 @@ go build -o xugou-agent
 
 # 启动客户端
 ./xugou-agent start
+
+# 查看运行状态与配置（版本、配置文件、systemd 服务状态、服务器连通性）
+./xugou-agent status
+
+# 一条命令自升级到最新版本（systemd 环境通常需要 sudo，升级后自动重启服务）
+sudo ./xugou-agent update
+
+# 仅检查是否有新版本，不执行升级
+./xugou-agent update --check
+
+# 一条命令自卸载（移除 systemd 服务、配置文件与二进制自身，--yes 跳过确认）
+sudo ./xugou-agent uninstall
 ```
 
 ### 配置选项

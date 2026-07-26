@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom"; // 导入 Link
-import { Flex, Heading, Text } from "@/components/ui/theme-shim";
-import { Button, Card, Input } from "@/components/ui";
+import { Flex, Text } from "@/components/ui/theme-shim";
+import { Button, Input } from "@/components/ui";
 import { useAuth } from "../../providers/AuthProvider";
 import { useTranslation } from "react-i18next";
 import { getAllowNewUserRegistration } from "../../api/settings"; // 导入新的 API 函数
@@ -81,22 +81,20 @@ const Login = () => {
       <Flex
         justify="center"
         align="center"
-        style={{ minHeight: "calc(100vh - 130px)", padding: "2rem 0" }}
+        className="min-h-[calc(100vh-130px)] py-8"
       >
-        <Card style={{ width: "400px", padding: "2rem" }}>
+        <div className="terminal-card w-[400px] max-w-full p-8">
           <Flex direction="column" gap="4">
-            <Heading align="center" size="6">
-              {t("login.title")}
-            </Heading>
+            <h1 className="prompt-title text-center">{t("login.title")}</h1>
 
             {message && (
-              <Text color="green" align="center">
+              <Text align="center" className="text-[var(--accent-green)]">
                 {message}
               </Text>
             )}
 
             {error && (
-              <Text color="red" align="center">
+              <Text align="center" className="text-[var(--accent-red)]">
                 {error}
               </Text>
             )}
@@ -108,7 +106,6 @@ const Login = () => {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
-                  className="text-gray-900"
                 />
                 <Input
                   placeholder={t("login.password")}
@@ -116,7 +113,6 @@ const Login = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="text-gray-900"
                 />
 
                 <Button type="submit" disabled={isLoading}>
@@ -131,14 +127,14 @@ const Login = () => {
                 {t("login.registerLink")}{" "}
                 <Link
                   to="/register"
-                  style={{ color: "var(--accent-9)", textDecoration: "none" }}
+                  className="text-[var(--accent-green)] no-underline hover:underline"
                 >
                   {t("navbar.register")}
                 </Link>
               </Text>
             )}
           </Flex>
-        </Card>
+        </div>
       </Flex>
     </div>
   );
