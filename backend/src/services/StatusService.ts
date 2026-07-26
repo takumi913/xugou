@@ -39,6 +39,7 @@ function parseSnapshot(snapshotJson: string) {
  * 公开状态页 agent 字段白名单投影。
  * 无鉴权接口只输出公开页确实展示的字段；新增列默认不进公开响应，
  * 需要展示时必须在此显式加入（token/price/expire_date 等敏感字段永不加入；
+ * ip_addresses 会直接暴露服务器攻击面，永不加入；
  * geo_latitude/geo_longitude/geo_city/geo_region_name 属城市级定位，按隐私
  * 分级仅供管理端使用，绝不加入本白名单）。
  * 导出仅供契约测试断言投影字段集，业务方请走 toPublicAgents。
@@ -51,7 +52,6 @@ export function toPublicAgent(agent: Agent) {
     hostname: agent.hostname,
     os: agent.os,
     version: agent.version,
-    ip_addresses: agent.ip_addresses,
     // 地区为粗粒度国家码（ISO 3166-1 alpha-2），公开展示合理（与 CF-SM 一致）
     region: agent.region ?? null,
     created_at: agent.created_at,

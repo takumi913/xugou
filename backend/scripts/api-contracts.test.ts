@@ -490,6 +490,11 @@ assert.equal(
   "public agent projection must not expose token"
 );
 assert.equal(
+  "ip_addresses" in publicAgentProjection,
+  false,
+  "public agent projection must not expose ip_addresses"
+);
+assert.equal(
   publicAgentProjection.region,
   "JP",
   "public agent projection keeps coarse country-level region"

@@ -220,6 +220,8 @@ const StatusPage = () => {
                             metrics: selectedAgentMetrics || [],
                           }}
                           liveMetric={displayMetricFor(agent)}
+                          // 公开页不展示 IP（后端投影已剥离，此处双保险）
+                          showIpAddress={false}
                         />
                       )}
                     </div>
