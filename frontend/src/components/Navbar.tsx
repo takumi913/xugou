@@ -23,6 +23,7 @@ import {
   CubeIcon,
   PieChartIcon,
   BellIcon,
+  ColorWheelIcon,
   HamburgerMenuIcon,
   DownloadIcon,
 } from "@radix-ui/react-icons";
@@ -156,6 +157,14 @@ const Navbar = () => {
                             </Text>
                           </Flex>
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => navigate("/themes")}>
+                          <Flex gap="2" align="center">
+                            <ColorWheelIcon width="14" height="14" />
+                            <Text className="pl-2" size="2">
+                              {t("navbar.themes")}
+                            </Text>
+                          </Flex>
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={promptPWAInstall}>
                           <Flex gap="2" align="center">
                             <DownloadIcon width="14" height="14" />
@@ -264,6 +273,20 @@ const Navbar = () => {
                         <BellIcon width="14" height="14" />
                         <Text ml="1" size="2">
                           {t("navbar.notifications")}
+                        </Text>
+                      </Button>
+                    </Link>
+
+                    <Link
+                      to="/themes"
+                      className={`nav-link ${
+                        isActive("/themes") ? "active" : ""
+                      }`}
+                    >
+                      <Button variant="ghost">
+                        <ColorWheelIcon width="14" height="14" />
+                        <Text ml="1" size="2">
+                          {t("navbar.themes")}
                         </Text>
                       </Button>
                     </Link>

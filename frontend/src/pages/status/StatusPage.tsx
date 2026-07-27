@@ -15,12 +15,14 @@ import {
 } from "../../types";
 import { useParams } from "react-router-dom";
 import { usePolling } from "../../hooks/usePolling";
+import { useTheme } from "../../providers/ThemeProvider";
 import { createLiveSocket } from "../../utils/liveSocket";
 import { mergeLatestMetric } from "../../utils/metrics";
 
 const StatusPage = () => {
   const { t } = useTranslation();
   const { userId } = useParams<{ userId: string }>();
+  const { setThemeOverride } = useTheme();
   const [data, setData] = useState<{
     monitors: MonitorWithDailyStatsAndStatusHistory[];
     agents: AgentWithLatestMetrics[];
@@ -68,6 +70,9 @@ const StatusPage = () => {
           monitors: response.monitors || [],
           agents: response.agents || [],
         });
+        // 公开状态页按站长所选主题渲染（未知 id 由 provider 回退默认主题；
+        // 访客自己的明暗偏好仍然生效）
+        setThemeOverride(response.theme || "mono");
       } else {
         setError(t("statusPage.fetchError"));
       }
@@ -83,7 +88,12 @@ const StatusPage = () => {
         setLoading(false);
       }
     }
-  }, [t, userId]);
+  }, [t, userId, setThemeOverride]);
+
+  // 离开状态页时恢复访客自己的主题
+  useEffect(() => {
+    return () => setThemeOverride(null);
+  }, [setThemeOverride]);
 
   // WS 连接正常时拉长轮询间隔，仅作兜底；断开时恢复常规轮询（与 Dashboard 一致）
   usePolling(fetchData, {

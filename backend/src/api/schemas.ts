@@ -283,6 +283,14 @@ export const statusPageConfigSchema = z.object({
   description: z.string().trim().max(500),
   logoUrl: z.string().trim().max(2048).optional().default(""),
   customCss: z.string().max(20000).optional().default(""),
+  // 主题 id：与前端主题文件夹名一致（kebab-case）；服务端只做格式校验，
+  // 未知 id 由前端回退默认主题
+  theme: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9][a-z0-9-]{0,31}$/)
+    .optional()
+    .default("mono"),
   monitors: z.array(z.coerce.number().int().positive()).default([]),
   agents: z.array(z.coerce.number().int().positive()).default([]),
 });

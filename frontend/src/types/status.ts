@@ -22,6 +22,7 @@ export interface StatusPageConfigResponse {
   description?: string;
   logoUrl?: string;
   customCss?: string;
+  theme?: string;
   monitors?: ConfigMonitor[];
   agents?: ConfigAgent[];
 }
@@ -31,6 +32,7 @@ export interface StatusPageConfig {
   description: string;
   logoUrl: string;
   customCss: string;
+  theme: string;
   monitors: number[];
   agents: number[];
 }
@@ -40,6 +42,7 @@ export interface StatusPageData {
   description: string;
   logoUrl: string;
   customCss: string;
+  theme?: string;
   monitors: MonitorWithDailyStatsAndStatusHistory[];
   agents: AgentWithLatestMetrics[];
 }

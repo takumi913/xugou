@@ -5,6 +5,19 @@ const enUS = {
     "navbar.apiMonitors": "API Monitors",
     "navbar.agentMonitors": "Agent Monitors",
     "navbar.statusPage": "Status Page",
+    "navbar.themes": "Themes",
+
+    // Theme list page
+    "themes.title": "Themes",
+    "themes.description":
+      "The selected theme applies to your UI immediately and syncs to your public status page (visitors keep their own light/dark preference).",
+    "themes.apply": "Apply",
+    "themes.applying": "Applying...",
+    "themes.current": "In use",
+    "themes.applied": "Theme {{name}} applied",
+    "themes.syncFailed": "Theme applied locally, but syncing to the status page failed",
+    "themes.statusPageSynced": "Used by status page",
+    "themes.extendHint": "Want to build your own theme? See the spec at",
     "navbar.notifications": "Notifications",
     "navbar.installApp": "Install App",
     "navbar.userManagement": "User Management",

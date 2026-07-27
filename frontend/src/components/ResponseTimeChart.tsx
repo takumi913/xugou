@@ -55,7 +55,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
   showTimeLabels = true,
 }) => {
   const { t } = useTranslation();
-  const { resolvedTheme } = useTheme();
+  const { resolvedTheme, activeTheme } = useTheme();
   const chartRef = useRef<ChartJS<"line">>(null);
 
   // 格式化时间的函数使用 useCallback 缓存
@@ -114,7 +114,7 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
 
   // 使用 useMemo 缓存基础图表选项（resolvedTheme 变化时重建，驱动图表换轴色）
   const baseChartOptions = useMemo<ChartOptions<"line">>(() => {
-    const themeColors = getChartTheme(resolvedTheme);
+    const themeColors = getChartTheme(activeTheme, resolvedTheme);
 
     return {
       responsive: true,
@@ -238,10 +238,10 @@ const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({
       },
       events: ["mouseout", "mousemove", "touchstart", "touchmove"],
     };
-  }, [t, showTimeLabels, tooltipCallbacks, resolvedTheme]);
+  }, [t, showTimeLabels, tooltipCallbacks, activeTheme, resolvedTheme]);
 
   // 数据线色板随明暗主题切换（浅色主题用更深的变体，与终端 accent 一致）
-  const chartColors = getChartColors(resolvedTheme);
+  const chartColors = getChartColors(activeTheme, resolvedTheme);
 
   // 处理数据并生成图表数据，使用 useMemo 缓存结果
   const { chartData, timeRange, yAxisMax } = useMemo(() => {

@@ -5,6 +5,19 @@ const zhCN = {
     "navbar.apiMonitors": "API监控",
     "navbar.agentMonitors": "客户端监控",
     "navbar.statusPage": "状态页",
+    "navbar.themes": "主题",
+
+    // 主题列表页
+    "themes.title": "主题",
+    "themes.description":
+      "选择的主题会立即应用到你的界面，并同步到你的公开状态页（访客的明暗偏好仍然生效）。",
+    "themes.apply": "应用",
+    "themes.applying": "应用中...",
+    "themes.current": "使用中",
+    "themes.applied": "已应用主题 {{name}}",
+    "themes.syncFailed": "主题已在本地生效，但同步到状态页失败",
+    "themes.statusPageSynced": "状态页使用中",
+    "themes.extendHint": "想制作自己的主题？规范与步骤见",
     "navbar.notifications": "通知",
     "navbar.installApp": "安装应用",
     "navbar.userManagement": "用户管理",

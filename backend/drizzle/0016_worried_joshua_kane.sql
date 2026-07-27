@@ -1,0 +1,1 @@
+ALTER TABLE `status_page_config` ADD `theme` text DEFAULT 'mono';

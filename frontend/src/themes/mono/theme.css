@@ -1,0 +1,93 @@
+/*
+ * 主题：mono — 黑灰简约（默认主题 / 参考实现）
+ *
+ * 规范要点（详见 ../README.md）：
+ * 1. 必须提供两个块：深色 :root[data-theme="<id>"] 与浅色 :root[data-theme="<id>"].light；
+ *    两个块必须覆盖完全相同的变量集合（浅色块缺变量会导致浅色模式漏出深色值）。
+ * 2. 变量集合 = 语义变量（--bg-*、--border-*、--text-*、--accent-*、--input-* 系列）
+ *    + 组件库映射（--card/--popover/--primary-foreground/--secondary/--muted/
+ *    --accent/--sidebar/--sidebar-primary-foreground/--sidebar-accent）。
+ * 3. --accent-red 是全站唯一的「告警」语义，任何主题都必须保证它与正常态可区分。
+ * 4. 可选：--terminal-dot-1/2/3 控制终端窗口三圆点配色（缺省用全局灰阶）。
+ *
+ * 本主题与 global.css 的兜底变量取值一致（global.css 承担无 JS/首帧回退）。
+ */
+
+:root[data-theme="mono"] {
+  --bg-primary: #0c0c0c;
+  --bg-secondary: rgba(22, 22, 22, 0.6);
+  --bg-card: rgba(26, 26, 26, 0.6);
+  --bg-hover: rgba(38, 38, 38, 0.6);
+
+  --border-color: #262626;
+  --border-active: #3f3f3f;
+
+  --text-primary: #e0e0e0;
+  --text-secondary: #8c8c8c;
+  --text-muted: rgba(224, 224, 224, 0.8);
+
+  /* 语义槽位：green=主强调/正常，blue/yellow=用量升档，red=告警（唯一彩色） */
+  --accent-green: #b8b8b8;
+  --accent-blue: #d6d6d6;
+  --accent-purple: #858585;
+  --accent-pink: #6e6e6e;
+  --accent-yellow: #f2f2f2;
+  --accent-red: #f85149;
+  --accent-cyan: #cfcfcf;
+
+  --input-bg: #111111;
+  --input-border: #2a2a2a;
+
+  --card: #141414;
+  --popover: #111111;
+  --primary-foreground: #0c0c0c;
+  --secondary: #1f1f1f;
+  --muted: #191919;
+  --accent: #1f1f1f;
+  --sidebar: #141414;
+  --sidebar-primary-foreground: #0c0c0c;
+  --sidebar-accent: #1f1f1f;
+
+  --terminal-dot-1: #9e9e9e;
+  --terminal-dot-2: #757575;
+  --terminal-dot-3: #525252;
+}
+
+:root[data-theme="mono"].light {
+  --bg-primary: #f7f7f7;
+  --bg-secondary: rgba(238, 238, 238, 0.6);
+  --bg-card: rgba(255, 255, 255, 0.6);
+  --bg-hover: rgba(232, 232, 232, 0.6);
+
+  --border-color: #dcdcdc;
+  --border-active: #bdbdbd;
+
+  --text-primary: #1f1f1f;
+  --text-secondary: #616161;
+  --text-muted: rgba(15, 15, 15, 0.8);
+
+  --accent-green: #4a4a4a;
+  --accent-blue: #2e2e2e;
+  --accent-purple: #6b6b6b;
+  --accent-pink: #7d7d7d;
+  --accent-yellow: #111111;
+  --accent-red: #dc2626;
+  --accent-cyan: #575757;
+
+  --input-bg: #ffffff;
+  --input-border: #dcdcdc;
+
+  --card: #ffffff;
+  --popover: #ffffff;
+  --primary-foreground: #f7f7f7;
+  --secondary: #ebebeb;
+  --muted: #efefef;
+  --accent: #ebebeb;
+  --sidebar: #ffffff;
+  --sidebar-primary-foreground: #f7f7f7;
+  --sidebar-accent: #ebebeb;
+
+  --terminal-dot-1: #9e9e9e;
+  --terminal-dot-2: #757575;
+  --terminal-dot-3: #525252;
+}

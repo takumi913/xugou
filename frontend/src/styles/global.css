@@ -214,7 +214,8 @@
   text-underline-offset: 4px;
 }
 
-/* 终端窗口三圆点（黑灰简约：由深到浅的灰阶，不随主题） */
+/* 终端窗口三圆点：主题可通过 --terminal-dot-1/2/3 覆盖（见 themes/README.md），
+   缺省为黑灰简约的灰阶 */
 .terminal-dot {
   width: 12px;
   height: 12px;
@@ -223,15 +224,15 @@
 }
 
 .terminal-dot.red {
-  background: #9e9e9e;
+  background: var(--terminal-dot-1, #9e9e9e);
 }
 
 .terminal-dot.yellow {
-  background: #757575;
+  background: var(--terminal-dot-2, #757575);
 }
 
 .terminal-dot.green {
-  background: #525252;
+  background: var(--terminal-dot-3, #525252);
 }
 
 /* --------------------------------------------------------------------------

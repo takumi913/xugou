@@ -117,7 +117,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
   loadType = "1",
 }) => {
   const { t } = useTranslation();
-  const { resolvedTheme } = useTheme();
+  const { resolvedTheme, activeTheme } = useTheme();
   const chartRef = useRef<ChartJS<"line">>(null);
 
   // 管理选中的磁盘/网络设备
@@ -227,7 +227,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
   }, []);
 
   // 数据线色板随明暗主题切换（浅色主题用更深的变体，与终端 accent 一致）
-  const chartColors = getChartColors(resolvedTheme);
+  const chartColors = getChartColors(activeTheme, resolvedTheme);
 
   // 获取指标显示名称、单位及 CF-SM 色板颜色（填充为同色低透明度）
   const getMetricConfig = useCallback(
@@ -482,7 +482,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
   // 使用 useMemo 缓存基础图表选项（resolvedTheme 变化时重建，驱动图表换轴色）
   const baseChartOptions = useMemo<ChartOptions<"line">>(() => {
     const config = getMetricConfig(metricType);
-    const themeColors = getChartTheme(resolvedTheme);
+    const themeColors = getChartTheme(activeTheme, resolvedTheme);
 
     return {
       responsive: true,
@@ -624,6 +624,7 @@ const MetricsChart: React.FC<MetricsChartProps> = ({
     tooltipCallbacks,
     metricType,
     getMetricConfig,
+    activeTheme,
     resolvedTheme,
   ]);
 

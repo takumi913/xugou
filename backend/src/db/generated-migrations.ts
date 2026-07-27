@@ -509,5 +509,9 @@ ALTER TABLE \`agents\` ADD \`geo_longitude\` real;
 ALTER TABLE \`agents\` ADD \`geo_city\` text;
 --> statement-breakpoint
 ALTER TABLE \`agents\` ADD \`geo_region_name\` text;`
+  },
+  {
+    name: "0016_worried_joshua_kane.sql",
+    sql: `ALTER TABLE \`status_page_config\` ADD \`theme\` text DEFAULT 'mono';`
   }
 ];

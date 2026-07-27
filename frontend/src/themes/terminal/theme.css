@@ -1,0 +1,86 @@
+/*
+ * 主题：terminal — 绿色终端风（第二套参考实现）
+ *
+ * 复刻 CF-Server-Monitor 式的经典绿色 CRT 终端配色：深蓝黑底、
+ * 荧光绿主强调、彩色语义色与 macOS 三色窗口圆点。
+ * 结构规范与 mono 完全一致，见 ../README.md。
+ */
+
+:root[data-theme="terminal"] {
+  --bg-primary: #0a0e14;
+  --bg-secondary: rgba(18, 23, 31, 0.6);
+  --bg-card: rgba(21, 27, 38, 0.6);
+  --bg-hover: rgba(26, 34, 48, 0.6);
+
+  --border-color: #1e2a3a;
+  --border-active: #2a3a4f;
+
+  --text-primary: #d3dae3;
+  --text-secondary: #8999af;
+  --text-muted: rgba(211, 218, 227, 0.8);
+
+  --accent-green: #00d4aa;
+  --accent-blue: #4da6ff;
+  --accent-purple: #b392f0;
+  --accent-pink: #f778ba;
+  --accent-yellow: #ffb870;
+  --accent-red: #f85149;
+  --accent-cyan: #39d2c0;
+
+  --input-bg: #0d1117;
+  --input-border: #21262d;
+
+  --card: #11161f;
+  --popover: #0d1117;
+  --primary-foreground: #0a0e14;
+  --secondary: #1a2230;
+  --muted: #151b26;
+  --accent: #1a2230;
+  --sidebar: #11161f;
+  --sidebar-primary-foreground: #0a0e14;
+  --sidebar-accent: #1a2230;
+
+  /* macOS 经典三色窗口圆点 */
+  --terminal-dot-1: #ff5f56;
+  --terminal-dot-2: #ffbd2e;
+  --terminal-dot-3: #27c93f;
+}
+
+:root[data-theme="terminal"].light {
+  --bg-primary: #f5f5f0;
+  --bg-secondary: rgba(232, 232, 224, 0.6);
+  --bg-card: rgba(250, 250, 245, 0.6);
+  --bg-hover: rgba(240, 240, 232, 0.6);
+
+  --border-color: #d4d4c8;
+  --border-active: #b8b8a8;
+
+  --text-primary: #2c2c2c;
+  --text-secondary: #5c5c5c;
+  --text-muted: rgba(10, 14, 20, 0.8);
+
+  --accent-green: #1a7f5a;
+  --accent-blue: #2563eb;
+  --accent-purple: #7c3aed;
+  --accent-pink: #db2777;
+  --accent-yellow: #d97706;
+  --accent-red: #dc2626;
+  --accent-cyan: #0d9488;
+
+  --input-bg: #ffffff;
+  --input-border: #d4d4c8;
+
+  --card: #f8f8f3;
+  --popover: #ffffff;
+  --primary-foreground: #f5f5f0;
+  --secondary: #e8e8e0;
+  --muted: #eceae2;
+  --accent: #e8e8e0;
+  --sidebar: #f8f8f3;
+  --sidebar-primary-foreground: #f5f5f0;
+  --sidebar-accent: #e8e8e0;
+
+  --terminal-dot-1: #ff5f56;
+  --terminal-dot-2: #ffbd2e;
+  --terminal-dot-3: #27c93f;
+}

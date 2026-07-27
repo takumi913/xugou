@@ -38,6 +38,8 @@ interface StatusConfigWithDetails {
   description: string;
   logoUrl: string;
   customCss: string;
+  // 主题 id 在「主题」页管理，这里仅透传，避免保存时被重置
+  theme: string;
   publicUrl: string;
   monitors: MonitorWithSelection[];
   agents: AgentWithSelection[];
@@ -56,6 +58,7 @@ const StatusPageConfig = () => {
     description: t("statusPage.allOperational"),
     logoUrl: "",
     customCss: "",
+    theme: "mono",
     publicUrl: "",
     monitors: [],
     agents: [],
@@ -89,6 +92,7 @@ const StatusPageConfig = () => {
             configResponse?.description || t("statusPage.allOperational"),
           logoUrl: configResponse?.logoUrl || "",
           customCss: configResponse?.customCss || "",
+          theme: configResponse?.theme || "mono",
           monitors: configResponse.monitors || [],
           agents: configResponse.agents || [],
         }));
@@ -165,6 +169,7 @@ const StatusPageConfig = () => {
       description: config.description,
       logoUrl: config.logoUrl,
       customCss: config.customCss,
+      theme: config.theme,
       monitors: config.monitors
         .filter((m: MonitorWithSelection) => m.selected)
         .map((m: MonitorWithSelection) => m.id),

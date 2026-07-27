@@ -170,6 +170,7 @@ export async function getStatusPageConfig(userId: number) {
       description: existingConfig?.description || "",
       logoUrl: existingConfig?.logo_url || "",
       customCss: existingConfig?.custom_css || "",
+      theme: existingConfig?.theme || "mono",
       monitors: monitors,
       agents: agents,
     };
@@ -192,6 +193,7 @@ export async function saveStatusPageConfig(
     description: string;
     logoUrl: string;
     customCss: string;
+    theme?: string;
     monitors: number[];
     agents: number[];
   },
@@ -226,6 +228,8 @@ export async function saveStatusPageConfig(
 
     let configId: number;
 
+    const theme = data.theme || "mono";
+
     if (existingConfig && existingConfig.id) {
       // 更新现有配置
       await repositories.updateStatusPageConfig(
@@ -233,7 +237,8 @@ export async function saveStatusPageConfig(
         data.title,
         data.description,
         data.logoUrl,
-        data.customCss
+        data.customCss,
+        theme
       );
       configId = existingConfig.id;
     } else {
@@ -243,7 +248,8 @@ export async function saveStatusPageConfig(
         data.title,
         data.description,
         data.logoUrl,
-        data.customCss
+        data.customCss,
+        theme
       );
 
       if (!newConfigId) {
@@ -300,6 +306,7 @@ async function buildStatusPagePublicData(userId: number) {
       description: "当前没有可用的状态页配置。",
       logoUrl: "",
       customCss: "",
+      theme: "mono",
       monitors: [],
       agents: [],
     };
@@ -379,6 +386,7 @@ async function buildStatusPagePublicData(userId: number) {
     description: config.description,
     logoUrl: config.logo_url,
     customCss: config.custom_css,
+    theme: config.theme || "mono",
     monitors: monitors,
     agents: agents,
   };

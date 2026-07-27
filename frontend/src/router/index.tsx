@@ -37,6 +37,9 @@ const NotificationsConfig = lazy(
   () => import("../pages/notifications/NotificationsConfig")
 );
 
+// 主题列表页面组件
+const ThemeList = lazy(() => import("../pages/themes/ThemeList"));
+
 // 认证页面组件
 const Login = lazy(() => import("../pages/auth/Login"));
 const Register = lazy(() => import("../pages/auth/Register"));
@@ -194,6 +197,17 @@ const protectedRoutes: RouteObject[] = [
       <ProtectedRoute>
         <Suspense fallback={<PageLoading />}>
           <NotificationsConfig />
+        </Suspense>
+      </ProtectedRoute>
+    ),
+  },
+  // 主题列表页面
+  {
+    path: "/themes",
+    element: (
+      <ProtectedRoute>
+        <Suspense fallback={<PageLoading />}>
+          <ThemeList />
         </Suspense>
       </ProtectedRoute>
     ),

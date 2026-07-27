@@ -59,7 +59,8 @@ export async function updateStatusPageConfig(
   title: string,
   description: string,
   logoUrl: string,
-  customCss: string
+  customCss: string,
+  theme: string = "mono"
 ) {
   return await db
     .update(statusPageConfig)
@@ -68,6 +69,7 @@ export async function updateStatusPageConfig(
       description: description,
       logo_url: logoUrl,
       custom_css: customCss,
+      theme: theme,
     })
     .where(eq(statusPageConfig.id, id));
 }
@@ -78,7 +80,8 @@ export async function createStatusPageConfig(
   title: string,
   description: string,
   logoUrl: string,
-  customCss: string
+  customCss: string,
+  theme: string = "mono"
 ) {
   const result = await db
     .insert(statusPageConfig)
@@ -88,6 +91,7 @@ export async function createStatusPageConfig(
       description: description,
       logo_url: logoUrl,
       custom_css: customCss,
+      theme: theme,
     })
     .returning({ id: statusPageConfig.id }); // D1/SQLite 需要这样获取ID
 

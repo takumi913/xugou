@@ -338,6 +338,8 @@ export const statusPageConfig = sqliteTable(
     description: text("description").default("系统当前运行状态"),
     logo_url: text("logo_url").default(""),
     custom_css: text("custom_css").default(""),
+    // 状态页主题 id（对应前端 frontend/src/themes/<id>/，未知 id 前端回退默认主题）
+    theme: text("theme").default("mono"),
     created_at: text("created_at").default("CURRENT_TIMESTAMP"),
     updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
   },
