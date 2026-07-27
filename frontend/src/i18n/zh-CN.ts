@@ -6,6 +6,8 @@ const zhCN = {
     "navbar.agentMonitors": "客户端监控",
     "navbar.statusPage": "状态页",
     "navbar.themes": "主题",
+    "tagSelect.selectAll": "全选",
+    "tagSelect.clear": "清空",
 
     // 主题列表页
     "themes.title": "主题",

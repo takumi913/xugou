@@ -52,7 +52,7 @@ import type {
   NotificationChannel as ApiNotificationChannel,
   NotificationTemplate as ApiNotificationTemplate,
 } from "../../types/notification";
-import ChannelSelector from "../../components/ChannelSelector";
+import TagSelect from "../../components/TagSelect";
 
 // 渠道表单 config 的空值（扁平结构，按渠道类型取用对应字段）
 const emptyChannelConfig = {
@@ -750,6 +750,13 @@ const NotificationsConfig = () => {
     }
   };
 
+  // 标签多选的渠道选项（TagSelect 药丸），带类型说明
+  const channelOptions = channels.map((channel) => ({
+    id: channel.id,
+    label: channel.name,
+    hint: t(`notifications.channels.type.${channel.type}`),
+  }));
+
   // 渲染渠道Tab
   const renderChannelsTab = () => {
     if (!settings) return <Text>{t("common.loading")}...</Text>;
@@ -786,7 +793,7 @@ const NotificationsConfig = () => {
               ) : (
                 <Flex direction="column" gap="2">
                   {channels.map((channel) => (
-                    <Card key={channel.id} className="terminal-card px-2">
+                    <div key={channel.id} className="config-section">
                       <Flex className="justify-between items-center">
                         <Flex direction="column" gap="1" className="grow">
                           <Flex gap="2" align="center" className="break-all">
@@ -798,7 +805,7 @@ const NotificationsConfig = () => {
                         </Flex>
                         <Flex gap="2">
                           <Button
-                            variant="secondary"
+                            variant="ghost"
                             className="ml-auto"
                             onClick={() => handleTestChannelClick(channel.id)}
                             disabled={testingChannelId === channel.id}
@@ -808,7 +815,7 @@ const NotificationsConfig = () => {
                               : t("notifications.channels.test")}
                           </Button>
                           <Button
-                            variant="secondary"
+                            variant="ghost"
                             className="ml-auto"
                             onClick={() => handleEditChannelClick(channel)}
                           >
@@ -816,14 +823,14 @@ const NotificationsConfig = () => {
                           </Button>
                           <Button
                             className="ml-auto"
-                            variant="secondary"
+                            variant="ghost"
                             onClick={() => handleDeleteChannelClick(channel.id)}
                           >
                             {t("common.delete")}
                           </Button>
                         </Flex>
                       </Flex>
-                    </Card>
+                    </div>
                   ))}
                 </Flex>
               )}
@@ -865,7 +872,7 @@ const NotificationsConfig = () => {
             ) : (
               <Flex direction="column" gap="3">
                 {templates.map((template) => (
-                  <Card key={template.id} className="terminal-card px-4">
+                  <div key={template.id} className="config-section">
                     <Flex direction="column" gap="3">
                       <Flex justify="between" align="center">
                         <Flex gap="2" align="center">
@@ -878,13 +885,13 @@ const NotificationsConfig = () => {
                         </Flex>
                         <Flex gap="2">
                           <Button
-                            variant="secondary"
+                            variant="ghost"
                             onClick={() => handleEditTemplateClick(template)}
                           >
                             {t("common.edit")}
                           </Button>
                           <Button
-                            variant="secondary"
+                            variant="ghost"
                             onClick={() => handleDeleteTemplateClick(template)}
                             disabled={template.isDefault}
                           >
@@ -905,7 +912,7 @@ const NotificationsConfig = () => {
                         <Box>{template.content}</Box>
                       </Box>
                     </Flex>
-                  </Card>
+                  </div>
                 ))}
               </Flex>
             )}
@@ -928,7 +935,7 @@ const NotificationsConfig = () => {
           <Text className="text-lg">
             {t("notifications.settings.monitors")}
           </Text>
-          <Card className="terminal-card mt-2">
+          <div className="config-section mt-2">
             <Box p="1">
               <Flex direction="column" gap="1" className="px-2">
                 <Flex justify="between" align="center">
@@ -984,9 +991,9 @@ const NotificationsConfig = () => {
                         <Text className="text-xs mb-2">
                           {t("notifications.specificSettings.channels")}
                         </Text>
-                        <ChannelSelector
-                          channels={channels}
-                          selectedChannelIds={settings.monitors.channels}
+                        <TagSelect
+                          options={channelOptions}
+                          selectedIds={settings.monitors.channels}
                           onChange={(channelIds: number[]) =>
                             handleMonitorSettingChange("channels", channelIds)
                           }
@@ -997,13 +1004,13 @@ const NotificationsConfig = () => {
                 )}
               </Flex>
             </Box>
-          </Card>
+          </div>
         </Box>
         <Box>
           <Text className="text-lg mb-2">
             {t("notifications.settings.agents")}
           </Text>
-          <Card className="terminal-card mt-2">
+          <div className="config-section mt-2">
             <Box p="1">
               <Flex direction="column" gap="4" className="px-2">
                 <Flex justify="between" align="center">
@@ -1170,9 +1177,9 @@ const NotificationsConfig = () => {
                         <Text size="2" weight="medium" mb="2">
                           {t("notifications.specificSettings.channels")}
                         </Text>
-                        <ChannelSelector
-                          channels={channels}
-                          selectedChannelIds={settings.agents.channels}
+                        <TagSelect
+                          options={channelOptions}
+                          selectedIds={settings.agents.channels}
                           onChange={(channelIds) =>
                             handleAgentSettingChange("channels", channelIds)
                           }
@@ -1183,7 +1190,7 @@ const NotificationsConfig = () => {
                 )}
               </Flex>
             </Box>
-          </Card>
+          </div>
         </Box>
       </Flex>
     );
@@ -1215,7 +1222,7 @@ const NotificationsConfig = () => {
           };
 
           return (
-            <Card key={monitorId} className="terminal-card px-4">
+            <div key={monitorId} className="config-section">
               <Flex direction="column" gap="3">
                 <Flex justify="between" align="center">
                   <Flex direction="column">
@@ -1282,9 +1289,9 @@ const NotificationsConfig = () => {
                         <Text size="2" weight="medium" mb="2">
                           {t("notifications.specificSettings.channels")}
                         </Text>
-                        <ChannelSelector
-                          channels={channels}
-                          selectedChannelIds={specificSettings.channels}
+                        <TagSelect
+                          options={channelOptions}
+                          selectedIds={specificSettings.channels}
                           onChange={(channelIds) =>
                             handleSpecificMonitorSettingChange(
                               monitorId,
@@ -1298,7 +1305,7 @@ const NotificationsConfig = () => {
                   </Box>
                 )}
               </Flex>
-            </Card>
+            </div>
           );
         })}
       </Flex>
@@ -1337,7 +1344,7 @@ const NotificationsConfig = () => {
           };
 
           return (
-            <Card key={agentId} className="terminal-card px-4">
+            <div key={agentId} className="config-section">
               <Flex direction="column" gap="3">
                 <Flex justify="between" align="center">
                   <Flex direction="column">
@@ -1537,9 +1544,9 @@ const NotificationsConfig = () => {
                         <Text size="2" weight="medium" mb="2">
                           {t("notifications.specificSettings.channels")}
                         </Text>
-                        <ChannelSelector
-                          channels={channels}
-                          selectedChannelIds={specificSettings.channels}
+                        <TagSelect
+                          options={channelOptions}
+                          selectedIds={specificSettings.channels}
                           onChange={(channelIds) =>
                             handleSpecificAgentSettingChange(
                               agentId,
@@ -1553,7 +1560,7 @@ const NotificationsConfig = () => {
                   </Box>
                 )}
               </Flex>
-            </Card>
+            </div>
           );
         })}
       </Flex>
@@ -1689,7 +1696,7 @@ const NotificationsConfig = () => {
               </Select>
             </Box>
 
-            <Card className="terminal-card p-4">
+            <div className="config-section">
               <Flex direction="column" gap="4">
                 {channelForm.type === "telegram" && (
                   <>
@@ -1992,7 +1999,7 @@ const NotificationsConfig = () => {
                   </>
                 )}
               </Flex>
-            </Card>
+            </div>
           </Flex>
           <Flex gap="3" mt="5" justify="end">
             <DialogClose asChild>

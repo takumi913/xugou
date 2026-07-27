@@ -6,6 +6,8 @@ const enUS = {
     "navbar.agentMonitors": "Agent Monitors",
     "navbar.statusPage": "Status Page",
     "navbar.themes": "Themes",
+    "tagSelect.selectAll": "Select all",
+    "tagSelect.clear": "Clear",
 
     // Theme list page
     "themes.title": "Themes",

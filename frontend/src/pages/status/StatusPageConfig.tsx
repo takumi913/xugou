@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Box, Flex, Text, Container } from "@/components/ui/theme-shim";
 import PageLoading from "../../components/PageLoading";
+import TagSelect from "../../components/TagSelect";
 import {
   Button,
   Tabs,
@@ -8,7 +9,6 @@ import {
   TabsList,
   TabsTrigger,
   Textarea,
-  Checkbox,
   Input,
 } from "@/components/ui";
 import { EyeOpenIcon, CopyIcon, CheckIcon } from "@radix-ui/react-icons";
@@ -124,32 +124,6 @@ const StatusPageConfig = () => {
     setConfig((prev) => ({
       ...prev,
       [name]: value,
-    }));
-  };
-
-  // 处理监控选择变化
-  const handleMonitorChange = (id: number, checked: boolean) => {
-    setConfig((prev) => ({
-      ...prev,
-      monitors: prev.monitors.map((monitor) =>
-        monitor.id === id ? { ...monitor, selected: checked } : monitor
-      ),
-    }));
-  };
-
-  // 处理客户端监控选择变化
-  const handleAgentChange = (id: number, checked: boolean) => {
-    // 确保id是有效的数字
-    if (isNaN(id) || id <= 0) {
-      console.error(t("statusPageConfig.invalidAgentId"), id);
-      return;
-    }
-
-    setConfig((prev) => ({
-      ...prev,
-      agents: prev.agents.map((agent) =>
-        agent.id === id ? { ...agent, selected: checked } : agent
-      ),
     }));
   };
 
@@ -355,31 +329,26 @@ const StatusPageConfig = () => {
                   </span>
                 </h2>
 
-                {config.monitors.length === 0 ? (
-                  <div className="empty-state">{t("monitors.noMonitors")}</div>
-                ) : (
-                  <Box>
-                    {config.monitors.map((monitor) => {
-                      return (
-                        <Flex
-                          key={monitor.id}
-                          className="items-center justify-between p-2 hover:bg-[var(--bg-hover)] rounded-md"
-                        >
-                          <Text>{monitor.name}</Text>
-                          <Checkbox
-                            id={`monitor-${monitor.id}`}
-                            className="ml-auto"
-                            checked={monitor.selected}
-                            onCheckedChange={(checked) => {
-                              const newCheckedState = !!checked;
-                              handleMonitorChange(monitor.id, newCheckedState);
-                            }}
-                          />
-                        </Flex>
-                      );
-                    })}
-                  </Box>
-                )}
+                <TagSelect
+                  options={config.monitors.map((monitor) => ({
+                    id: monitor.id,
+                    label: monitor.name,
+                  }))}
+                  selectedIds={config.monitors
+                    .filter((monitor) => monitor.selected)
+                    .map((monitor) => monitor.id)}
+                  onChange={(ids) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      monitors: prev.monitors.map((monitor) => ({
+                        ...monitor,
+                        selected: ids.includes(monitor.id),
+                      })),
+                    }))
+                  }
+                  bulkActions
+                  emptyText={t("monitors.noMonitors")}
+                />
               </Flex>
             </TabsContent>
 
@@ -390,31 +359,26 @@ const StatusPageConfig = () => {
                   <span className="group-count">[{config.agents.length}]</span>
                 </h2>
 
-                {config.agents.length === 0 ? (
-                  <div className="empty-state">{t("agents.noAgents")}</div>
-                ) : (
-                  <Box>
-                    {config.agents.map((agent) => {
-                      return (
-                        <Flex
-                          key={agent.id}
-                          className="items-center justify-between p-2 hover:bg-[var(--bg-hover)] rounded-md"
-                        >
-                          <Text size="3">{agent.name}</Text>
-                          <Checkbox
-                            id={`agent-${agent.id}`}
-                            checked={agent.selected}
-                            className="ml-auto"
-                            onCheckedChange={(checked) => {
-                              const newCheckedState = !!checked;
-                              handleAgentChange(agent.id, newCheckedState);
-                            }}
-                          />
-                        </Flex>
-                      );
-                    })}
-                  </Box>
-                )}
+                <TagSelect
+                  options={config.agents.map((agent) => ({
+                    id: agent.id,
+                    label: agent.name,
+                  }))}
+                  selectedIds={config.agents
+                    .filter((agent) => agent.selected)
+                    .map((agent) => agent.id)}
+                  onChange={(ids) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      agents: prev.agents.map((agent) => ({
+                        ...agent,
+                        selected: ids.includes(agent.id),
+                      })),
+                    }))
+                  }
+                  bulkActions
+                  emptyText={t("agents.noAgents")}
+                />
               </Flex>
             </TabsContent>
           </Box>

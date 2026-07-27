@@ -3,17 +3,6 @@
  */
 import { Monitor } from "./monitors";
 import { Agent, MetricHistory } from "./agents";
-import { NotificationChannel } from "./notification";
-
-
-
-// ChannelSelector 组件类型
-export interface ChannelSelectorProps {
-  channels: NotificationChannel[];
-  selectedChannelIds: number[];
-  onChange: (channelIds: number[]) => void;
-  placeholder?: string;
-}
 
 // MonitorCard 组件类型
 export interface MonitorCardProps {

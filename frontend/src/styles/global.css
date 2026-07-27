@@ -383,6 +383,47 @@
   opacity: 0.85;
 }
 
+/* 标签式多选（TagSelect 组件；复用 filter-tag 药丸视觉） */
+.tag-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-select-actions {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tag-select-actions button {
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tag-select-actions button:hover {
+  color: var(--accent-green);
+}
+
+.tag-select-count {
+  margin-left: auto;
+}
+
+/* 配置分区：页面卡片内的无边框轻层级容器（替代嵌套 border 卡片） */
+.config-section {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 12px 16px;
+}
+
 /* 终端风格紧凑表格（Dashboard table 视图，参照 CF-SM .terminal-table） */
 .table-container {
   background: var(--bg-secondary);
