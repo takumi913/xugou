@@ -19,8 +19,8 @@
       "purpose": "maskable"
     }
   ],
-  "theme_color": "#4F46E5",
-  "background_color": "#ffffff",
+  "theme_color": "#0c0c0c",
+  "background_color": "#0c0c0c",
   "display": "standalone",
   "id": "67920b7d-8a9d-4a86-aa81-7eabc04b1e53",
   "description": "XUGOU 是一个基于 CloudFlare 的轻量化系统监控平台，提供系统监控和状态页面功能。",

@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 背景圆形 -->
-  <circle cx="100" cy="100" r="90" fill="#4F46E5" opacity="0.1"/>
-  
-  <!-- X 字母 -->
-  <path d="M60 60L140 140M140 60L60 140" stroke="#4F46E5" stroke-width="12" stroke-linecap="round"/>
-  
-  <!-- 装饰性圆点 -->
-  <circle cx="100" cy="100" r="4" fill="#4F46E5"/>
-  <circle cx="100" cy="100" r="12" stroke="#4F46E5" stroke-width="2" fill="none"/>
-</svg> 
+  <!-- 终端窗口（mono 黑灰风格，与站内终端卡片一致） -->
+  <rect x="8" y="8" width="184" height="184" rx="28" fill="#0d0d0d" stroke="#333333" stroke-width="4"/>
+  <!-- 标题栏三圆点 -->
+  <circle cx="42" cy="40" r="9" fill="#c9c9c9"/>
+  <circle cx="70" cy="40" r="9" fill="#8f8f8f"/>
+  <circle cx="98" cy="40" r="9" fill="#5a5a5a"/>
+  <!-- 标题栏分隔线 -->
+  <line x1="10" y1="66" x2="190" y2="66" stroke="#262626" stroke-width="3"/>
+  <!-- 提示符 -->
+  <text x="32" y="136" font-family="ui-monospace, 'JetBrains Mono', 'Courier New', monospace" font-size="30" font-weight="600" fill="#e0e0e0">$ xugou</text>
+  <!-- 闪烁光标 -->
+  <rect x="166" y="110" width="13" height="32" fill="#b8b8b8">
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.5;0.5;1" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
+</svg>

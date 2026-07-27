@@ -1,11 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 背景圆形 -->
-  <circle cx="16" cy="16" r="14" fill="#4F46E5" opacity="0.1"/>
-  
-  <!-- X 字母 -->
-  <path d="M10 10L22 22M22 10L10 22" stroke="#4F46E5" stroke-width="2" stroke-linecap="round"/>
-  
-  <!-- 中心点 -->
-  <circle cx="16" cy="16" r="1" fill="#4F46E5"/>
-</svg> 
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 终端窗口：深底圆角方块 + 三圆点（mono 黑灰风格，与首页终端卡片一致） -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#0d0d0d" stroke="#333333" stroke-width="2"/>
+  <circle cx="18" cy="32" r="6.5" fill="#c9c9c9"/>
+  <circle cx="32" cy="32" r="6.5" fill="#8f8f8f"/>
+  <circle cx="46" cy="32" r="6.5" fill="#5a5a5a"/>
+</svg>
