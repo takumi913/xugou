@@ -66,6 +66,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     };
   }, [clearAuthState, t]);
 
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      clearAuthState();
+    };
+    window.addEventListener("xugou:unauthorized", handleUnauthorized);
+    return () => {
+      window.removeEventListener("xugou:unauthorized", handleUnauthorized);
+    };
+  }, [clearAuthState]);
+
   const login = async (data: LoginRequest) => {
     try {
       const response = await apiLogin(data);

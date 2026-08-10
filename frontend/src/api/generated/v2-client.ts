@@ -38,11 +38,17 @@ v2Client.use({
     }
     return request;
   },
-  onResponse({ response }) {
+  onResponse({ response, request }) {
     if (response.status === 401) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
-      if (window.location.pathname !== "/login") window.location.href = "/login";
+      const url = new URL(request.url, window.location.origin);
+      if (
+        url.pathname !== "/api/v2/session/me" &&
+        url.pathname !== "/api/session/me"
+      ) {
+        window.dispatchEvent(new CustomEvent("xugou:unauthorized"));
+      }
     }
     return response;
   },
