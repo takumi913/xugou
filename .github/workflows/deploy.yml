@@ -165,14 +165,5 @@ jobs:
         with:
           name: migration-readiness-evidence-${{ github.sha }}
           retention-days: 90
-          if-no-files-found: error
-          path: |
-            .migration-evidence/preflight.json
-            .migration-evidence/pre-bookmark.json
-            .migration-evidence/migration-result.txt
-            .migration-evidence/post-preflight.json
-            .migration-evidence/postflight.json
-            .migration-evidence/post-bookmark.json
-            .migration-evidence/migration-manifest.json
-            .migration-evidence/release-readiness.json
-            .migration-evidence/readiness-verification.json
+          if-no-files-found: ignore
+          path: .migration-evidence/
