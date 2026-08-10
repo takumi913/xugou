@@ -66,7 +66,7 @@ const StatusPageConfig = () => {
   useEffect(() => {
     setConfig((prev) => ({
       ...prev,
-      publicUrl: `${window.location.origin}/status/public`,
+      publicUrl: `${window.location.origin}/status`,
     }));
   }, []);
 
@@ -146,7 +146,7 @@ const StatusPageConfig = () => {
   // 预览状态页
   const handlePreview = () => {
     // 在新标签页中打开状态页
-    window.open("/status/public", "_blank");
+    window.open("/status", "_blank");
   };
 
   if (configQuery.isPending) {

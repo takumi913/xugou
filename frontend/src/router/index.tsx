@@ -3,6 +3,7 @@ import {
   RouteObject,
   Outlet,
   useLocation,
+  Navigate,
 } from "react-router-dom";
 import { lazy, Suspense, ReactNode } from "react";
 
@@ -57,7 +58,8 @@ const LayoutWrapper: React.FC<LayoutWrapperProps> = ({ children }) => {
   // 检查当前路径是否为状态页面，如果是则不使用Layout包裹
   // 使用 useLocation 而非 window.location，软导航时也能重新计算
   const location = useLocation();
-  const isStatusPage = location.pathname.startsWith("/status/public");
+  const isStatusPage =
+    location.pathname === "/status" || location.pathname === "/status/public";
   return isStatusPage ? <>{children}</> : <Layout>{children}</Layout>;
 };
 
@@ -119,29 +121,16 @@ const protectedRoutes: RouteObject[] = [
       },
     ],
   },
-  // 状态页面
+  // 状态页面配置
   {
-    path: "/status",
-    children: [
-      {
-        path: "public",
-        element: (
-          <Suspense fallback={<PageLoading />}>
-            <StatusPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: "config",
-        element: (
-          <ProtectedRoute>
-            <Suspense fallback={<PageLoading />}>
-              <StatusPageConfig />
-            </Suspense>
-          </ProtectedRoute>
-        ),
-      },
-    ],
+    path: "/status/config",
+    element: (
+      <ProtectedRoute>
+        <Suspense fallback={<PageLoading />}>
+          <StatusPageConfig />
+        </Suspense>
+      </ProtectedRoute>
+    ),
   },
   // 监控页面
   {
@@ -244,6 +233,18 @@ const publicRoutes: RouteObject[] = [
         <Home />
       </Suspense>
     ),
+  },
+  {
+    path: "/status",
+    element: (
+      <Suspense fallback={<PageLoading />}>
+        <StatusPage />
+      </Suspense>
+    ),
+  },
+  {
+    path: "/status/public",
+    element: <Navigate to="/status" replace />,
   },
   {
     path: "/login",
