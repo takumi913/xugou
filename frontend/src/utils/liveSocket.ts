@@ -1,14 +1,14 @@
 /**
  * WebSocket 实时指标客户端（参照 CF-Server-Monitor createLiveSocket 移植）
  *
- * - token 从 localStorage 取（与 AuthProvider/api client 一致），以 ?token= 携带
+ * - 管理连接由浏览器自动携带 HttpOnly 会话 Cookie
  * - 断线指数退避重连（1s 起，上限 30s）
  * - 30s 心跳发 'ping'（服务端 DO 通过 setWebSocketAutoResponse 自动回 'pong'）
+ * - 每个连接只绑定一个 AgentRoom，不支持 all 或多 ID 订阅
  * - 收到 batchUpdate 按样本 ts 差值分时间桶合并回放（上限 120s，超出直接套用）
  */
 
 import { ENV_API_BASE_URL } from "../config";
-import { getStoredToken } from "../api/client";
 import type { MetricHistory } from "../types/agents";
 
 const RECONNECT_INITIAL_DELAY_MS = 1000;
@@ -32,13 +32,8 @@ export interface LiveUpdate {
 }
 
 export interface CreateLiveSocketOptions {
-  /** 订阅范围："all" 或 agent id 列表 */
-  subscribe: "all" | number[];
-  /**
-   * 公开状态页模式：以 ?public=<userId> 匿名连接（不携带 token），
-   * 服务端把可接收范围强制限定为该用户状态页勾选且未隐藏的客户端
-   */
-  publicUserId?: number;
+  /** 当前详情页订阅的唯一 Agent ID。 */
+  subscribe: number;
   onUpdate?: (update: LiveUpdate) => void;
   onStatusChange?: (status: LiveSocketStatus) => void;
   /** 覆盖 WebSocket URL（默认由 API 基地址 / 当前页面推导） */
@@ -60,9 +55,8 @@ interface BatchUpdateMessage {
 }
 
 function buildWsUrl(
-  subscribeParam: string,
-  override?: string,
-  publicUserId?: number
+  agentId: number,
+  override?: string
 ): string {
   if (override) return override;
 
@@ -77,26 +71,14 @@ function buildWsUrl(
 
   const wsProtocol = base.protocol === "https:" ? "wss:" : "ws:";
   const url = new URL(`${wsProtocol}//${base.host}/api/ws`);
-  url.searchParams.set("subscribe", subscribeParam);
+  url.searchParams.set("subscribe", String(agentId));
 
-  if (publicUserId != null) {
-    // 公开状态页模式：匿名连接，不携带 token
-    url.searchParams.set("public", String(publicUserId));
-    return url.toString();
-  }
-
-  const token = getStoredToken();
-  if (token) {
-    url.searchParams.set("token", token);
-  }
   return url.toString();
 }
 
 export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
   const { onUpdate, onStatusChange } = options;
-  const agentIds = Array.isArray(options.subscribe) ? options.subscribe : [];
-  const scope: "all" | "ids" = Array.isArray(options.subscribe) ? "ids" : "all";
-  const subscribeParam = scope === "all" ? "all" : agentIds.join(",");
+  const agentId = options.subscribe;
 
   let ws: WebSocket | null = null;
   let manualClose = false;
@@ -208,7 +190,7 @@ export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
     if (manualClose) return;
     try {
       ws = new WebSocket(
-        buildWsUrl(subscribeParam, options.url, options.publicUserId)
+        buildWsUrl(agentId, options.url)
       );
     } catch {
       setStatus(false, "unsupported");
@@ -217,24 +199,19 @@ export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
 
     ws.addEventListener("open", () => {
       reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
-      try {
-        ws?.send(JSON.stringify({ type: "subscribe", scope, agentIds }));
-      } catch {
-        // 忽略订阅消息发送失败
-      }
       startHeartbeat();
       setStatus(true, "connected");
     });
 
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string" || event.data === "pong") return;
-      let msg: BatchUpdateMessage | null = null;
+      let msg: BatchUpdateMessage;
       try {
         msg = JSON.parse(event.data) as BatchUpdateMessage;
       } catch {
         return;
       }
-      if (msg?.type === "batchUpdate") {
+      if (msg.type === "batchUpdate") {
         replayBatch(msg);
       }
     });

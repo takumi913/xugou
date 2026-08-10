@@ -5,7 +5,7 @@ import { GlobeIcon } from "@radix-ui/react-icons";
 import MetricsChart from "./MetricsChart";
 import StatBar from "./StatBar";
 import { useTranslation } from "react-i18next";
-import { AgentCardProps, MetricHistory, MetricType } from "../types";
+import type { Agent, MetricHistory, MetricType } from "../types";
 import type { PingResult } from "../types/agents";
 import {
   BILLING_CYCLE_KEYS,
@@ -30,6 +30,14 @@ const PING_LINES = [
   { key: "cm", label: "CM" },
   { key: "bd", label: "BD" },
 ] as const;
+
+interface AgentCardProps {
+  agent: Agent;
+  liveMetric?: Partial<MetricHistory> | null;
+  showIpAddress?: boolean;
+  showHostname?: boolean;
+  showLastUpdated?: boolean;
+}
 
 // 延迟着色：<100 绿 / <200 黄 / 其余（含超时）红
 const getPingColor = (latencyMs: number | undefined, loss: boolean) => {

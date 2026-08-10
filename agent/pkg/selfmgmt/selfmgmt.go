@@ -13,8 +13,10 @@ import (
 const (
 	// AgentName Agent 名称，与安装脚本 install-agent.sh 保持一致
 	AgentName = "xugou-agent"
-	// DefaultDownloadBase 官方分发地址（仅提供 latest 目录，与 install-agent.sh 同源）
+	// DefaultDownloadBase 旧版 latest 分发地址，保留给旧 Agent 与安装脚本。
 	DefaultDownloadBase = "https://dl.xugou.mdzz.uk/latest"
+	// DefaultReleaseChannel 是原子切换的稳定通道指针。
+	DefaultReleaseChannel = "https://dl.xugou.mdzz.uk/channels/stable.json"
 	// ServiceName systemd 服务名
 	ServiceName = "xugou-agent"
 	// ServiceUnitPath systemd 服务单元文件路径（与 install-agent.sh 保持一致）
@@ -29,11 +31,6 @@ func BinaryName(goos, goarch string) string {
 		name += ".exe"
 	}
 	return name
-}
-
-// DownloadURL 拼接下载地址，base 末尾斜杠可有可无。
-func DownloadURL(base, goos, goarch string) string {
-	return strings.TrimRight(base, "/") + "/" + BinaryName(goos, goarch)
 }
 
 // CheckBinaryMagic 校验可执行文件魔数（ELF / Mach-O / PE）。
@@ -70,60 +67,179 @@ func CheckBinaryMagic(header []byte) error {
 // CompareVersions 比较两个版本号（支持 v 前缀、语义化版本与预发布后缀）。
 // 返回 -1/0/1 表示 a 小于/等于/大于 b；当任一版本无法按语义化版本解析时 ok 为 false。
 func CompareVersions(a, b string) (result int, ok bool) {
-	aBase, aPre, aOK := splitVersion(a)
-	bBase, bPre, bOK := splitVersion(b)
+	aVersion, aOK := parseSemver(a)
+	bVersion, bOK := parseSemver(b)
 	if !aOK || !bOK {
 		return 0, false
 	}
-
-	for i := 0; i < len(aBase) || i < len(bBase); i++ {
-		av, bv := 0, 0
-		if i < len(aBase) {
-			av = aBase[i]
-		}
-		if i < len(bBase) {
-			bv = bBase[i]
-		}
-		if av < bv {
+	for index := range aVersion.core {
+		if aVersion.core[index] < bVersion.core[index] {
 			return -1, true
 		}
-		if av > bv {
+		if aVersion.core[index] > bVersion.core[index] {
 			return 1, true
 		}
 	}
-
-	// 主版本相同时，无预发布后缀的版本更大（1.0.0 > 1.0.0-rc1）
-	switch {
-	case aPre == bPre:
+	if len(aVersion.prerelease) == 0 && len(bVersion.prerelease) == 0 {
 		return 0, true
-	case aPre == "":
-		return 1, true
-	case bPre == "":
-		return -1, true
-	case aPre < bPre:
-		return -1, true
-	default:
+	}
+	if len(aVersion.prerelease) == 0 {
 		return 1, true
 	}
+	if len(bVersion.prerelease) == 0 {
+		return -1, true
+	}
+	for index := 0; index < len(aVersion.prerelease) && index < len(bVersion.prerelease); index++ {
+		result := comparePrereleaseIdentifier(
+			aVersion.prerelease[index],
+			bVersion.prerelease[index],
+		)
+		if result != 0 {
+			return result, true
+		}
+	}
+	if len(aVersion.prerelease) < len(bVersion.prerelease) {
+		return -1, true
+	}
+	if len(aVersion.prerelease) > len(bVersion.prerelease) {
+		return 1, true
+	}
+	return 0, true
 }
 
-// splitVersion 解析版本号为数字段与预发布后缀，如 "v1.2.3-rc1" -> [1 2 3], "rc1", true
-func splitVersion(v string) (parts []int, prerelease string, ok bool) {
+type semanticVersion struct {
+	core       [3]uint64
+	prerelease []string
+}
+
+func validSemverIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= 'a' && character <= 'z') || character == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func parseSemver(v string) (semanticVersion, bool) {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")
 	v = strings.TrimPrefix(v, "V")
 	if v == "" {
-		return nil, "", false
+		return semanticVersion{}, false
 	}
-	base, pre, _ := strings.Cut(v, "-")
-	for seg := range strings.SplitSeq(base, ".") {
-		n, err := strconv.Atoi(seg)
-		if err != nil || n < 0 {
-			return nil, "", false
+	withoutBuild, build, hasBuild := strings.Cut(v, "+")
+	if hasBuild {
+		if strings.Contains(build, "+") {
+			return semanticVersion{}, false
 		}
-		parts = append(parts, n)
+		for identifier := range strings.SplitSeq(build, ".") {
+			if !validSemverIdentifier(identifier) {
+				return semanticVersion{}, false
+			}
+		}
 	}
-	return parts, pre, true
+	base, pre, hasPrerelease := strings.Cut(withoutBuild, "-")
+	segments := strings.Split(base, ".")
+	if len(segments) != 3 {
+		return semanticVersion{}, false
+	}
+	version := semanticVersion{}
+	for index, segment := range segments {
+		if segment == "" || (len(segment) > 1 && segment[0] == '0') {
+			return semanticVersion{}, false
+		}
+		number, err := strconv.ParseUint(segment, 10, 64)
+		if err != nil {
+			return semanticVersion{}, false
+		}
+		version.core[index] = number
+	}
+	if hasPrerelease {
+		for identifier := range strings.SplitSeq(pre, ".") {
+			if !validSemverIdentifier(identifier) ||
+				(allDigits(identifier) && len(identifier) > 1 && identifier[0] == '0') {
+				return semanticVersion{}, false
+			}
+			version.prerelease = append(version.prerelease, identifier)
+		}
+	}
+	return version, true
+}
+
+func allDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func comparePrereleaseIdentifier(a, b string) int {
+	aNumeric, bNumeric := allDigits(a), allDigits(b)
+	if aNumeric && !bNumeric {
+		return -1
+	}
+	if !aNumeric && bNumeric {
+		return 1
+	}
+	if aNumeric && bNumeric {
+		if len(a) < len(b) {
+			return -1
+		}
+		if len(a) > len(b) {
+			return 1
+		}
+	}
+	// 历史发布曾使用 rc2/rc10 这类简写；同前缀的尾部数字按数值比较。
+	aPrefix, aSuffix, aNatural := splitTrailingNumber(a)
+	bPrefix, bSuffix, bNatural := splitTrailingNumber(b)
+	if aNatural && bNatural && aPrefix == bPrefix {
+		if len(aSuffix) < len(bSuffix) {
+			return -1
+		}
+		if len(aSuffix) > len(bSuffix) {
+			return 1
+		}
+		if aSuffix < bSuffix {
+			return -1
+		}
+		if aSuffix > bSuffix {
+			return 1
+		}
+		return 0
+	}
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func splitTrailingNumber(value string) (prefix string, number string, ok bool) {
+	index := len(value)
+	for index > 0 && value[index-1] >= '0' && value[index-1] <= '9' {
+		index--
+	}
+	if index == 0 || index == len(value) {
+		return "", "", false
+	}
+	number = strings.TrimLeft(value[index:], "0")
+	if number == "" {
+		number = "0"
+	}
+	return value[:index], number, true
 }
 
 // ParseVersionOutput 从 `xugou-agent version` 命令输出中提取版本号。

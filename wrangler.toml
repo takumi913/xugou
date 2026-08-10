@@ -1,27 +1,86 @@
 name = "xugou-app"
 main = "backend/src/index.ts"
-compatibility_date = "2025-03-10"
+compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
 minify = true # 生产环境压缩代码
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+persist = true
 
 # 添加定时触发器，每分钟执行一次监控检查
 [triggers]
 crons = ["* * * * *"]
 
 [vars]
+# 管理会话和 Agent 凭据密钥分别使用以下命令配置，值不进入本文件：
+# `wrangler secret put SESSION_HMAC_SECRET`
+# `wrangler secret put ADMIN_INITIAL_PASSWORD`（仅全新数据库首次创建管理员时读取）
+# `wrangler secret put AGENT_TOKEN_PEPPER`
+# `wrangler secret put NOTIFICATION_KEK`
+# KEK 轮换窗口另配置 `NOTIFICATION_KEK_PREVIOUS`，回填完成后删除旧 Secret。
 FREE_MODE = "true"
+# 前端默认与 API 同源。确需独立管理域名时使用逗号分隔的完整 Origin；
+# 凭据化 CORS 忽略 `*`，避免把 HttpOnly 管理会话暴露给任意站点。
+# ALLOWED_ORIGINS = "https://console.example.com"
+# expand：兼容回填、v1 路由和旧读/双写仍可用；contract：只运行 v2/规范模型。
+DATA_COMPATIBILITY_MODE = "expand"
+AGENT_ENROLLMENT_TTL_MINUTES = "30"
+NOTIFICATION_KEK_VERSION = "1"
+NOTIFICATION_KEK_ROTATION_ENABLED = "false"
 MIN_AGENT_REPORT_INTERVAL_SECONDS = "300"
 MIN_MONITOR_INTERVAL_SECONDS = "300"
-MONITOR_CHECK_BATCH_SIZE = "10"
-MONITOR_CHECK_CONCURRENCY = "3"
+MONITOR_CHECK_BATCH_SIZE = "100"
+MONITOR_SCHEDULER_TIME_BUDGET_MS = "5000"
 AGENT_OFFLINE_BATCH_SIZE = "50"
 STATUS_PAGE_CACHE_TTL_SECONDS = "60"
-STATUS_SNAPSHOT_DIRTY_COALESCE_SECONDS = "30"
 PUBLIC_METRICS_CACHE_TTL_SECONDS = "120"
 AGENT_ROLLUP_RETENTION_DAYS = "30"
 MONITOR_ROLLUP_RETENTION_DAYS = "90"
+MONITOR_DAILY_ROLLUP_RETENTION_DAYS = "3650"
 MONITOR_INCIDENT_RETENTION_DAYS = "180"
+SECURITY_AUDIT_RETENTION_DAYS = "180"
+STATUS_PUBLICATION_RETENTION_DAYS = "7"
+QUEUE_FAILURE_RETENTION_DAYS = "30"
+PROCESSED_EVENT_RETENTION_DAYS = "30"
+NOTIFICATION_EVENT_RETENTION_DAYS = "90"
+RAW_SAMPLE_ARCHIVE_ENABLED = "true"
+RAW_SAMPLE_ARCHIVE_DELETE_ENABLED = "false"
+RAW_SAMPLE_ARCHIVE_MIN_AGE_DAYS = "1"
+RAW_SAMPLE_ARCHIVE_BATCH_SIZE = "50"
+AGENT_RAW_SAMPLE_RETENTION_DAYS = "30"
+MONITOR_RAW_SAMPLE_RETENTION_DAYS = "90"
+# 发布后对账阈值与兼容路由静默窗口；都在同一 Worker 内查询 D1 账本。
+RELEASE_MAX_JOBS_BACKLOG = "100"
+RELEASE_MAX_JOB_LAG_SECONDS = "300"
+RELEASE_MAX_SCHEDULER_LAG_SECONDS = "300"
+RELEASE_MAX_OUTBOX_BACKLOG = "100"
+RELEASE_MAX_OUTBOX_LAG_SECONDS = "300"
+RELEASE_MAX_NOTIFICATION_BACKLOG = "100"
+RELEASE_MAX_PUBLICATION_AGE_SECONDS = "300"
+MANAGEMENT_V1_QUIET_DAYS = "7"
+AGENT_V1_QUIET_DAYS = "60"
+API_COMPATIBILITY_HIT_RETENTION_DAYS = "400"
+LEGACY_AGENT_HISTORY_BACKFILL_BATCH_SIZE = "100"
+LEGACY_AGENT_MODEL_BACKFILL_BATCH_SIZE = "100"
+LEGACY_AGENT_CURRENT_METRICS_BACKFILL_BATCH_SIZE = "100"
+LEGACY_STATUS_PAGE_BACKFILL_BATCH_SIZE = "100"
+LEGACY_NOTIFICATION_RULES_BACKFILL_BATCH_SIZE = "100"
+LEGACY_NOTIFICATION_TEMPLATES_BACKFILL_BATCH_SIZE = "100"
+LEGACY_MONITOR_HISTORY_BACKFILL_BATCH_SIZE = "100"
+LEGACY_MONITOR_DAILY_BACKFILL_BATCH_SIZE = "100"
+LEGACY_MONITOR_MODEL_BACKFILL_BATCH_SIZE = "100"
+LEGACY_NOTIFICATION_HISTORY_BACKFILL_BATCH_SIZE = "100"
 # 最新探针版本号（如 "1.2.0"）。留空则不触发探针自升级；
 # 填写后，开启了「自动升级」的 agent 上报版本低于此值时，
 # 服务端会在配置下发响应中附加 update=1 触发探针自升级。
@@ -31,16 +90,51 @@ LATEST_AGENT_VERSION = "v0.1.1"
 binding = "DB"
 database_name = "${D1_DATABASE_NAME}" # 使用占位符
 database_id = "${D1_DATABASE_ID}" # 使用占位符
+migrations_table = "migrations"
+migrations_dir = "backend/drizzle"
 
-# Durable Objects：实时指标广播中心（WebSocket Hibernation）
+# 原始 Agent/Monitor 样本的校验归档；仍由同一个 Worker 通过 Binding 直接写入。
+[[r2_buckets]]
+binding = "RAW_SAMPLE_ARCHIVE"
+bucket_name = "xugou-raw-sample-archive"
+
+# 同一 Worker 同时生产和消费业务作业；Queue 只承担异步调度，不增加部署单元。
+[[queues.producers]]
+binding = "XUGOU_JOBS"
+queue = "xugou-jobs"
+
+[[queues.consumers]]
+queue = "xugou-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "xugou-jobs-dlq"
+
+# DLQ 仍由同一 Worker 捕获；这里只持久化失败信封，管理端确认后再重放。
+[[queues.consumers]]
+queue = "xugou-jobs-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 0
+
+# 当前实时链路：同一 Worker Bundle 内按 Agent ID 分片的 WebSocket 房间。
 [[durable_objects.bindings]]
-name = "METRICS_BROADCASTER"
-class_name = "MetricsBroadcaster"
+name = "AGENT_ROOM"
+class_name = "AgentRoom"
 
 # 使用 SQLite-backed DO 以兼容免费计划
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MetricsBroadcaster"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AgentRoom"]
+
+# 全局广播已由 AgentRoom 分片完整替代；该空间只包含可丢失实时缓存。
+[[migrations]]
+tag = "v3"
+deleted_classes = ["MetricsBroadcaster"]
 
 [assets]
 binding = "ASSETS"

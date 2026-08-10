@@ -1,3 +1,16 @@
 packages:
   - 'frontend'
   - 'backend'
+allowBuilds:
+  '@tailwindcss/oxide': set this to true or false
+  esbuild: true
+  msw: false
+  sharp: set this to true or false
+  workerd: true
+overrides:
+  browserslist: ^4.28.2
+  caniuse-lite: 1.0.30001797
+  fast-uri: ^3.1.5
+  update-browserslist-db: ^1.2.3
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260801.1'

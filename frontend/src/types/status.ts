@@ -2,47 +2,9 @@
  * 状态页面相关类型定义
  */
 
-import { AgentWithLatestMetrics } from "./agents";
-import { MonitorWithDailyStatsAndStatusHistory } from "./monitors";
+import type { components } from "../api/generated/v2-schema";
 
-export interface ConfigMonitor {
-  id: number;
-  name: string;
-  selected: boolean;
-}
+export type StatusPageConfigResponse = components["schemas"]["StatusConfigView"];
 
-export interface ConfigAgent {
-  id: number;
-  name: string;
-  selected: boolean;
-}
-
-export interface StatusPageConfigResponse {
-  title?: string;
-  description?: string;
-  logoUrl?: string;
-  customCss?: string;
-  theme?: string;
-  monitors?: ConfigMonitor[];
-  agents?: ConfigAgent[];
-}
-
-export interface StatusPageConfig {
-  title: string;
-  description: string;
-  logoUrl: string;
-  customCss: string;
-  theme: string;
-  monitors: number[];
-  agents: number[];
-}
-
-export interface StatusPageData {
-  title: string;
-  description: string;
-  logoUrl: string;
-  customCss: string;
-  theme?: string;
-  monitors: MonitorWithDailyStatsAndStatusHistory[];
-  agents: AgentWithLatestMetrics[];
-}
+export type StatusPageConfig = components["schemas"]["StatusConfigCommand"];
+export type StatusPageData = components["schemas"]["PublicStatus"];

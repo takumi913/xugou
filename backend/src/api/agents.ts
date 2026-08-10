@@ -1,24 +1,37 @@
 import { Hono } from "hono";
-import { JwtPayload } from "../types";
+import { AdminSessionPrincipal } from "../types";
 import { Bindings } from "../models/db";
 import { Agent } from "../models/agent";
 import {
-  getAgents,
-  getAgentsWithLatestMetrics,
-  getAgentDetail,
-  updateAgentService,
-  deleteAgentService,
-  generateAgentToken,
-  registerAgentService,
-  updateAgentStatusService,
-  updateAgentsOrderService,
-  exportAgentsService,
-  importAgentsService,
-  getAgentMetrics,
-  getLatestAgentMetrics,
+  AgentCredentialConfigurationError,
+  AgentCredentialLimitError,
+} from "../modules/agents/persistence/D1AgentCredentialStore";
+import {
+  listAgentCredentialMetadata,
+  listAgentEnrollments,
+  issueAgentEnrollmentToken,
+  revokeAgentCredential,
+  revokeAgentEnrollment,
+  rotateAgentCredential,
+} from "../modules/agents/persistence/D1AgentCredentialStore";
+import {
+  getLegacyAgent,
+  importLegacyAgents,
+  listLegacyAgents,
   normalizeAgentMetricsHours,
-} from "../services/AgentService";
-import type { WaitUntilContext } from "../services/BroadcastService";
+  queryLatestLegacyAgentMetric,
+  queryLegacyAgentMetrics,
+  registerLegacyAgent,
+  toAgentExportRecord,
+  toAgentMutation,
+  toLegacyAgent,
+  updateLegacyAgentOrder,
+} from "../modules/agents/persistence/D1LegacyAgentFacade";
+import {
+  consumeRateLimit,
+  CONTROL_PLANE_RATE_LIMIT_POLICY,
+  writeSecurityAuditEvent,
+} from "../platform/security/SecurityStore";
 import {
   AGENT_CONFIG_MD5_HEADER,
   AGENT_CONFIG_SCHEMA_HEADER,
@@ -28,7 +41,6 @@ import {
   md5Hex,
   normalizeAgentConfigSchema,
   serializeAgentConfig,
-  shouldTriggerAgentUpdate,
   type AgentConfigDescriptor,
   type AgentIntervalConfig,
 } from "../utils/agentConfig";
@@ -41,10 +53,15 @@ import {
   idParamSchema,
   orderUpdateSchema,
 } from "./schemas";
+import { createAgentUseCases } from "../modules/agents/composition";
+import { adaptLegacyAgentReport } from "../modules/agents/http/LegacyAgentReportAdapter";
+import { ApplicationProblem } from "../shared/errors/ApplicationProblem";
+import { requestStatusRebuild } from "../modules/status/persistence/status-events";
+import { streamJsonArrayResponse } from "../platform/http/stream-json";
 
 const agents = new Hono<{
   Bindings: Bindings;
-  Variables: { agent: Agent; jwtPayload: JwtPayload };
+  Variables: { agent: Agent; admin: AdminSessionPrincipal };
 }>();
 
 // 配置描述符备忘：service 返回的 intervals 已规范化，同输入直接复用序列化串与 MD5。
@@ -71,65 +88,55 @@ function getAgentConfigDescriptor(
 
 // 获取所有客户端
 agents.get("/", async (c) => {
-  const payload = c.get("jwtPayload") as JwtPayload;
   const includeLatestMetrics =
     c.req.query("includeLatestMetrics") === "true";
-  const result = includeLatestMetrics
-    ? await getAgentsWithLatestMetrics(payload.id, c.env)
-    : await getAgents(payload.id);
-
-  return c.json(
-    {
-      success: result.success,
-      agents: result.agents,
-      message: result.message,
-    },
-    result.status as any
-  );
+  return c.json({
+    success: true,
+    agents: await listLegacyAgents(c.env, includeLatestMetrics),
+  });
 });
 
 // 手动排序：按 body.ids 的数组顺序写 sort_order（须在 /:id 之前注册）
 agents.put("/order", async (c) => {
-  const payload = c.get("jwtPayload") as JwtPayload;
   const parsed = orderUpdateSchema.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json(badRequest("排序参数无效"), 400);
   }
 
-  const result = await updateAgentsOrderService(
-    parsed.data.ids,
-    payload.id,
-    payload.role
-  );
+  const updated = await updateLegacyAgentOrder(c.env, parsed.data.ids);
   return c.json(
-    { success: result.success, message: result.message },
-    result.status as any
+    {
+      success: updated,
+      message: updated ? "排序已更新" : "客户端不存在或无权访问",
+    },
+    updated ? 200 : 400
   );
 });
 
-// 导出客户端配置（JSON 数组，含 token；须在 /:id 之前注册）
+// 导出客户端非敏感配置（凭据摘要不可逆，不导出 Token）
 agents.get("/export", async (c) => {
-  const payload = c.get("jwtPayload") as JwtPayload;
-  const agentsData = await exportAgentsService(payload.id);
-  return c.json(agentsData, 200, {
-    "Content-Disposition": 'attachment; filename="xugou-agents.json"',
-    "Cache-Control": "no-store",
+  const useCases = createAgentUseCases(c.env);
+  return streamJsonArrayResponse({
+    filename: "xugou-agents.json",
+    loadPage: (cursor?: string) => useCases.list({ cursor, limit: 100 }),
+    map: (agent) => toAgentExportRecord(toLegacyAgent(agent)),
   });
 });
 
 // 导入客户端配置：按 name 去重跳过，token 冲突时重新生成
 agents.post("/import", async (c) => {
-  const payload = c.get("jwtPayload") as JwtPayload;
   const parsed = agentImportSchema.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json(badRequest("客户端导入数据无效"), 400);
   }
 
   try {
-    const result = await importAgentsService(c.env, parsed.data, payload.id);
+    const result = await importLegacyAgents(c.env, parsed.data);
     return c.json({ success: true, ...result }, 200);
   } catch (error) {
-    console.error("导入客户端错误:", error);
+    if (error instanceof AgentCredentialConfigurationError) {
+      return c.json({ success: false, message: "Agent 凭据尚未配置" }, 503);
+    }
     return c.json({ success: false, message: "导入客户端失败" }, 500);
   }
 });
@@ -137,47 +144,66 @@ agents.post("/import", async (c) => {
 // 更新客户端信息
 agents.put("/:id", async (c) => {
   const agentId = idParamSchema.parse(c.req.param("id"));
-  const payload = c.get("jwtPayload") as JwtPayload;
   const parsed = agentUpdateSchema.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json(badRequest("客户端更新参数无效"), 400);
   }
 
-  const result = await updateAgentService(
-    agentId,
-    parsed.data,
-    payload.id,
-    payload.role
-  );
-
-  return c.json(
-    {
-      success: result.success,
-      message: result.message,
-      agent: result.agent,
-    },
-    result.status as any
-  );
+  try {
+    const agent = await createAgentUseCases(c.env).update(
+      agentId,
+      toAgentMutation(parsed.data)
+    );
+    await requestStatusRebuild(c.env, {
+      reason: "agent.updated",
+      aggregateType: "agent",
+      aggregateId: agentId,
+    });
+    return c.json({
+      success: true,
+      message: "客户端信息已更新",
+      agent: toLegacyAgent(agent),
+    });
+  } catch (error) {
+    if (error instanceof ApplicationProblem) {
+      return c.json({ success: false, message: error.message }, error.status as 400);
+    }
+    throw error;
+  }
 });
 
 // 删除客户端
 agents.delete("/:id", async (c) => {
   try {
     const agentId = idParamSchema.parse(c.req.param("id"));
-    const payload = c.get("jwtPayload") as JwtPayload; // 获取用户信息
 
-    const result = await deleteAgentService(
-      agentId,
-      payload.id,
-      payload.role
-    );
+    await createAgentUseCases(c.env).delete(agentId);
+    await c.env.DB.prepare(
+      `DELETE FROM notification_settings WHERE target_type = 'agent' AND target_id = ?`
+    )
+      .bind(agentId)
+      .run();
+    await requestStatusRebuild(c.env, {
+      reason: "agent.deleted",
+      aggregateType: "agent",
+      aggregateId: agentId,
+    });
+    await writeSecurityAuditEvent(c.env, {
+      eventType: "agent.delete",
+      outcome: "success",
+      actorType: "admin",
+      actorId: c.get("admin").id,
+      subjectType: "agent",
+      subjectId: agentId,
+      request: c.req.raw,
+    });
 
     return c.json(
       {
-        success: result.success,
-        message: result.message,
+        success: true,
+        message: "客户端已删除",
       },
-      result.status as any
+      200
     );
   } catch (error) {
     return c.json(
@@ -192,17 +218,167 @@ agents.delete("/:id", async (c) => {
 
 // 生成客户端Token
 agents.post("/token/generate", async (c) => {
-  // 生成新令牌
-  const newToken = await generateAgentToken(c.env);
+  try {
+    const payload = c.get("admin");
+    const rateLimit = await consumeRateLimit(
+      c.env,
+      "agent_enrollment_issue",
+      String(payload.id),
+      CONTROL_PLANE_RATE_LIMIT_POLICY
+    );
+    if (!rateLimit.allowed) {
+      c.header("Retry-After", String(rateLimit.retryAfterSeconds));
+      await writeSecurityAuditEvent(c.env, {
+        eventType: "agent.enrollment.issue",
+        outcome: "denied",
+        actorType: "admin",
+        actorId: payload.id,
+        request: c.req.raw,
+        metadata: { reason: "rate_limited" },
+      });
+      return c.json({ success: false, message: "注册令牌签发过于频繁" }, 429);
+    }
+    const enrollment = await issueAgentEnrollmentToken(c.env, payload.id);
+    await writeSecurityAuditEvent(c.env, {
+      eventType: "agent.enrollment.issue",
+      outcome: "success",
+      actorType: "admin",
+      actorId: payload.id,
+      subjectType: "agent_enrollment",
+      request: c.req.raw,
+      metadata: { expires_at: enrollment.expiresAt },
+    });
+    return c.json({
+      success: true,
+      message: "已生成一次性客户端注册令牌",
+      token: enrollment.token,
+      expiresAt: enrollment.expiresAt,
+    });
+  } catch (error) {
+    if (error instanceof AgentCredentialConfigurationError) {
+      return c.json({ success: false, message: "Agent 凭据尚未配置" }, 503);
+    }
+    return c.json({ success: false, message: "生成客户端注册令牌失败" }, 500);
+  }
+});
 
-  // 可以选择将此token存储在临时表中，或者使用其他方式验证(例如，设置过期时间)
-  // 这里为简化操作，只返回令牌
+agents.get("/enrollments", async (c) => {
+  const payload = c.get("admin");
+  const rows = await listAgentEnrollments(c.env, payload.id);
+  return c.json({ success: true, data: rows });
+});
 
+agents.delete("/enrollments/:id", async (c) => {
+  const payload = c.get("admin");
+  const enrollmentId = idParamSchema.parse(c.req.param("id"));
+  const revoked = await revokeAgentEnrollment(c.env, payload.id, enrollmentId);
+  await writeSecurityAuditEvent(c.env, {
+    eventType: "agent.enrollment.revoke",
+    outcome: revoked ? "success" : "failure",
+    actorType: "admin",
+    actorId: payload.id,
+    subjectType: "agent_enrollment",
+    subjectId: enrollmentId,
+    request: c.req.raw,
+  });
+  return c.json(
+    {
+      success: revoked,
+      message: revoked ? "注册令牌已吊销" : "注册令牌不存在、已使用或已吊销",
+    },
+    revoked ? 200 : 409
+  );
+});
+
+agents.get("/:id/credentials", async (c) => {
+  const agentId = idParamSchema.parse(c.req.param("id"));
+  const page = await listAgentCredentialMetadata(c.env, agentId, { limit: 100 });
+  if (!page) {
+    return c.json({ success: false, message: "客户端不存在" }, 404);
+  }
+  return c.json({ success: true, data: page.data });
+});
+
+agents.post("/:id/credentials/rotate", async (c) => {
+  const payload = c.get("admin");
+  const agentId = idParamSchema.parse(c.req.param("id"));
+  const rateLimit = await consumeRateLimit(
+    c.env,
+    "agent_credential_rotate",
+    `${payload.id}:${agentId}`,
+    CONTROL_PLANE_RATE_LIMIT_POLICY
+  );
+  if (!rateLimit.allowed) {
+    c.header("Retry-After", String(rateLimit.retryAfterSeconds));
+    await writeSecurityAuditEvent(c.env, {
+      eventType: "agent.credential.rotate",
+      outcome: "denied",
+      actorType: "admin",
+      actorId: payload.id,
+      subjectType: "agent",
+      subjectId: agentId,
+      request: c.req.raw,
+      metadata: { reason: "rate_limited" },
+    });
+    return c.json({ success: false, message: "凭据轮换过于频繁" }, 429);
+  }
+
+  let rotated: Awaited<ReturnType<typeof rotateAgentCredential>>;
+  try {
+    rotated = await rotateAgentCredential(c.env, agentId);
+  } catch (error) {
+    if (error instanceof AgentCredentialLimitError) {
+      return c.json({ success: false, message: error.message }, 409);
+    }
+    throw error;
+  }
+  if (!rotated) {
+    return c.json({ success: false, message: "客户端不存在" }, 404);
+  }
+  await writeSecurityAuditEvent(c.env, {
+    eventType: "agent.credential.rotate",
+    outcome: "success",
+    actorType: "admin",
+    actorId: payload.id,
+    subjectType: "agent",
+    subjectId: agentId,
+    request: c.req.raw,
+  });
   return c.json({
     success: true,
-    message: "已生成客户端注册令牌",
-    token: newToken,
+    token: rotated.token,
+    message: "新凭据已生成，请完成 Agent 切换后吊销旧凭据",
   });
+});
+
+agents.delete("/:id/credentials/:credentialId", async (c) => {
+  const payload = c.get("admin");
+  const agentId = idParamSchema.parse(c.req.param("id"));
+  const credentialId = idParamSchema.parse(c.req.param("credentialId"));
+  const result = await revokeAgentCredential(c.env, agentId, credentialId);
+  await writeSecurityAuditEvent(c.env, {
+    eventType: "agent.credential.revoke",
+    outcome: result.success ? "success" : "failure",
+    actorType: "admin",
+    actorId: payload.id,
+    subjectType: "agent_credential",
+    subjectId: credentialId,
+    request: c.req.raw,
+    metadata: { agent_id: agentId, reason: result.reason ?? null },
+  });
+  if (!result.success) {
+    return c.json(
+      {
+        success: false,
+        message:
+          result.reason === "agent_not_found"
+            ? "客户端不存在"
+            : "凭据不存在或这是最后一个有效凭据",
+      },
+      result.reason === "agent_not_found" ? 404 : 409
+    );
+  }
+  return c.json({ success: true, message: "凭据已吊销" });
 });
 
 // 客户端自注册接口
@@ -214,24 +390,57 @@ agents.post("/register", async (c) => {
 
   const { token, name, hostname, ip_addresses, os, version } = parsed.data;
 
-  const result = await registerAgentService(
-    c.env,
-    token,
-    name || "New Agent",
-    hostname,
-    ip_addresses,
-    os,
-    version
-  );
+  let result: {
+    success: boolean;
+    message: string;
+    agent?: { id: number };
+    status: number;
+  };
+  try {
+    const registered = await registerLegacyAgent(c.env, {
+      token,
+      name: name || "New Agent",
+      hostname,
+      ip_addresses,
+      os,
+      version,
+    });
+    result = registered
+      ? {
+          success: true,
+          message: registered.created ? "客户端注册成功" : "客户端已存在",
+          agent: { id: registered.id },
+          status: registered.created ? 201 : 200,
+        }
+      : { success: false, message: "注册令牌无效、已使用或已过期", status: 400 };
+  } catch (error) {
+    if (error instanceof AgentCredentialConfigurationError) {
+      result = { success: false, message: "Agent 凭据尚未配置", status: 503 };
+    } else {
+      result = { success: false, message: "客户端注册失败", status: 500 };
+    }
+  }
+  await writeSecurityAuditEvent(c.env, {
+    eventType: "agent.register",
+    outcome: result.success ? "success" : "failure",
+    actorType: result.success ? "agent" : "anonymous",
+    actorId: result.agent?.id ?? null,
+    subjectType: "agent",
+    subjectId: result.agent?.id ?? null,
+    request: c.req.raw,
+    metadata: { status_code: result.status },
+  });
 
-  return c.json(
-    {
-      success: result.success,
-      message: result.message,
-      agent: result.agent,
-    },
-    result.status as any
-  );
+  const response = {
+    success: result.success,
+    message: result.message,
+    agent: result.agent,
+  };
+  if (result.status === 201) return c.json(response, 201);
+  if (result.status === 400) return c.json(response, 400);
+  if (result.status === 503) return c.json(response, 503);
+  if (result.status === 500) return c.json(response, 500);
+  return c.json(response, 200);
 });
 
 // 通过令牌更新客户端状态
@@ -242,41 +451,15 @@ agents.post("/status", async (c) => {
   }
 
   try {
-    // executionCtx 在部分运行环境（如单元测试）不可用，取不到时降级为 undefined
-    let executionCtx: WaitUntilContext | undefined;
-    try {
-      executionCtx = c.executionCtx;
-    } catch {
-      executionCtx = undefined;
-    }
-
-    // region 由服务端判定：优先 request.cf.country，回退 cf-ipcountry 头；
-    // 城市级地理位置同样取自 request.cf（lat/lon 为字符串，规范化在服务层）
-    const cfRequest = c.req.raw as Request & {
-      cf?: {
-        country?: string;
-        latitude?: string;
-        longitude?: string;
-        city?: string;
-        region?: string;
-      };
-    };
-    const cf = cfRequest.cf;
-    const region = cf?.country ?? c.req.header("cf-ipcountry") ?? null;
-    const geo = {
-      latitude: cf?.latitude ?? null,
-      longitude: cf?.longitude ?? null,
-      city: cf?.city ?? null,
-      regionName: cf?.region ?? null,
-    };
-
-    const result = await updateAgentStatusService(
+    const { token, report } = await adaptLegacyAgentReport(
       parsed.data,
-      c.env,
-      executionCtx,
-      region,
-      geo
+      c.req.header(AGENT_VERSION_HEADER)
     );
+    const result = await createAgentUseCases(c.env).acceptReport(token, report);
+    const agentIntervals = {
+      collect_interval: result.config.collect_interval_seconds,
+      report_interval: result.config.report_interval_seconds,
+    };
 
     // 配置下发协商：仅当请求携带合法 schema 头（2/3）时启用新响应模式
     // （旧 agent 走原 JSON 响应）。schema_version 回填客户端声明的版本，
@@ -286,7 +469,7 @@ agents.post("/status", async (c) => {
     );
     if (clientSchema !== null) {
       const descriptor = getAgentConfigDescriptor(
-        result.agentIntervals,
+        agentIntervals,
         clientSchema
       );
       const clientMd5 = (c.req.header(AGENT_CONFIG_MD5_HEADER) ?? "")
@@ -302,11 +485,7 @@ agents.post("/status", async (c) => {
       // 不参与 MD5（响应头仍是规范化三键串的 MD5，客户端本地 MD5 只覆盖三键串）
       const triggerUpdate =
         clientSchema >= AGENT_CONFIG_SCHEMA_VERSION &&
-        shouldTriggerAgentUpdate(
-          result.agentAutoUpdate,
-          c.env.LATEST_AGENT_VERSION,
-          c.req.header(AGENT_VERSION_HEADER)
-        );
+        result.config.update;
 
       if (triggerUpdate) {
         // 升级指令必须送达：即使 MD5 一致也返回 200 + 配置串 + update=1
@@ -334,14 +513,25 @@ agents.post("/status", async (c) => {
     return c.json(
       {
         success: true,
-        message: "客户端状态已更新",
-        sampled: result.sampled,
+        message: "客户端状态已接收",
+        accepted: result.accepted,
+        duplicate: result.duplicate,
+        sampled: false,
         recommendedReportIntervalSeconds:
-          result.recommendedReportIntervalSeconds,
+          result.config.report_interval_seconds,
       },
       200
     );
   } catch (error) {
+    if (error instanceof AgentCredentialConfigurationError) {
+      return c.json({ success: false, message: "Agent 凭据尚未配置" }, 503);
+    }
+    if (error instanceof ApplicationProblem) {
+      return c.json(
+        { success: false, message: error.message, code: error.code },
+        error.status as 400
+      );
+    }
     return c.json(
       {
         success: false,
@@ -355,12 +545,11 @@ agents.post("/status", async (c) => {
 // 获取单个客户端的指标（hours 白名单：1/6/12/24/168，默认 24）
 agents.get("/:id/metrics", async (c) => {
   const agentId = idParamSchema.parse(c.req.param("id"));
-  const payload = c.get("jwtPayload") as JwtPayload;
   const hours = normalizeAgentMetricsHours(c.req.query("hours"));
   if (hours === null) {
     return c.json(badRequest("hours 参数无效"), 400);
   }
-  const result = await getAgentMetrics(agentId, payload.id, payload.role, hours);
+  const result = await queryLegacyAgentMetrics(c.env, agentId, hours);
   if (!result) {
     return c.json(
       {
@@ -383,9 +572,8 @@ agents.get("/:id/metrics", async (c) => {
 // 获取单个客户端的最新指标
 agents.get("/:id/metrics/latest", async (c) => {
   const agentId = idParamSchema.parse(c.req.param("id"));
-  const payload = c.get("jwtPayload") as JwtPayload;
-  const result = await getLatestAgentMetrics(agentId, payload.id, payload.role);
-  if (!result) {
+  const result = await queryLatestLegacyAgentMetric(c.env, agentId);
+  if (result === null) {
     return c.json(
       {
         success: false,
@@ -407,9 +595,8 @@ agents.get("/:id/metrics/latest", async (c) => {
 // 获取单个客户端
 agents.get("/:id", async (c) => {
   const agentId = idParamSchema.parse(c.req.param("id"));
-  const payload = c.get("jwtPayload") as JwtPayload;
 
-  const result = await getAgentDetail(agentId, payload.id, payload.role);
+  const result = await getLegacyAgent(c.env, agentId);
   if (!result) {
     return c.json(
       {

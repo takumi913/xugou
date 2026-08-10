@@ -9,20 +9,33 @@
     "build:frontend": "cd frontend && pnpm run build",
     "build:backend": "cd backend && pnpm run build",
     "generate": "cd backend && pnpm run db:generate",
-    "build": "pnpm run generate && pnpm run build:frontend && pnpm run build:backend",
+    "generate:contracts": "pnpm --dir backend run contracts:generate",
+    "types:worker": "wrangler types backend/src/worker-env.d.ts --include-runtime=false --strict-vars=false",
+    "types:worker:check": "wrangler types backend/src/worker-env.d.ts --include-runtime=false --strict-vars=false --check",
+    "build": "pnpm run build:frontend && pnpm run build:backend",
     "test:contracts": "pnpm --dir backend run test:contracts",
+    "test:migrations": "pnpm --dir backend run test:migrations",
+    "test:modules": "pnpm --dir backend run test:modules",
+    "test:sessions": "pnpm --dir backend run test:sessions",
+    "test:security": "pnpm --dir backend run test:security",
+    "test:workers": "pnpm --dir backend run test:workers",
+    "test:contract-release": "pnpm --dir backend run test:contract-release",
+    "test:frontend": "pnpm --dir frontend run test:forms && pnpm --dir frontend run test:i18n && pnpm --dir frontend run test:version",
+    "test:frontend:e2e": "pnpm --dir frontend run test:e2e && pnpm --dir frontend run test:e2e:live",
+    "test:dependencies": "pnpm audit --prod && pnpm peers check",
+    "test:agent:quality": "cd agent && go vet ./... && test -z \"$(gofmt -l .)\" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...",
+    "test:agent:smoke": "cd agent && ./scripts/smoke-test.sh",
+    "test:agent:cross-build": "cd agent && ./scripts/cross-build.sh",
+    "deploy:dry-run": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
     "dev:preview": "pnpm run build && cd backend && pnpm run dev",
-    "preview": "cd backend && pnpm run dev"
+    "preview": "cd backend && pnpm run dev",
+    "lint": "pnpm --dir backend run lint && pnpm --dir frontend run lint",
+    "typecheck": "pnpm --dir backend run typecheck && pnpm --dir frontend exec tsc -b --noEmit",
+    "test": "pnpm run test:contracts && pnpm run test:migrations && pnpm run test:modules && pnpm run test:security && pnpm run test:frontend && (cd agent && go test ./...)",
+    "test:all": "pnpm run types:worker:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run test:workers && pnpm run test:contract-release && pnpm run test:frontend:e2e && pnpm run build && pnpm run deploy:dry-run && pnpm run test:dependencies && pnpm run test:agent:quality && pnpm run test:agent:smoke && pnpm run test:agent:cross-build && git diff --check"
   },
   "devDependencies": {
-    "wrangler": "^4.13.1"
-  },
-  "pnpm": {
-    "overrides": {
-      "browserslist": "^4.28.2",
-      "caniuse-lite": "1.0.30001797",
-      "update-browserslist-db": "^1.2.3"
-    }
+    "wrangler": "^4.120.0"
   }
 }

@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { MetricHistory, AgentWithLatestMetrics } from "../types";
+import type { MetricHistory } from "../types";
 import { Badge } from "./ui/badge";
 import { ProgressBar } from "./StatBar";
 import { formatBytes } from "../utils/format";
@@ -16,8 +16,13 @@ import {
 } from "lucide-react";
 
 interface AgentStatusBarProps {
-  latestMetric?: MetricHistory;
-  agent: AgentWithLatestMetrics;
+  latestMetric?: Partial<MetricHistory> | null;
+  agent: {
+    name: string;
+    status: string;
+    os?: string | null;
+    region?: string | null;
+  };
 }
 
 interface NetworkMetric {
@@ -76,7 +81,7 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
   agent,
 }) => {
   const { t } = useTranslation();
-  const OsIcon = getOsIcon(agent.os);
+  const OsIcon = getOsIcon(agent.os ?? undefined);
 
   // 聚合存储总量和使用情况
   const diskUsage = parseDiskUsage(latestMetric);

@@ -1,6 +1,6 @@
 /**
  * 上报来源地理位置（Cloudflare request.cf.latitude/longitude/city/region）规范化。
- * 纯函数，供 AgentService 落库与契约测试共用。
+ * 纯函数，供 Agent Report Processor 落库与契约测试共用。
  */
 
 // 坐标保留 4 位小数（约 11m 精度，城市级展示足够）；

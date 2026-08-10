@@ -1,81 +1,24 @@
-// 通用数据库类型定义
-export interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-  dump(): Promise<ArrayBuffer>;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
-  exec<T = unknown>(query: string): Promise<D1Result<T>>;
+// 非公开 Secrets 无法由 `wrangler types` 从配置文件推导，在生成的 Cloudflare.Env 上补充。
+export interface SecretBindings {
+  SESSION_HMAC_SECRET?: string;
+  ADMIN_INITIAL_PASSWORD?: string;
+  AGENT_TOKEN_PEPPER?: string;
+  NOTIFICATION_KEK?: string;
+  NOTIFICATION_KEK_PREVIOUS?: string;
+  RELEASE_READINESS_TOKEN?: string;
 }
 
-export interface D1PreparedStatement {
-  bind(...values: any[]): D1PreparedStatement;
-  first<T = unknown>(colName?: string): Promise<T>;
-  run<T = unknown>(): Promise<D1Result<T>>;
-  all<T = unknown>(): Promise<D1Result<T>>;
-  raw<T = unknown>(): Promise<T[]>;
-}
-
-// Cloudflare Workers Fetcher 类型定义
-export interface Fetcher {
-  fetch(input: RequestInfo, init?: RequestInit): Promise<Response>;
-}
-
-// 扩展D1Result meta属性的类型
-export interface D1Meta {
-  last_row_id?: number;
-  changes?: number;
-}
-
-export interface D1Result<T = unknown> {
-  results?: T[];
-  success: boolean;
-  error?: string;
-  meta?: object;
-}
-
-// Durable Object 命名空间的最小结构化类型
-// （tsconfig 未启用 @cloudflare/workers-types 全局声明，避免与 @types/node 冲突）
-export interface DurableObjectIdLike {
-  toString(): string;
-}
-
-export interface DurableObjectStubLike {
-  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
-}
-
-export interface DurableObjectNamespaceLike {
-  idFromName(name: string): DurableObjectIdLike;
-  get(id: DurableObjectIdLike): DurableObjectStubLike;
-}
-
-// 版本元数据类型定义
-export interface VersionMetadata {
-  id?: string;
-  tag?: string;
-  timestamp?: string;
-  [key: string]: any;
-}
-
-// 通用绑定类型
-export type Bindings = {
-  DB: D1Database;
-  METRICS_BROADCASTER?: DurableObjectNamespaceLike;
-  CF_VERSION_METADATA?: VersionMetadata;
-  ASSETS: Fetcher;
+// 允许预览/测试覆盖的可选运行参数；wrangler.toml 中的正式 Vars 由 worker-env.d.ts 生成。
+export interface OptionalRuntimeBindings {
+  NOTIFICATION_KEK_PREVIOUS_VERSION?: string;
   ALLOWED_ORIGINS?: string;
   LOG_REQUESTS?: string;
   NODE_ENV?: string;
-  MIN_AGENT_REPORT_INTERVAL_SECONDS?: string;
-  MIN_MONITOR_INTERVAL_SECONDS?: string;
-  MONITOR_CHECK_BATCH_SIZE?: string;
-  MONITOR_CHECK_CONCURRENCY?: string;
-  AGENT_OFFLINE_BATCH_SIZE?: string;
-  STATUS_PAGE_CACHE_TTL_SECONDS?: string;
-  STATUS_SNAPSHOT_DIRTY_COALESCE_SECONDS?: string;
-  PUBLIC_METRICS_CACHE_TTL_SECONDS?: string;
-  AGENT_ROLLUP_RETENTION_DAYS?: string;
-  MONITOR_ROLLUP_RETENTION_DAYS?: string;
-  MONITOR_INCIDENT_RETENTION_DAYS?: string;
-  FREE_MODE?: string;
-  // 最新探针版本（语义化版本，空/缺失=不触发自升级）
-  LATEST_AGENT_VERSION?: string;
-};
+}
+
+export type Bindings = Cloudflare.Env &
+  SecretBindings &
+  OptionalRuntimeBindings;
+
+export type DurableObjectNamespaceLike =
+  Cloudflare.Env["AGENT_ROOM"];

@@ -14,10 +14,79 @@ export const users = sqliteTable("users", {
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
   email: text("email"),
-  role: text("role").notNull(),
   created_at: text("created_at").notNull(),
   updated_at: text("updated_at").notNull(),
 });
+
+// 管理端不透明会话。浏览器持有随机令牌，数据库只保存 HMAC 摘要。
+export const adminSessions = sqliteTable(
+  "admin_sessions",
+  {
+    token_digest: text("token_digest").primaryKey(),
+    user_id: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    expires_at: text("expires_at").notNull(),
+    last_seen_at: text("last_seen_at").notNull(),
+    revoked_at: text("revoked_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    userExpiresAtIdx: index("admin_sessions_user_expires_at_idx").on(
+      table.user_id,
+      table.expires_at
+    ),
+    expiresAtIdx: index("admin_sessions_expires_at_idx").on(table.expires_at),
+  })
+);
+
+// 安全敏感操作的 D1 原子限流状态；key 为 HMAC 摘要，不保存用户名或 IP 原文。
+export const securityRateLimits = sqliteTable(
+  "security_rate_limits",
+  {
+    key_digest: text("key_digest").primaryKey(),
+    scope: text("scope").notNull(),
+    attempts: int("attempts").notNull(),
+    window_started_at: text("window_started_at").notNull(),
+    blocked_until: text("blocked_until"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    scopeBlockedIdx: index("security_rate_limits_scope_blocked_idx").on(
+      table.scope,
+      table.blocked_until
+    ),
+  })
+);
+
+// 结构化安全审计事件；metadata 只允许调用方写入非敏感标量。
+export const securityAuditEvents = sqliteTable(
+  "security_audit_events",
+  {
+    id: text("id").primaryKey(),
+    event_type: text("event_type").notNull(),
+    outcome: text("outcome").notNull(),
+    actor_type: text("actor_type").notNull(),
+    actor_id: text("actor_id"),
+    subject_type: text("subject_type"),
+    subject_id: text("subject_id"),
+    request_id: text("request_id"),
+    ip_digest: text("ip_digest"),
+    metadata_json: text("metadata_json").notNull().default("{}"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    createdAtIdx: index("security_audit_events_created_at_idx").on(
+      table.created_at
+    ),
+    eventCreatedAtIdx: index(
+      "security_audit_events_event_created_at_idx"
+    ).on(table.event_type, table.created_at),
+  })
+);
 
 // 监控表
 export const monitors = sqliteTable(
@@ -29,17 +98,16 @@ export const monitors = sqliteTable(
     method: text("method").notNull(),
     interval: int("interval").notNull(),
     timeout: int("timeout").notNull(),
+    timeout_ms: int("timeout_ms").notNull().default(30000),
     expected_status: int("expected_status").notNull(),
     headers: text("headers").notNull(),
     body: text("body"),
-    created_by: int("created_by")
-      .notNull()
-      .references(() => users.id),
     active: int("active").notNull(), // SQLite 没有布尔类型，用 int 代替
     status: text("status").default("pending"),
     response_time: int("response_time").default(0),
     last_checked: text("last_checked"),
     next_check_at: text("next_check_at"),
+    deleted_at: text("deleted_at"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
     // 手动排序权重（列表按 sort_order asc, id asc）
@@ -50,10 +118,54 @@ export const monitors = sqliteTable(
       table.active,
       table.next_check_at
     ),
-    createdByCreatedAtIdx: index("monitors_created_by_created_at_idx").on(
-      table.created_by,
-      table.created_at
+    createdAtIdx: index("monitors_created_at_idx").on(table.created_at),
+  })
+);
+
+// v2 Monitor 配置事实；旧 monitors 在兼容窗口内作为同 ID 回切投影。
+export const monitorDefinitions = sqliteTable(
+  "monitor_definitions",
+  {
+    id: int("id").primaryKey(),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    method: text("method").notNull(),
+    headers_json: text("headers_json").notNull().default("{}"),
+    body: text("body"),
+    interval_ms: int("interval_ms").notNull(),
+    timeout_ms: int("timeout_ms").notNull(),
+    expected_status: int("expected_status").notNull(),
+    active: int("active").notNull().default(1),
+    sort_order: int("sort_order").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+    deleted_at_ms: int("deleted_at_ms"),
+  },
+  (table) => ({
+    activeCreatedIdx: index("monitor_definitions_active_created_idx").on(
+      table.active,
+      table.created_at_ms
     ),
+  })
+);
+
+// v2 Monitor 高频运行态；调度与检查只更新本表，避免覆盖配置编辑。
+export const monitorRuntime = sqliteTable(
+  "monitor_runtime",
+  {
+    monitor_id: int("monitor_id")
+      .primaryKey()
+      .references(() => monitorDefinitions.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("pending"),
+    response_time_ms: int("response_time_ms").notNull().default(0),
+    last_checked_at_ms: int("last_checked_at_ms"),
+    next_due_at_ms: int("next_due_at_ms"),
+    version: int("version").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    nextDueIdx: index("monitor_runtime_next_due_idx").on(table.next_due_at_ms),
   })
 );
 
@@ -79,6 +191,31 @@ export const monitorStatusHistory24h = sqliteTable(
     // timestamp 单独索引，用于优化按时间排序和范围查询的性能
     timestampIdx: index("monitor_status_history_24h_timestamp_idx").on(
       table.timestamp
+    ),
+  })
+);
+
+// Queue 驱动的不可变检查样本；job_id 同时是业务幂等键。
+export const monitorCheckSamples = sqliteTable(
+  "monitor_check_samples",
+  {
+    job_id: text("job_id").primaryKey(),
+    monitor_id: int("monitor_id")
+      .notNull()
+      .references(() => monitors.id, { onDelete: "cascade" }),
+    scheduled_for_ms: int("scheduled_for_ms").notNull(),
+    checked_at: text("checked_at").notNull(),
+    status: text("status").notNull(),
+    response_time_ms: int("response_time_ms").notNull(),
+    status_code: int("status_code"),
+    error: text("error"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    monitorCheckedIdx: index("monitor_check_samples_monitor_checked_at_idx").on(
+      table.monitor_id,
+      table.checked_at
     ),
   })
 );
@@ -119,9 +256,6 @@ export const agents = sqliteTable(
     id: int("id").primaryKey({ autoIncrement: true }),
     name: text("name").notNull(),
     token: text("token").notNull().unique(),
-    created_by: int("created_by")
-      .notNull()
-      .references(() => users.id),
     status: text("status").default("inactive"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
@@ -167,12 +301,11 @@ export const agents = sqliteTable(
     tags: text("tags"),
     // 手动排序权重（列表按 sort_order asc, id asc）
     sort_order: int("sort_order").default(0),
+    // 软删除时间；删除后保留历史数据并吊销凭据。
+    deleted_at: text("deleted_at"),
   },
   (table) => ({
-    createdByCreatedAtIdx: index("agents_created_by_created_at_idx").on(
-      table.created_by,
-      table.created_at
-    ),
+    createdAtIdx: index("agents_created_at_idx").on(table.created_at),
     statusUpdatedAtIdx: index("agents_status_updated_at_idx").on(
       table.status,
       table.updated_at
@@ -180,6 +313,129 @@ export const agents = sqliteTable(
     statusNextOfflineAtIdx: index("agents_status_next_offline_at_idx").on(
       table.status,
       table.next_offline_at
+    ),
+  })
+);
+
+// v2 Agent 管理配置；凭据继续由 agent_credentials 独立保存。
+export const agentNodes = sqliteTable(
+  "agent_nodes",
+  {
+    id: int("id").primaryKey(),
+    name: text("name").notNull(),
+    collect_interval_ms: int("collect_interval_ms").notNull(),
+    report_interval_ms: int("report_interval_ms").notNull(),
+    group_name: text("group_name"),
+    tags_json: text("tags_json").notNull().default("[]"),
+    price: real("price"),
+    currency: text("currency"),
+    billing_cycle: text("billing_cycle"),
+    expire_date: text("expire_date"),
+    auto_renewal: int("auto_renewal").notNull().default(0),
+    is_hidden: int("is_hidden").notNull().default(0),
+    traffic_limit_gb: real("traffic_limit_gb"),
+    traffic_reset_day: int("traffic_reset_day").notNull().default(1),
+    traffic_calc_type: text("traffic_calc_type").notNull().default("sum"),
+    auto_update: int("auto_update").notNull().default(0),
+    sort_order: int("sort_order").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+    deleted_at_ms: int("deleted_at_ms"),
+  },
+  (table) => ({
+    activeCreatedIdx: index("agent_nodes_active_created_idx").on(
+      table.deleted_at_ms,
+      table.created_at_ms
+    ),
+  })
+);
+
+// v2 Agent 高频心跳与运行态，与管理员配置写入隔离。
+export const agentRuntime = sqliteTable(
+  "agent_runtime",
+  {
+    agent_id: int("agent_id")
+      .primaryKey()
+      .references(() => agentNodes.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("inactive"),
+    hostname: text("hostname"),
+    ip_addresses_json: text("ip_addresses_json").notNull().default("[]"),
+    os: text("os"),
+    agent_version: text("agent_version"),
+    keepalive_seconds: int("keepalive_seconds"),
+    boot_time: int("boot_time"),
+    last_seen_at_ms: int("last_seen_at_ms"),
+    last_state_changed_at_ms: int("last_state_changed_at_ms"),
+    next_offline_at_ms: int("next_offline_at_ms"),
+    region: text("region"),
+    geo_latitude: real("geo_latitude"),
+    geo_longitude: real("geo_longitude"),
+    geo_city: text("geo_city"),
+    geo_region_name: text("geo_region_name"),
+    version: int("version").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    statusOfflineIdx: index("agent_runtime_status_offline_idx").on(
+      table.status,
+      table.next_offline_at_ms
+    ),
+  })
+);
+
+// Agent 长期凭据。原始 Token 只存在于 Agent 本地，服务端保存 pepper HMAC 摘要。
+export const agentCredentials = sqliteTable(
+  "agent_credentials",
+  {
+    id: int("id").primaryKey({ autoIncrement: true }),
+    agent_id: int("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    token_digest: text("token_digest").notNull(),
+    token_hint: text("token_hint").notNull(),
+    last_used_at: text("last_used_at"),
+    revoked_at: text("revoked_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    tokenDigestUniqueIdx: uniqueIndex(
+      "agent_credentials_token_digest_unique_idx"
+    ).on(table.token_digest),
+    agentRevokedAtIdx: index("agent_credentials_agent_revoked_at_idx").on(
+      table.agent_id,
+      table.revoked_at
+    ),
+  })
+);
+
+// 管理端签发的一次性注册令牌；注册成功后同一明文 Token 继续作为旧 Agent 的长期凭据。
+export const agentEnrollmentTokens = sqliteTable(
+  "agent_enrollment_tokens",
+  {
+    id: int("id").primaryKey({ autoIncrement: true }),
+    token_digest: text("token_digest").notNull(),
+    issued_by: int("issued_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    agent_id: int("agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
+    expires_at: text("expires_at").notNull(),
+    used_at: text("used_at"),
+    revoked_at: text("revoked_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    tokenDigestUniqueIdx: uniqueIndex(
+      "agent_enrollment_tokens_token_digest_unique_idx"
+    ).on(table.token_digest),
+    expiryStateIdx: index("agent_enrollment_tokens_expiry_state_idx").on(
+      table.expires_at,
+      table.used_at,
+      table.revoked_at
     ),
   })
 );
@@ -224,6 +480,45 @@ export const agentLatestMetrics = sqliteTable(
   })
 );
 
+// v2 Agent 当前指标；时间统一为 Unix 毫秒，兼容期与 agent_latest_metrics 双写。
+export const agentCurrentMetrics = sqliteTable(
+  "agent_current_metrics",
+  {
+    agent_id: int("agent_id")
+      .primaryKey()
+      .references(() => agentNodes.id, { onDelete: "cascade" }),
+    metrics_json: text("metrics_json").notNull(),
+    collected_at_ms: int("collected_at_ms"),
+    reported_at_ms: int("reported_at_ms").notNull(),
+    cpu_usage: real("cpu_usage"),
+    memory_usage_rate: real("memory_usage_rate"),
+    disk_usage_rate: real("disk_usage_rate"),
+    swap_total: int("swap_total"),
+    swap_used: int("swap_used"),
+    process_count: int("process_count"),
+    tcp_connections: int("tcp_connections"),
+    udp_connections: int("udp_connections"),
+    ping_json: text("ping_json"),
+    ipv4_reachable: int("ipv4_reachable"),
+    ipv6_reachable: int("ipv6_reachable"),
+    network_rx_speed: real("network_rx_speed"),
+    network_tx_speed: real("network_tx_speed"),
+    month_rx: int("month_rx").notNull().default(0),
+    month_tx: int("month_tx").notNull().default(0),
+    last_total_rx: int("last_total_rx"),
+    last_total_tx: int("last_total_tx"),
+    traffic_period_start: text("traffic_period_start"),
+    version: int("version").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    reportedAtIdx: index("agent_current_metrics_reported_at_idx").on(
+      table.reported_at_ms
+    ),
+  })
+);
+
 // 客户端资源指标表
 export const agentMetrics24h = sqliteTable(
   "agent_metrics_24h",
@@ -256,11 +551,8 @@ export const agentMetrics24h = sqliteTable(
 );
 
 // 客户端历史指标表（整型分区主键：partitionId * 10^13 + YYMMDDHHmmss）
-// 注意：该表不建任何二级索引，查询全部走主键 BETWEEN 范围扫描；
-// 每周轮换出的 agent_metrics_history_old 表由运行时裸 SQL 管理，不进 drizzle schema。
-// ⚠️ 本表是列清单的单一事实源：轮换建表 DDL 由此运行时生成（jobs/rotation-task.ts），
-// 但 repositories/agent.ts 的 insertAgentMetricsHistory 插入映射与 queryHistoryRows
-// 聚合 SELECT 仍为手写，增删列时必须同步更新那两处。
+// 兼容旧历史的只读表；每周轮换出的 agent_metrics_history_old 由运行时裸 SQL管理。
+// 新 v4 样本事实源是 agent_report_samples，本表仅用于升级窗口内的旧数据查询。
 export const agentMetricsHistory = sqliteTable("agent_metrics_history", {
   id: int("id").primaryKey(),
   agent_id: int("agent_id").notNull(),
@@ -326,14 +618,203 @@ export const agentMetricRollups = sqliteTable(
   })
 );
 
+// Agent v4 上报信封。HTTP 入口只持久化已鉴权、已去除 Token 的规范化载荷，
+// Queue Consumer 以 report_id 去重并推进处理状态。
+export const agentReports = sqliteTable(
+  "agent_reports",
+  {
+    report_id: text("report_id").primaryKey(),
+    agent_id: int("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    payload_digest: text("payload_digest").notNull(),
+    payload_json: text("payload_json").notNull(),
+    sample_count: int("sample_count").notNull(),
+    status: text("status").notNull().default("pending"),
+    received_at: text("received_at").notNull(),
+    processed_at: text("processed_at"),
+    last_error: text("last_error"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    agentReceivedIdx: index("agent_reports_agent_received_at_idx").on(
+      table.agent_id,
+      table.received_at
+    ),
+    statusUpdatedIdx: index("agent_reports_status_updated_at_idx").on(
+      table.status,
+      table.updated_at
+    ),
+  })
+);
+
+// v4 原始样本按 report_id + sample_index 不可变落库；重投同一 Report 不重复写行。
+export const agentReportSamples = sqliteTable(
+  "agent_report_samples",
+  {
+    report_id: text("report_id")
+      .notNull()
+      .references(() => agentReports.report_id, { onDelete: "cascade" }),
+    sample_index: int("sample_index").notNull(),
+    agent_id: int("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    collected_at: text("collected_at").notNull(),
+    metrics_json: text("metrics_json").notNull(),
+    created_at: text("created_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.report_id, table.sample_index] }),
+    agentCollectedIdx: index(
+      "agent_report_samples_agent_collected_at_idx"
+    ).on(table.agent_id, table.collected_at),
+  })
+);
+
+// R2 原始样本归档账本：只有 checksum/size/head 全部验证后才写入 member，
+// 清理任务也只删除已关联 verified batch 的旧样本。
+export const rawSampleArchiveBatches = sqliteTable(
+  "raw_sample_archive_batches",
+  {
+    id: text("id").primaryKey(),
+    domain: text("domain").notNull(),
+    object_key: text("object_key").notNull(),
+    content_sha256: text("content_sha256").notNull(),
+    object_size_bytes: int("object_size_bytes").notNull(),
+    source_rows: int("source_rows").notNull(),
+    range_start: text("range_start").notNull(),
+    range_end: text("range_end").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: int("attempts").notNull().default(1),
+    r2_version: text("r2_version"),
+    r2_etag: text("r2_etag"),
+    verified_at: text("verified_at"),
+    last_error: text("last_error"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    objectKeyUnique: uniqueIndex(
+      "raw_sample_archive_batches_object_key_unique_idx"
+    ).on(table.object_key),
+    statusUpdatedIdx: index(
+      "raw_sample_archive_batches_status_updated_idx"
+    ).on(table.status, table.updated_at),
+  })
+);
+
+export const rawSampleArchiveMembers = sqliteTable(
+  "raw_sample_archive_members",
+  {
+    domain: text("domain").notNull(),
+    source_key: text("source_key").notNull(),
+    source_parent_key: text("source_parent_key").notNull(),
+    batch_id: text("batch_id")
+      .notNull()
+      .references(() => rawSampleArchiveBatches.id, { onDelete: "restrict" }),
+    archived_at: text("archived_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.domain, table.source_key] }),
+    batchIdx: index("raw_sample_archive_members_batch_idx").on(table.batch_id),
+    parentIdx: index("raw_sample_archive_members_parent_idx").on(
+      table.domain,
+      table.source_parent_key
+    ),
+  })
+);
+
+// 同一 Worker 的通用异步作业账本。dedup_key 负责消除 Cron 重叠和 HTTP 重投。
+export const asyncJobs = sqliteTable(
+  "async_jobs",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    dedup_key: text("dedup_key").notNull(),
+    aggregate_type: text("aggregate_type").notNull(),
+    aggregate_id: text("aggregate_id").notNull(),
+    payload_json: text("payload_json").notNull().default("{}"),
+    status: text("status").notNull().default("pending"),
+    attempts: int("attempts").notNull().default(0),
+    max_attempts: int("max_attempts").notNull().default(8),
+    available_at: text("available_at").notNull(),
+    lease_token: text("lease_token"),
+    lease_expires_at: text("lease_expires_at"),
+    last_error: text("last_error"),
+    completed_at: text("completed_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    dedupUniqueIdx: uniqueIndex("async_jobs_dedup_key_unique_idx").on(
+      table.dedup_key
+    ),
+    dueIdx: index("async_jobs_status_available_at_idx").on(
+      table.status,
+      table.available_at
+    ),
+    aggregateIdx: index("async_jobs_aggregate_idx").on(
+      table.aggregate_type,
+      table.aggregate_id
+    ),
+  })
+);
+
+// 领域副作用先与业务写入同一 D1 batch，再由 Queue 投递并按 event_id 消费。
+export const domainOutbox = sqliteTable(
+  "domain_outbox",
+  {
+    event_id: text("event_id").primaryKey(),
+    event_type: text("event_type").notNull(),
+    aggregate_type: text("aggregate_type").notNull(),
+    aggregate_id: text("aggregate_id").notNull(),
+    payload_json: text("payload_json").notNull().default("{}"),
+    status: text("status").notNull().default("pending"),
+    attempts: int("attempts").notNull().default(0),
+    available_at: text("available_at").notNull(),
+    published_at: text("published_at"),
+    processed_at: text("processed_at"),
+    last_error: text("last_error"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    dueIdx: index("domain_outbox_status_available_at_idx").on(
+      table.status,
+      table.available_at
+    ),
+    aggregateIdx: index("domain_outbox_aggregate_idx").on(
+      table.aggregate_type,
+      table.aggregate_id
+    ),
+  })
+);
+
+// 每个消费者维护独立幂等收件箱，保证领域事件至少一次投递时副作用只提交一次。
+export const processedEvents = sqliteTable(
+  "processed_events",
+  {
+    consumer: text("consumer").notNull(),
+    event_id: text("event_id").notNull(),
+    processed_at: text("processed_at").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.consumer, table.event_id] }),
+    processedAtIdx: index("processed_events_processed_at_idx").on(
+      table.processed_at
+    ),
+  })
+);
+
 // 状态页配置表
 export const statusPageConfig = sqliteTable(
   "status_page_config",
   {
     id: int("id").primaryKey({ autoIncrement: true }),
-    user_id: int("user_id")
-      .notNull()
-      .references(() => users.id),
+    singleton_key: int("singleton_key").notNull().default(1),
     title: text("title").notNull().default("系统状态"),
     description: text("description").default("系统当前运行状态"),
     logo_url: text("logo_url").default(""),
@@ -344,7 +825,56 @@ export const statusPageConfig = sqliteTable(
     updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
   },
   (table) => ({
-    userIdx: index("status_page_config_user_id_idx").on(table.user_id),
+    singletonIdx: uniqueIndex("status_page_config_singleton_idx").on(
+      table.singleton_key
+    ),
+  })
+);
+
+// v2 单例状态页配置；兼容期与 status_page_config 双写。
+export const statusPages = sqliteTable(
+  "status_pages",
+  {
+    id: int("id").primaryKey(),
+    singleton_key: int("singleton_key").notNull().default(1),
+    title: text("title").notNull(),
+    description: text("description"),
+    logo_url: text("logo_url"),
+    custom_css: text("custom_css"),
+    theme: text("theme").notNull().default("mono"),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    singletonUniqueIdx: uniqueIndex("status_pages_singleton_key_unique_idx").on(
+      table.singleton_key
+    ),
+  })
+);
+
+// v2 状态页组件统一关联；component_type 明确区分 Monitor 与 Agent。
+export const statusComponents = sqliteTable(
+  "status_components",
+  {
+    page_id: int("page_id")
+      .notNull()
+      .references(() => statusPages.id, { onDelete: "cascade" }),
+    component_type: text("component_type").notNull(),
+    component_id: int("component_id").notNull(),
+    sort_order: int("sort_order").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.page_id, table.component_type, table.component_id],
+    }),
+    typeOrderIdx: index("status_components_page_type_order_idx").on(
+      table.page_id,
+      table.component_type,
+      table.sort_order,
+      table.component_id
+    ),
   })
 );
 
@@ -395,6 +925,7 @@ export const monitorCheckRollups = sqliteTable(
     down_checks: int("down_checks").notNull().default(0),
     last_status: text("last_status"),
     response_time_avg: int("response_time_avg").default(0),
+    response_time_min: int("response_time_min").notNull().default(0),
     response_time_p95: int("response_time_p95").default(0),
     response_time_max: int("response_time_max").default(0),
     created_at: text("created_at").notNull(),
@@ -438,9 +969,7 @@ export const monitorIncidents = sqliteTable(
 
 // 公共状态页快照表
 export const publicStatusSnapshots = sqliteTable("public_status_snapshots", {
-  user_id: int("user_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
+  id: int("id").primaryKey().default(1),
   snapshot_json: text("snapshot_json").notNull(),
   etag: text("etag").notNull(),
   generated_at: text("generated_at").notNull(),
@@ -460,19 +989,38 @@ export const notificationChannels = sqliteTable(
     type: text("type").notNull(),
     config: text("config").notNull(),
     enabled: int("enabled").notNull().default(1),
-    created_by: int("created_by")
-      .notNull()
-      .references(() => users.id),
+    deleted_at: text("deleted_at"),
     created_at: text("created_at").default("CURRENT_TIMESTAMP"),
     updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
   },
   (table) => ({
-    createdByIdIdx: index("notification_channels_created_by_id_idx").on(
-      table.created_by,
-      table.id
-    ),
+    idIdx: index("notification_channels_id_idx").on(table.id),
   })
 );
+
+// 通知渠道非敏感 Endpoint 配置，与加密 Secret 分离。
+export const notificationEndpoints = sqliteTable("notification_endpoints", {
+  channel_id: int("channel_id")
+    .primaryKey()
+    .references(() => notificationChannels.id, { onDelete: "cascade" }),
+  public_config_json: text("public_config_json").notNull(),
+  created_at: text("created_at").notNull(),
+  updated_at: text("updated_at").notNull(),
+});
+
+// 每个渠道独立 DEK；DEK 由 Worker Secret 中的 KEK 包装。
+export const notificationSecrets = sqliteTable("notification_secrets", {
+  channel_id: int("channel_id")
+    .primaryKey()
+    .references(() => notificationChannels.id, { onDelete: "cascade" }),
+  ciphertext: text("ciphertext").notNull(),
+  iv: text("iv").notNull(),
+  wrapped_dek: text("wrapped_dek").notNull(),
+  wrap_iv: text("wrap_iv").notNull(),
+  key_version: int("key_version").notNull().default(1),
+  created_at: text("created_at").notNull(),
+  updated_at: text("updated_at").notNull(),
+});
 
 // 通知模板表
 export const notificationTemplates = sqliteTable("notification_templates", {
@@ -480,23 +1028,59 @@ export const notificationTemplates = sqliteTable("notification_templates", {
   name: text("name").notNull(),
   type: text("type").notNull(),
   subject: text("subject").notNull(),
-  content: text("content").notNull(),
-  is_default: int("is_default").notNull().default(0),
-  created_by: int("created_by")
-    .notNull()
-    .references(() => users.id),
-  created_at: text("created_at").default("CURRENT_TIMESTAMP"),
+    content: text("content").notNull(),
+    is_default: int("is_default").notNull().default(0),
+    deleted_at: text("deleted_at"),
+    created_at: text("created_at").default("CURRENT_TIMESTAMP"),
   updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
 });
+
+// 通知模板当前定义；旧模板 ID 保持稳定，内容由不可变版本表承载。
+export const notificationTemplateDefinitions = sqliteTable(
+  "notification_template_definitions",
+  {
+    id: int("id").primaryKey(),
+    name: text("name").notNull(),
+    type: text("type").notNull(),
+    current_version: int("current_version").notNull().default(1),
+    is_default: int("is_default").notNull().default(0),
+    deleted_at_ms: int("deleted_at_ms"),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    typeDefaultIdx: index("notification_template_definitions_type_default_idx").on(
+      table.type,
+      table.deleted_at_ms,
+      table.is_default,
+      table.id
+    ),
+  })
+);
+
+export const notificationTemplateVersions = sqliteTable(
+  "notification_template_versions",
+  {
+    template_id: int("template_id")
+      .notNull()
+      .references(() => notificationTemplateDefinitions.id, {
+        onDelete: "cascade",
+      }),
+    version: int("version").notNull(),
+    subject: text("subject").notNull(),
+    content: text("content").notNull(),
+    created_at_ms: int("created_at_ms").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.template_id, table.version] }),
+  })
+);
 
 // 通知设置表
 export const notificationSettings = sqliteTable(
   "notification_settings",
   {
     id: int("id").primaryKey({ autoIncrement: true }),
-    user_id: int("user_id")
-      .notNull()
-      .references(() => users.id),
     target_type: text("target_type").notNull().default("global"),
     target_id: int("target_id"),
     enabled: int("enabled").notNull().default(1),
@@ -516,10 +1100,83 @@ export const notificationSettings = sqliteTable(
   },
   (table) => ({
     lookupIdx: index("notification_settings_lookup_idx").on(
-      table.user_id,
       table.target_type,
       table.target_id,
       table.enabled
+    ),
+  })
+);
+
+// 规范化通知规则。迁移期与 notification_settings 双写，ID 保持一致以兼容旧数据。
+export const notificationRules = sqliteTable(
+  "notification_rules",
+  {
+    id: int("id").primaryKey(),
+    target_type: text("target_type").notNull(),
+    target_id: int("target_id"),
+    enabled: int("enabled").notNull().default(1),
+    on_down: int("on_down").notNull().default(1),
+    on_recovery: int("on_recovery").notNull().default(1),
+    on_offline: int("on_offline").notNull().default(1),
+    on_cpu_threshold: int("on_cpu_threshold").notNull().default(0),
+    cpu_threshold: int("cpu_threshold").notNull().default(90),
+    on_memory_threshold: int("on_memory_threshold").notNull().default(0),
+    memory_threshold: int("memory_threshold").notNull().default(85),
+    on_disk_threshold: int("on_disk_threshold").notNull().default(0),
+    disk_threshold: int("disk_threshold").notNull().default(90),
+    cooldown_minutes: int("cooldown_minutes").notNull().default(30),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    lookupIdx: index("notification_rules_lookup_idx").on(
+      table.target_type,
+      table.target_id,
+      table.enabled,
+      table.id
+    ),
+  })
+);
+
+// 规则与投递端点的有序关联，替代 notification_settings.channels JSON 数组。
+export const notificationRuleEndpoints = sqliteTable(
+  "notification_rule_endpoints",
+  {
+    rule_id: int("rule_id")
+      .notNull()
+      .references(() => notificationRules.id, { onDelete: "cascade" }),
+    channel_id: int("channel_id")
+      .notNull()
+      .references(() => notificationChannels.id, { onDelete: "cascade" }),
+    sort_order: int("sort_order").notNull().default(0),
+    created_at_ms: int("created_at_ms").notNull(),
+    updated_at_ms: int("updated_at_ms").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.rule_id, table.channel_id] }),
+    channelIdx: index("notification_rule_endpoints_channel_idx").on(
+      table.channel_id,
+      table.rule_id
+    ),
+  })
+);
+
+// 通知设置批量命令账本：请求键与请求摘要绑定，完成响应可安全重放。
+export const notificationSettingCommands = sqliteTable(
+  "notification_setting_commands",
+  {
+    idempotency_key: text("idempotency_key").primaryKey(),
+    request_hash: text("request_hash").notNull(),
+    status: text("status").notNull(),
+    response_json: text("response_json"),
+    last_error: text("last_error"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    statusUpdatedIdx: index("notification_setting_commands_status_updated_idx").on(
+      table.status,
+      table.updated_at
     ),
   })
 );
@@ -550,7 +1207,356 @@ export const notificationHistory = sqliteTable(
   })
 );
 
-// 新增：应用设置表
+// 由领域 Outbox 投影出的通知事件；source_event_id 保证重复消费只生成一组消息。
+export const notificationEvents = sqliteTable(
+  "notification_events",
+  {
+    event_id: text("event_id").primaryKey(),
+    source_event_id: text("source_event_id").notNull(),
+    type: text("type").notNull(),
+    target_id: int("target_id"),
+    event_key: text("event_key").notNull(),
+    variables_json: text("variables_json").notNull(),
+    status: text("status").notNull().default("pending"),
+    completed_at: text("completed_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sourceUniqueIdx: uniqueIndex("notification_events_source_event_id_unique_idx").on(
+      table.source_event_id
+    ),
+    statusUpdatedIdx: index("notification_events_status_updated_at_idx").on(
+      table.status,
+      table.updated_at
+    ),
+  })
+);
+
+// 每个事件、每个渠道一条持久化投递消息；供应商调用由租约保护。
+export const notificationMessages = sqliteTable(
+  "notification_messages",
+  {
+    message_id: text("message_id").primaryKey(),
+    event_id: text("event_id")
+      .notNull()
+      .references(() => notificationEvents.event_id, { onDelete: "cascade" }),
+    channel_id: int("channel_id")
+      .notNull()
+      .references(() => notificationChannels.id, { onDelete: "cascade" }),
+    template_id: int("template_id")
+      .notNull()
+      .references(() => notificationTemplates.id),
+    subject: text("subject").notNull(),
+    content: text("content").notNull(),
+    cooldown_minutes: int("cooldown_minutes").notNull().default(30),
+    status: text("status").notNull().default("pending"),
+    attempts: int("attempts").notNull().default(0),
+    max_attempts: int("max_attempts").notNull().default(5),
+    available_at: text("available_at").notNull(),
+    lease_token: text("lease_token"),
+    lease_expires_at: text("lease_expires_at"),
+    provider_status_code: int("provider_status_code"),
+    last_error: text("last_error"),
+    sent_at: text("sent_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    eventChannelUniqueIdx: uniqueIndex(
+      "notification_messages_event_channel_unique_idx"
+    ).on(table.event_id, table.channel_id),
+    dueIdx: index("notification_messages_status_available_at_idx").on(
+      table.status,
+      table.available_at
+    ),
+  })
+);
+
+export const notificationAttempts = sqliteTable(
+  "notification_attempts",
+  {
+    attempt_id: text("attempt_id").primaryKey(),
+    message_id: text("message_id")
+      .notNull()
+      .references(() => notificationMessages.message_id, { onDelete: "cascade" }),
+    attempt_number: int("attempt_number").notNull(),
+    started_at: text("started_at").notNull(),
+    completed_at: text("completed_at").notNull(),
+    duration_ms: int("duration_ms").notNull(),
+    success: int("success").notNull(),
+    provider_status_code: int("provider_status_code"),
+    error_category: text("error_category"),
+    error: text("error"),
+    retryable: int("retryable").notNull().default(0),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    messageAttemptUniqueIdx: uniqueIndex(
+      "notification_attempts_message_attempt_unique_idx"
+    ).on(table.message_id, table.attempt_number),
+  })
+);
+
+export const notificationCooldowns = sqliteTable(
+  "notification_cooldowns",
+  {
+    cooldown_key: text("cooldown_key").primaryKey(),
+    type: text("type").notNull(),
+    target_id: int("target_id"),
+    channel_id: int("channel_id")
+      .notNull()
+      .references(() => notificationChannels.id, { onDelete: "cascade" }),
+    event_key: text("event_key").notNull(),
+    last_sent_at: text("last_sent_at").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    lookupIdx: index("notification_cooldowns_lookup_idx").on(
+      table.type,
+      table.target_id,
+      table.channel_id,
+      table.event_key
+    ),
+  })
+);
+
+// 不可变公共发布物及其单例活动指针。
+export const statusPublications = sqliteTable(
+  "status_publications",
+  {
+    id: int("id").primaryKey({ autoIncrement: true }),
+    source_event_id: text("source_event_id").notNull(),
+    payload_json: text("payload_json").notNull(),
+    etag: text("etag").notNull(),
+    generated_at: text("generated_at").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sourceUniqueIdx: uniqueIndex("status_publications_source_event_id_unique_idx").on(
+      table.source_event_id
+    ),
+    generatedIdx: index("status_publications_generated_at_idx").on(
+      table.generated_at
+    ),
+  })
+);
+
+export const statusPublicationState = sqliteTable("status_publication_state", {
+  singleton_key: int("singleton_key").primaryKey().default(1),
+  active_publication_id: int("active_publication_id").references(
+    () => statusPublications.id,
+    { onDelete: "set null" }
+  ),
+  updated_at: text("updated_at").notNull(),
+});
+
+// Agent 历史指标与主状态发布物绑定；活动指针切换时两类匿名数据同步生效。
+export const statusMetricPublications = sqliteTable(
+  "status_metric_publications",
+  {
+    id: int("id").primaryKey({ autoIncrement: true }),
+    status_publication_id: int("status_publication_id")
+      .notNull()
+      .references(() => statusPublications.id, { onDelete: "cascade" }),
+    agent_id: int("agent_id").notNull(),
+    payload_json: text("payload_json").notNull(),
+    etag: text("etag").notNull(),
+    generated_at: text("generated_at").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    publicationAgentUniqueIdx: uniqueIndex(
+      "status_metric_publications_publication_agent_unique_idx"
+    ).on(table.status_publication_id, table.agent_id),
+    agentGeneratedIdx: index(
+      "status_metric_publications_agent_generated_at_idx"
+    ).on(table.agent_id, table.generated_at),
+  })
+);
+
+// 平台 DLQ 消息进入同一 Worker 后先落账本，管理端可重放或终止。
+export const queueFailures = sqliteTable(
+  "queue_failures",
+  {
+    failure_id: text("failure_id").primaryKey(),
+    queue_name: text("queue_name").notNull(),
+    message_id: text("message_id").notNull(),
+    message_json: text("message_json").notNull(),
+    source_kind: text("source_kind"),
+    source_id: text("source_id"),
+    delivery_attempts: int("delivery_attempts").notNull(),
+    last_error: text("last_error"),
+    status: text("status").notNull().default("open"),
+    replay_count: int("replay_count").notNull().default(0),
+    replayed_at: text("replayed_at"),
+    terminated_at: text("terminated_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    queueMessageUniqueIdx: uniqueIndex("queue_failures_queue_message_unique_idx").on(
+      table.queue_name,
+      table.message_id
+    ),
+    statusUpdatedIdx: index("queue_failures_status_updated_at_idx").on(
+      table.status,
+      table.updated_at
+    ),
+  })
+);
+
+// 可恢复 Backfill 的持久化游标与守恒计数；每个 migration_key 只有一个活动状态。
+export const migrationCheckpoints = sqliteTable(
+  "migration_checkpoints",
+  {
+    migration_key: text("migration_key").primaryKey(),
+    phase: text("phase").notNull(),
+    status: text("status").notNull().default("pending"),
+    last_pk: text("last_pk"),
+    rows_read: int("rows_read").notNull().default(0),
+    rows_written: int("rows_written").notNull().default(0),
+    rows_skipped: int("rows_skipped").notNull().default(0),
+    anomaly_rows: int("anomaly_rows").notNull().default(0),
+    checksum: text("checksum"),
+    last_error: text("last_error"),
+    lease_token: text("lease_token"),
+    lease_expires_at: text("lease_expires_at"),
+    started_at: text("started_at"),
+    completed_at: text("completed_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    statusUpdatedIdx: index("migration_checkpoints_status_updated_at_idx").on(
+      table.status,
+      table.updated_at
+    ),
+  })
+);
+
+// 无损隔离无法规范化的源行；原值采用 JSON 保存并可由管理面标记处理结果。
+export const migrationAnomalies = sqliteTable(
+  "migration_anomalies",
+  {
+    id: int("id").primaryKey({ autoIncrement: true }),
+    migration_key: text("migration_key").notNull(),
+    source_table: text("source_table").notNull(),
+    source_pk: text("source_pk").notNull(),
+    error_code: text("error_code").notNull(),
+    raw_value_json: text("raw_value_json").notNull(),
+    status: text("status").notNull().default("open"),
+    resolution_note: text("resolution_note"),
+    first_seen_at: text("first_seen_at").notNull(),
+    resolved_at: text("resolved_at"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sourceUniqueIdx: uniqueIndex("migration_anomalies_source_unique_idx").on(
+      table.migration_key,
+      table.source_table,
+      table.source_pk,
+      table.error_code
+    ),
+    statusIdx: index("migration_anomalies_status_id_idx").on(
+      table.status,
+      table.id
+    ),
+    migrationIdx: index("migration_anomalies_migration_id_idx").on(
+      table.migration_key,
+      table.id
+    ),
+  })
+);
+
+// v1 兼容路由按日聚合命中，不保存来源 IP、User-Agent 或请求正文。
+export const apiCompatibilityHits = sqliteTable(
+  "api_compatibility_hits",
+  {
+    day: text("day").notNull(),
+    route_group: text("route_group").notNull(),
+    method: text("method").notNull(),
+    status_family: text("status_family").notNull(),
+    hit_count: int("hit_count").notNull().default(0),
+    first_seen_at: text("first_seen_at").notNull(),
+    last_seen_at: text("last_seen_at").notNull(),
+    last_release_version: text("last_release_version").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.day, table.route_group, table.method, table.status_family],
+    }),
+    groupSeenIdx: index("api_compatibility_hits_group_seen_idx").on(
+      table.route_group,
+      table.last_seen_at
+    ),
+  })
+);
+
+// 旧数据主键到兼容目标行的稳定映射，用于守恒对账、追溯与幂等重放。
+export const legacyIdMap = sqliteTable(
+  "legacy_id_map",
+  {
+    source_table: text("source_table").notNull(),
+    source_id: text("source_id").notNull(),
+    target_table: text("target_table").notNull(),
+    target_id: text("target_id").notNull(),
+    payload_checksum: text("payload_checksum").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.source_table, table.source_id] }),
+    targetIdx: index("legacy_id_map_target_idx").on(
+      table.target_table,
+      table.target_id
+    ),
+  })
+);
+
+// 独立 Contract 发布前固化的证据包。记录只追加，清理旧表后 Readiness 仍可
+// 展示清理前的守恒、静默窗口、Bookmark/Export 摘要与发布版本。
+export const contractReleaseEvidence = sqliteTable(
+  "contract_release_evidence",
+  {
+    id: text("id").primaryKey(),
+    bundle_sha256: text("bundle_sha256").notNull(),
+    release_version: text("release_version").notNull(),
+    git_sha: text("git_sha").notNull(),
+    bundle_json: text("bundle_json").notNull(),
+    prepared_at: text("prepared_at").notNull(),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (table) => ({
+    bundleUniqueIdx: uniqueIndex("contract_release_evidence_bundle_sha_unique_idx").on(
+      table.bundle_sha256
+    ),
+    preparedIdx: index("contract_release_evidence_prepared_at_idx").on(
+      table.prepared_at
+    ),
+  })
+);
+
+// 单例指针只指向已在同一 Contract 事务中激活的不可变证据记录。
+export const contractReleaseState = sqliteTable("contract_release_state", {
+  singleton_key: int("singleton_key").primaryKey().default(1),
+  active_evidence_id: text("active_evidence_id")
+    .notNull()
+    .references(() => contractReleaseEvidence.id, { onDelete: "restrict" }),
+  phase: text("phase").notNull(),
+  activated_at: text("activated_at").notNull(),
+  updated_at: text("updated_at").notNull(),
+});
+
+// 仅用于数据库迁移版本等实例级元数据。
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value"),

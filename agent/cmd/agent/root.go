@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -30,19 +31,27 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "配置文件路径 (默认为 $HOME/.xugou-agent.yaml)")
 	rootCmd.PersistentFlags().String("server", "", "监控服务器地址（例如:https://api.xugou.mdzz.uk）")
 	rootCmd.PersistentFlags().String("token", "", "API 令牌（例如： xugou_maxln220_df8900585981ab775b36dcaaaee772d8.f668c0cf84d1840d）")
+	rootCmd.PersistentFlags().String("token-file", "", "API 凭据文件路径（Unix 权限需为 0600）")
 	rootCmd.PersistentFlags().StringSlice("devices", []string{}, "指定监控的硬盘设备列表 (例如: /dev/sda1,/dev/sdb1)")
 	rootCmd.PersistentFlags().StringSlice("interfaces", []string{}, "指定监控的网络接口列表 (例如: eth0,wlan0)")
 	rootCmd.PersistentFlags().IntP("interval", "i", 60, "兼容旧配置：数据采集和上报间隔（秒）")
 	rootCmd.PersistentFlags().Int("collect-interval", 60, "本机数据采集间隔（秒）")
 	rootCmd.PersistentFlags().Int("report-interval", 300, "向服务器批量上报间隔（秒）")
+	rootCmd.PersistentFlags().String("spool-dir", "", "持久化采样队列目录（默认与配置文件同目录）")
+	rootCmd.PersistentFlags().Int64("spool-max-bytes", 64*1024*1024, "持久化采样队列大小上限（字节）")
+	rootCmd.PersistentFlags().Int("report-max-compressed-bytes", 512*1024, "单个 gzip 上报批次大小上限（字节）")
 	rootCmd.PersistentFlags().StringP("proxy", "p", "", "HTTP代理服务器地址（例如：http://proxy.example.com:8080）")
 
 	viper.BindPFlag("interval", rootCmd.PersistentFlags().Lookup("interval"))
 	viper.BindPFlag("collect-interval", rootCmd.PersistentFlags().Lookup("collect-interval"))
 	viper.BindPFlag("report-interval", rootCmd.PersistentFlags().Lookup("report-interval"))
+	viper.BindPFlag("spool-dir", rootCmd.PersistentFlags().Lookup("spool-dir"))
+	viper.BindPFlag("spool-max-bytes", rootCmd.PersistentFlags().Lookup("spool-max-bytes"))
+	viper.BindPFlag("report-max-compressed-bytes", rootCmd.PersistentFlags().Lookup("report-max-compressed-bytes"))
 	viper.BindPFlag("proxy", rootCmd.PersistentFlags().Lookup("proxy"))
 	viper.BindPFlag("server", rootCmd.PersistentFlags().Lookup("server"))
 	viper.BindPFlag("token", rootCmd.PersistentFlags().Lookup("token"))
+	viper.BindPFlag("token-file", rootCmd.PersistentFlags().Lookup("token-file"))
 	viper.BindPFlag("devices", rootCmd.PersistentFlags().Lookup("devices"))
 	viper.BindPFlag("interfaces", rootCmd.PersistentFlags().Lookup("interfaces"))
 }
@@ -67,8 +76,9 @@ func initConfig() {
 	}
 
 	// 读取环境变量
-	viper.AutomaticEnv()
 	viper.SetEnvPrefix("XUGOU")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
 
 	// 如果找到配置文件，则读取它。
 	// 诊断信息走 stderr，保证 `version --short` 等机器可读输出的 stdout 干净。

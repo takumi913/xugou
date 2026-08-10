@@ -4,7 +4,6 @@ export interface User {
   username: string;
   password: string;
   email: string | null;
-  role: string;
   created_at: string;
   updated_at: string;
 }

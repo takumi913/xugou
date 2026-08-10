@@ -2,6 +2,7 @@ package reporter
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,8 +38,8 @@ func setConfigHeaders(req *http.Request) {
 
 // Reporter 定义数据上报器接口
 type Reporter interface {
-	// ReportBatch 上报批量采集的系统信息；服务端下发新配置时返回非 nil 的 RemoteConfig
-	ReportBatch(ctx context.Context, infoList []*model.SystemInfo) (*config.RemoteConfig, error)
+	// Report 上报已由持久化 Spool 固化 report_id 的 v4 批次。
+	Report(ctx context.Context, report *model.AgentReport) (*config.RemoteConfig, error)
 }
 
 type DefaultReporter struct {
@@ -81,48 +82,48 @@ func NewHTTPReporter() *model.HTTPReporter {
 	return reporter
 }
 
-// ReportBatch 将多个系统信息批量上报到服务器。
-// 上报体为 {<最新样本的全部字段>, samples: [...]}：顶层保持旧协议形态（旧服务端忽略未知的
-// samples 字段），samples 承载整个窗口内的全部采集样本。
-// 服务端通过 204/200+form 串下发配置：有新配置且校验通过时返回非 nil 的 RemoteConfig。
-func (r *DefaultReporter) ReportBatch(ctx context.Context, infoList []*model.SystemInfo) (*config.RemoteConfig, error) {
-	if len(infoList) == 0 {
-		return nil, errors.New("没有可上报的系统信息")
+// Report 使用 gzip 发送 v4 批次。调用方只在 2xx 后 Ack Spool，因此 HTTP 超时、
+// 5xx 或进程退出都会在下一轮重用同一个 report_id 和 Payload。
+func (r *DefaultReporter) Report(ctx context.Context, report *model.AgentReport) (*config.RemoteConfig, error) {
+	if report == nil || report.ReportID == "" || len(report.Samples) == 0 {
+		return nil, errors.New("没有可上报的 v4 批次")
 	}
 
 	if !r.reporter.Registered {
-		// 客户端未注册，先注册
-		if err := r.register(ctx, infoList[0]); err != nil {
+		if err := r.register(ctx, report); err != nil {
 			log.Printf("注册客户端失败: %v", err)
 			return nil, err
 		}
 	}
 
-	samples := make([]*model.Sample, 0, len(infoList))
-	for _, info := range infoList {
-		samples = append(samples, model.NewSample(info))
-	}
-
-	payload := &model.StatusReport{
-		SystemInfo: infoList[len(infoList)-1],
-		Samples:    samples,
-	}
-
-	reportURL := fmt.Sprintf("%s/api/agents/status", r.reporter.ServerURL)
-	reportPaylod, err := json.Marshal(payload)
-
+	reportURL := fmt.Sprintf("%s/api/v2/agents/reports", r.reporter.ServerURL)
+	reportPayload, err := json.Marshal(report)
 	if err != nil {
 		log.Println("序列化上报数据失败: ", err)
 		return nil, err
 	}
+	var compressed bytes.Buffer
+	zipper, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
+	if err != nil {
+		return nil, fmt.Errorf("创建 gzip 编码器失败: %w", err)
+	}
+	if _, err := zipper.Write(reportPayload); err != nil {
+		return nil, fmt.Errorf("压缩上报数据失败: %w", err)
+	}
+	if err := zipper.Close(); err != nil {
+		return nil, fmt.Errorf("结束压缩上报数据失败: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", reportURL, bytes.NewBuffer(reportPaylod))
+	req, err := http.NewRequestWithContext(ctx, "POST", reportURL, bytes.NewReader(compressed.Bytes()))
 	if err != nil {
 		log.Println("创建请求失败：", err)
 		return nil, err
 	}
 	setDefaultHeaders(req)
 	setConfigHeaders(req)
+	req.Header.Set("Authorization", "Bearer "+r.reporter.ApiToken)
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := r.reporter.Client.Do(req)
 	if err != nil {
@@ -131,11 +132,52 @@ func (r *DefaultReporter) ReportBatch(ctx context.Context, infoList []*model.Sys
 	}
 	defer resp.Body.Close()
 	if err := checkResponse(resp, "上报数据失败"); err != nil {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusGone {
+			r.reporter.Registered = false
+		}
 		log.Println(err)
 		return nil, err
 	}
-	log.Printf("批量上报数据成功: count=%d", len(infoList))
-	return parseConfigResponse(resp), nil
+	log.Printf("v4 批量上报成功: report_id=%s count=%d compressed_bytes=%d", report.ReportID, len(report.Samples), compressed.Len())
+	return parseV4ConfigResponse(resp), nil
+}
+
+type v4ReportResponse struct {
+	Config struct {
+		CollectIntervalSeconds int  `json:"collect_interval_seconds"`
+		ReportIntervalSeconds  int  `json:"report_interval_seconds"`
+		Update                 bool `json:"update"`
+	} `json:"config"`
+}
+
+const maxRegisterResponseBytes = 64 * 1024
+
+func parseV4ConfigResponse(resp *http.Response) *config.RemoteConfig {
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
+	if err != nil || len(body) == 0 || len(body) > 4096 {
+		log.Printf("读取 v4 配置响应失败: bytes=%d err=%v", len(body), err)
+		return nil
+	}
+	var decoded v4ReportResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		log.Printf("解析 v4 配置响应失败: %v", err)
+		return nil
+	}
+	if err := config.ValidateIntervals(
+		decoded.Config.CollectIntervalSeconds,
+		decoded.Config.ReportIntervalSeconds,
+	); err != nil {
+		log.Printf("v4 配置响应值域校验失败: %v", err)
+		return nil
+	}
+	return &config.RemoteConfig{
+		CollectInterval: decoded.Config.CollectIntervalSeconds,
+		ReportInterval:  decoded.Config.ReportIntervalSeconds,
+		Update:          decoded.Config.Update,
+	}
 }
 
 // parseConfigResponse 解析上报响应中的配置下发：
@@ -165,18 +207,17 @@ func parseConfigResponse(resp *http.Response) *config.RemoteConfig {
 	return remote
 }
 
-func (r *DefaultReporter) register(ctx context.Context, info *model.SystemInfo) error {
+func (r *DefaultReporter) register(ctx context.Context, report *model.AgentReport) error {
 
 	log.Println("开始检查是否客户端已经注册，未注册将会自动注册")
 
-	registerURL := fmt.Sprintf("%s/api/agents/register", r.reporter.ServerURL)
+	registerURL := fmt.Sprintf("%s/api/v2/agents/register", r.reporter.ServerURL)
 	registerPaylod := &model.RegisterPayload{
-		Token:       config.Token,
-		Name:        info.Hostname,
-		Hostname:    info.Hostname,
-		IPAddresses: utils.GetLocalIPs(),
-		OS:          info.OS,
-		Version:     info.Version,
+		Name:        report.Hostname,
+		Hostname:    report.Hostname,
+		IPAddresses: report.IPAddresses,
+		OS:          report.OS,
+		Version:     report.Version,
 	}
 
 	data, err := json.Marshal(registerPaylod)
@@ -192,6 +233,8 @@ func (r *DefaultReporter) register(ctx context.Context, info *model.SystemInfo) 
 		return err
 	}
 	setDefaultHeaders(req)
+	req.Header.Set("Authorization", "Bearer "+r.reporter.ApiToken)
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := r.reporter.Client.Do(req)
 	if err != nil {
@@ -204,26 +247,28 @@ func (r *DefaultReporter) register(ctx context.Context, info *model.SystemInfo) 
 		return err
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegisterResponseBytes+1))
 
 	if err != nil {
 		log.Println("注册客户端失败: ", err)
 		return err
 	}
+	if len(body) > maxRegisterResponseBytes {
+		return fmt.Errorf("注册响应超过 %d 字节限制", maxRegisterResponseBytes)
+	}
 
-	var respData *model.RegisterResponse
+	var respData model.RegisterResponse
 
 	if err := json.Unmarshal(body, &respData); err != nil {
 		log.Println("注册客户端失败: ", err)
 		return err
 	}
 
-	if !respData.Success {
-		log.Println("注册客户端失败: ", respData.Message)
-		return errors.New(respData.Message)
+	if respData.Data.AgentID <= 0 {
+		return errors.New("注册响应缺少有效的 agent_id")
 	}
 
-	log.Printf("客户端 ID: %d", respData.Agent.ID)
+	log.Printf("客户端 ID: %d", respData.Data.AgentID)
 
 	r.reporter.Registered = true
 

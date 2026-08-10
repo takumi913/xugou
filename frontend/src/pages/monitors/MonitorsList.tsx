@@ -1,13 +1,13 @@
-import { useCallback, useRef, useState, type DragEvent } from "react";
+import { useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Box,
   Flex,
   Text,
-  IconButton,
   Grid,
   Container,
-} from "@/components/ui/theme-shim";
+} from "@/components/ui/layout";
 import {
   Button,
   Table,
@@ -43,29 +43,31 @@ import {
 } from "@radix-ui/react-icons";
 import { toast } from "sonner";
 import {
-  getAllMonitors,
+  getMonitorsPage,
   deleteMonitor,
-  getAllDailyStats,
-  getAllMonitorHistory,
   updateMonitorsOrder,
   exportMonitors,
   importMonitors,
+  type MonitorDailyStats,
+  type MonitorHistory,
+  type MonitorV2,
 } from "../../api/monitors";
 import { downloadJson, readJsonArrayFile } from "../../utils/importExport";
-import { MonitorWithDailyStatsAndStatusHistory } from "../../types/monitors";
 import MonitorCard from "../../components/MonitorCard";
 import PageLoading from "../../components/PageLoading";
 import { useTranslation } from "react-i18next";
-import { usePolling } from "../../hooks/usePolling";
 import { monitorStatusColors } from "../../utils/statusColors";
+
+type MonitorListItem = MonitorV2 & {
+  dailyStats: MonitorDailyStats[];
+  history: MonitorHistory[];
+};
+
+const monitorListQueryKey = ["monitors", "management-list"] as const;
 
 const MonitorsList = () => {
   const navigate = useNavigate();
-  const [monitors, setMonitors] = useState<
-    MonitorWithDailyStatsAndStatusHistory[]
-  >([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [view, setView] = useState<"list" | "grid">("grid");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedMonitorId, setSelectedMonitorId] = useState<number | null>(
@@ -76,82 +78,104 @@ const MonitorsList = () => {
   const [dragOverId, setDragOverId] = useState<number | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const { t } = useTranslation();
+  const [cursor, setCursor] = useState<string | undefined>();
+  const [cursorHistory, setCursorHistory] = useState<(string | undefined)[]>([]);
+  const monitorPageQueryKey = [
+    ...monitorListQueryKey,
+    cursor ?? null,
+  ] as const;
 
-  // 获取监控数据
-  const fetchData = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    try {
-      const [response, responseDailyStats, responseMonitorHistory] =
-        await Promise.all([
-          getAllMonitors(signal),
-          getAllDailyStats(signal),
-          getAllMonitorHistory(signal),
-        ]);
-      if (signal?.aborted) return;
+  const monitorsQuery = useQuery({
+    queryKey: monitorPageQueryKey,
+    queryFn: async ({ signal }) => {
+      const page = await getMonitorsPage({ cursor, limit: 50 }, signal);
+      return {
+        ...page,
+        data: page.data.map((monitor) => ({
+          ...monitor,
+          // 管理列表保持有界，只展示当前状态；完整图表在详情页按单资源读取。
+          dailyStats: [] as MonitorDailyStats[],
+          history: [] as MonitorHistory[],
+        })),
+      };
+    },
+    refetchInterval: 60_000,
+  });
+  const monitors: MonitorListItem[] = monitorsQuery.data?.data ?? [];
+  const nextCursor = monitorsQuery.data?.has_more
+    ? monitorsQuery.data.next_cursor
+    : null;
+  const canReorder = cursorHistory.length === 0 && !nextCursor;
+  const loading = monitorsQuery.isPending;
+  const error = monitorsQuery.error;
 
-      if (
-        response.success &&
-        responseDailyStats.success &&
-        responseMonitorHistory.success
-      ) {
-        const dailyStatsByMonitor = new Map<
-          number,
-          NonNullable<typeof responseDailyStats.dailyStats>
-        >();
-        for (const stat of responseDailyStats.dailyStats ?? []) {
-          const stats = dailyStatsByMonitor.get(stat.monitor_id) ?? [];
-          stats.push(stat);
-          dailyStatsByMonitor.set(stat.monitor_id, stats);
-        }
-
-        const historyByMonitor = new Map<
-          number,
-          NonNullable<typeof responseMonitorHistory.history>
-        >();
-        for (const item of responseMonitorHistory.history ?? []) {
-          const history = historyByMonitor.get(item.monitor_id) ?? [];
-          history.push(item);
-          historyByMonitor.set(item.monitor_id, history);
-        }
-
-        const monitorsWithData = response.monitors?.map((monitor) => {
-          const dailyStats = dailyStatsByMonitor.get(monitor.id) ?? [];
-          const history = historyByMonitor.get(monitor.id) ?? [];
-          // 返回附加了相关数据的 monitor
-          return {
-            ...monitor,
-            dailyStats: dailyStats,
-            history: history,
-          };
-        });
-        setMonitors(monitorsWithData || []);
-      } else {
-        setError(response.message || t("monitors.loadingError"));
+  const orderMutation = useMutation({
+    mutationFn: async (next: MonitorListItem[]) =>
+      updateMonitorsOrder(next.map((monitor) => monitor.id)),
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: monitorPageQueryKey });
+      const previous = queryClient.getQueryData<typeof monitorsQuery.data>(
+        monitorPageQueryKey
+      );
+      queryClient.setQueryData(monitorPageQueryKey, (current: typeof previous) =>
+        current ? { ...current, data: next } : current
+      );
+      return { previous };
+    },
+    onError: (_error, _next, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(monitorPageQueryKey, context.previous);
       }
-    } catch (error) {
-      if (!signal?.aborted) {
-        setError(
-          error instanceof Error ? error.message : t("monitors.loadingError")
-        );
-      }
-    } finally {
-      if (!signal?.aborted) {
-        setLoading(false);
-      }
-    }
-  }, [t]);
+      toast.error(t("common.orderSaveError"));
+    },
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: monitorListQueryKey }),
+  });
 
-  usePolling(fetchData, {
-    intervalMs: 60000,
+  const deleteMutation = useMutation({
+    mutationFn: deleteMonitor,
+    onSuccess: (_value, id) => {
+      queryClient.setQueryData(monitorPageQueryKey, (current: typeof monitorsQuery.data) =>
+        current
+          ? {
+              ...current,
+              data: current.data.filter(
+                (monitor: MonitorListItem) => monitor.id !== id
+              ),
+            }
+          : current
+      );
+    },
+    onError: () => toast.error(t("monitors.delete.failed")),
+    onSettled: () => {
+      setDeleteDialogOpen(false);
+      setSelectedMonitorId(null);
+      queryClient.invalidateQueries({ queryKey: monitorListQueryKey });
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: importMonitors,
+    onSuccess: (result) => {
+      toast.success(
+        t("common.importResult", {
+          created: result.created,
+          skipped: result.skipped,
+        })
+      );
+      queryClient.invalidateQueries({ queryKey: monitorListQueryKey });
+    },
+    onError: () => toast.error(t("common.importError")),
   });
 
   // 处理刷新
   const handleRefresh = () => {
-    fetchData();
+    monitorsQuery.refetch();
   };
 
   // 拖拽落点：本地乐观重排 → 调 order 接口，失败回滚并 toast
   const handleDrop = async (targetId: number) => {
+    if (!canReorder) return;
     const sourceId = draggingId;
     setDraggingId(null);
     setDragOverId(null);
@@ -161,19 +185,21 @@ const MonitorsList = () => {
     const toIndex = monitors.findIndex((monitor) => monitor.id === targetId);
     if (fromIndex < 0 || toIndex < 0) return;
 
-    const previous = monitors;
     const next = [...monitors];
     const [moved] = next.splice(fromIndex, 1);
     next.splice(toIndex, 0, moved);
-    setMonitors(next);
+    orderMutation.mutate(next);
+  };
 
-    const response = await updateMonitorsOrder(
-      next.map((monitor) => monitor.id)
-    );
-    if (!response.success) {
-      setMonitors(previous);
-      toast.error(t("common.orderSaveError"));
-    }
+  const nextPage = () => {
+    if (!nextCursor) return;
+    setCursorHistory((history) => [...history, cursor]);
+    setCursor(nextCursor);
+  };
+
+  const previousPage = () => {
+    setCursor(cursorHistory.at(-1));
+    setCursorHistory((history) => history.slice(0, -1));
   };
 
   // 导出为 JSON 文件下载
@@ -194,18 +220,7 @@ const MonitorsList = () => {
       toast.error(t("common.importInvalidFile"));
       return;
     }
-    const response = await importMonitors(items);
-    if (response.success) {
-      toast.success(
-        t("common.importResult", {
-          created: response.created ?? 0,
-          skipped: response.skipped ?? 0,
-        })
-      );
-      fetchData();
-    } else {
-      toast.error(response.message || t("common.importError"));
-    }
+    importMutation.mutate(items);
   };
 
   // 打开删除确认对话框
@@ -217,26 +232,7 @@ const MonitorsList = () => {
   // 确认删除监控
   const handleDeleteConfirm = async () => {
     if (selectedMonitorId) {
-      try {
-        setLoading(true);
-        const response = await deleteMonitor(selectedMonitorId);
-
-        if (response.success) {
-          // 更新列表，移除已删除的监控
-          setMonitors(
-            monitors.filter((monitor) => monitor.id !== selectedMonitorId)
-          );
-        } else {
-          setError(response.message || t("monitors.delete.failed"));
-        }
-      } catch (err) {
-        console.error(t("monitors.delete.failed"), err);
-        setError(t("monitors.delete.failed"));
-      } finally {
-        setDeleteDialogOpen(false);
-        setSelectedMonitorId(null);
-        setLoading(false);
-      }
+      deleteMutation.mutate(selectedMonitorId);
     }
   };
 
@@ -265,7 +261,7 @@ const MonitorsList = () => {
       <Box>
         <Card>
           <Flex>
-            <Text>{error}</Text>
+          <Text>{error instanceof Error ? error.message : t("monitors.loadingError")}</Text>
           </Flex>
         </Card>
         <Button variant="secondary" onClick={() => window.location.reload()}>
@@ -293,7 +289,7 @@ const MonitorsList = () => {
           <Button
             variant="secondary"
             onClick={handleRefresh}
-            disabled={loading}
+            disabled={monitorsQuery.isFetching}
           >
             <ReloadIcon />
             {t("monitors.refresh")}
@@ -331,6 +327,11 @@ const MonitorsList = () => {
       </Flex>
 
       <Container className="my-4 space-x-2">
+        {!canReorder && monitors.length > 0 ? (
+          <p className="mb-3 text-xs text-muted-foreground">
+            {t("common.reorderSinglePageOnly")}
+          </p>
+        ) : null}
         {monitors.length === 0 ? (
           <Card>
             <Flex direction="column" align="center" justify="center" gap="3" pb="6">
@@ -356,7 +357,7 @@ const MonitorsList = () => {
 
             <TableBody>
               {monitors.map((monitor) => (
-                <TableRow key={`${monitor.id}-${Math.random()}`}>
+                <TableRow key={monitor.id}>
                   <TableCell>
                     <Text weight="medium">{monitor.name}</Text>
                   </TableCell>
@@ -365,8 +366,8 @@ const MonitorsList = () => {
                   </TableCell>
                   <TableCell>
                     <Flex align="center" gap="2">
-                      <StatusIcon status={monitor.status} />
-                      <Badge color={monitorStatusColors[monitor.status] ?? "gray"}>
+                      <StatusIcon status={monitor.status ?? "pending"} />
+                      <Badge color={monitorStatusColors[monitor.status ?? "pending"] ?? "gray"}>
                         {monitor.status === "up"
                           ? t("monitors.status.up")
                           : monitor.status === "down"
@@ -377,35 +378,38 @@ const MonitorsList = () => {
                   </TableCell>
                   <TableCell>
                     <Text>
-                      {monitor.response_time
-                        ? `${monitor.response_time}ms`
+                      {monitor.response_time_ms
+                        ? `${monitor.response_time_ms}ms`
                         : "-"}
                     </Text>
                   </TableCell>
                   <TableCell>
                     <Flex gap="2">
-                      <IconButton
-                        variant="soft"
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={() => navigate(`/monitors/${monitor.id}`)}
                         title={t("monitors.viewDetails")}
                       >
                         <InfoCircledIcon />
-                      </IconButton>
-                      <IconButton
-                        variant="soft"
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={() => navigate(`/monitors/edit/${monitor.id}`)}
                         title={t("monitors.edit")}
                       >
                         <Pencil1Icon />
-                      </IconButton>
-                      <IconButton
-                        variant="soft"
-                        color="red"
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:text-destructive"
                         onClick={() => handleDeleteClick(monitor.id)}
                         title={t("monitors.delete")}
                       >
                         <TrashIcon />
-                      </IconButton>
+                      </Button>
                     </Flex>
                   </TableCell>
                 </TableRow>
@@ -425,7 +429,7 @@ const MonitorsList = () => {
                     ? " drag-over"
                     : ""
                 }`}
-                draggable
+                draggable={canReorder}
                 onDragStart={(e: DragEvent<HTMLDivElement>) => {
                   setDraggingId(monitor.id);
                   e.dataTransfer.effectAllowed = "move";
@@ -447,39 +451,63 @@ const MonitorsList = () => {
                   handleDrop(monitor.id);
                 }}
               >
-                <MonitorCard monitor={monitor} />
+                <MonitorCard monitor={monitor} compact />
                 <Flex gap="2" className="absolute top-4 right-4">
-                  <IconButton
+                  <Button
                     variant="ghost"
-                    size="1"
+                    size="icon"
                     onClick={() => navigate(`/monitors/${monitor.id}`)}
                     title={t("monitors.viewDetails")}
                   >
                     <InfoCircledIcon />
-                  </IconButton>
-                  <IconButton
+                  </Button>
+                  <Button
                     variant="ghost"
-                    size="1"
+                    size="icon"
                     onClick={() => navigate(`/monitors/edit/${monitor.id}`)}
                     title={t("monitors.edit")}
                   >
                     <Pencil1Icon />
-                  </IconButton>
-                  <IconButton
+                  </Button>
+                  <Button
                     variant="ghost"
-                    size="1"
-                    color="red"
+                    size="icon"
+                    className="text-destructive hover:text-destructive"
                     onClick={() => handleDeleteClick(monitor.id)}
                     title={t("monitors.delete")}
                   >
                     <TrashIcon />
-                  </IconButton>
+                  </Button>
                 </Flex>
               </Box>
             ))}
           </Grid>
         )}
       </Container>
+
+      <div className="mb-4 flex items-center justify-between px-4">
+        <span className="text-xs text-muted-foreground">
+          {t("common.pageItemCount", { count: monitors.length })}
+        </span>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={monitorsQuery.isFetching || cursorHistory.length === 0}
+            onClick={previousPage}
+          >
+            {t("common.previousPage")}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={monitorsQuery.isFetching || !nextCursor}
+            onClick={nextPage}
+          >
+            {t("common.nextPage")}
+          </Button>
+        </div>
+      </div>
 
       {/* 删除确认对话框 */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -492,7 +520,12 @@ const MonitorsList = () => {
             <DialogClose>
               <Button variant="secondary">{t("common.cancel")}</Button>
             </DialogClose>
-            <Button onClick={handleDeleteConfirm}>{t("common.delete")}</Button>
+            <Button
+              onClick={handleDeleteConfirm}
+              disabled={deleteMutation.isPending}
+            >
+              {t("common.delete")}
+            </Button>
           </Flex>
         </DialogContent>
       </Dialog>

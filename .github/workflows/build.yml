@@ -1,207 +1,238 @@
-name: Build and Upload Binary
+name: Build and Publish Agent
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer（留空则生成开发版本）"
+        required: false
+        type: string
+      channel:
+        description: "发布通道"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, stable]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: Build Agent Binary
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [amd64, arm64]
-        include:
-          - os: ubuntu-latest
-            arch: amd64
-            artifact_name: xugou-agent-linux-amd64
-            asset_name: xugou-agent-linux-amd64
-          - os: ubuntu-latest
-            arch: arm64
-            artifact_name: xugou-agent-linux-arm64
-            asset_name: xugou-agent-linux-arm64
-          - os: macos-latest
-            arch: amd64
-            artifact_name: xugou-agent-darwin-amd64
-            asset_name: xugou-agent-darwin-amd64
-          - os: macos-latest
-            arch: arm64
-            artifact_name: xugou-agent-darwin-arm64
-            asset_name: xugou-agent-darwin-arm64
-          - os: windows-latest
-            arch: amd64
-            artifact_name: xugou-agent-windows-amd64.exe
-            asset_name: xugou-agent-windows-amd64
-          - os: windows-latest
-            arch: arm64
-            artifact_name: xugou-agent-windows-arm64.exe
-            asset_name: xugou-agent-windows-arm64
-
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      build_date: ${{ steps.release.outputs.build_date }}
+      channel: ${{ steps.release.outputs.channel }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # 获取完整的 git 历史用于获取提交信息
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --short=12 HEAD)"
+          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/}"
+            channel=stable
+          elif [[ -n "${INPUT_VERSION:-}" ]]; then
+            version="$INPUT_VERSION"
+            channel="${INPUT_CHANNEL:-dev}"
+          else
+            version="0.0.0-dev.${GITHUB_RUN_NUMBER}+sha.${commit}"
+            channel="${INPUT_CHANNEL:-dev}"
+          fi
+          version="${version#v}"
+          node -e 'const v=process.argv[1],m=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(v);if(!m||m[4]?.split(".").some(x=>/^\d+$/.test(x)&&x.length>1&&x.startsWith("0")))process.exit(1)' "$version"
+          [[ "$channel" == stable || "$channel" == dev ]]
+          {
+            echo "version=$version"
+            echo "commit=$commit"
+            echo "build_date=$build_date"
+            echo "channel=$channel"
+          } >> "$GITHUB_OUTPUT"
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.24'
-
-    - name: Get version info
-      id: get_version
-      shell: bash
-      run: |
-        # 从 GitHub 环境获取版本信息
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/}
-        else
-          VERSION="dev-$(git rev-parse --short HEAD)"
-        fi
-        COMMIT_HASH=$(git rev-parse --short HEAD)
-        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
-        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-        
-        echo "版本: $VERSION"
-        echo "提交哈希: $COMMIT_HASH"
-        echo "构建日期: $BUILD_DATE"
-
-    - name: Build Linux
-      if: matrix.os == 'ubuntu-latest'
-      env:
-        GOOS: linux
-        GOARCH: ${{ matrix.arch }}
-      run: |
-        cd agent
-        go build -v \
-          -ldflags="-s -w -extldflags=-static \
-          -X github.com/xugou/agent/cmd/agent.Version=${{ env.VERSION }} \
-          -X github.com/xugou/agent/cmd/agent.GitCommit=${{ env.COMMIT_HASH }} \
-          -X github.com/xugou/agent/cmd/agent.BuildDate=${{ env.BUILD_DATE }}" \
-          -tags netgo,osusergo -o ${{ matrix.artifact_name }} .
-        
-    - name: Build macOS
-      if: matrix.os == 'macos-latest'
-      env:
-        GOOS: darwin
-        GOARCH: ${{ matrix.arch }}
-      run: |
-        cd agent
-        go build -v \
-          -ldflags="-s -w \
-          -X github.com/xugou/agent/cmd/agent.Version=${{ env.VERSION }} \
-          -X github.com/xugou/agent/cmd/agent.GitCommit=${{ env.COMMIT_HASH }} \
-          -X github.com/xugou/agent/cmd/agent.BuildDate=${{ env.BUILD_DATE }}" \
-          -tags netgo,osusergo -o ${{ matrix.artifact_name }} .
-        
-    - name: Build Windows
-      if: matrix.os == 'windows-latest'
-      env:
-        GOOS: windows
-        GOARCH: ${{ matrix.arch }}
-      run: |
-        cd agent
-        go build -v `
-          -ldflags="-s -w `
-          -X github.com/xugou/agent/cmd/agent.Version=${{ env.VERSION }} `
-          -X github.com/xugou/agent/cmd/agent.GitCommit=${{ env.COMMIT_HASH }} `
-          -X github.com/xugou/agent/cmd/agent.BuildDate=${{ env.BUILD_DATE }}" `
-          -o ${{ matrix.artifact_name }} .
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.asset_name }}
-        path: agent/${{ matrix.artifact_name }}
-
-  upload-to-r2:
-    name: Upload to Cloudflare R2
-    needs: build
+  verify:
+    needs: metadata
     runs-on: ubuntu-latest
     steps:
-    - name: Download all workflow artifacts
-      uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: agent/go.sum
+      - name: Go quality and vulnerability gates
+        working-directory: agent
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          ./scripts/smoke-test.sh
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-    - name: Get Release version
-      id: get_version
-      run: |
-        VERSION=${GITHUB_REF#refs/tags/}
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Version: $VERSION"
+  windows-update-integration:
+    needs: metadata
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: agent/go.sum
+      - name: Exercise Windows self-management and rollback tests
+        working-directory: agent
+        run: go test ./pkg/selfmgmt ./cmd/agent
 
-    # Linux AMD64
-        
-    - name: Upload Linux AMD64 to R2 (latest)
-      uses: ryand56/r2-upload-action@latest
-      with:
-        r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-        r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        r2-bucket: ${{ secrets.R2_BUCKET_NAME }}
-        source-dir: ./xugou-agent-linux-amd64/
-        destination-dir: latest/
+  build:
+    needs: [metadata, verify, windows-update-integration]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            name: xugou-agent-linux-amd64
+          - goos: linux
+            goarch: arm64
+            name: xugou-agent-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            name: xugou-agent-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            name: xugou-agent-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            name: xugou-agent-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            name: xugou-agent-windows-arm64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: agent/go.sum
+      - name: Validate embedded update public key
+        env:
+          UPDATE_PUBLIC_KEY: ${{ secrets.AGENT_UPDATE_PUBLIC_KEY }}
+        run: |
+          test -n "$UPDATE_PUBLIC_KEY"
+          test "$(printf '%s' "$UPDATE_PUBLIC_KEY" | base64 --decode | wc -c | tr -d ' ')" = 32
+      - name: Build
+        working-directory: agent
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ needs.metadata.outputs.version }}
+          COMMIT_HASH: ${{ needs.metadata.outputs.commit }}
+          BUILD_DATE: ${{ needs.metadata.outputs.build_date }}
+          UPDATE_PUBLIC_KEY: ${{ secrets.AGENT_UPDATE_PUBLIC_KEY }}
+        run: |
+          go build -trimpath -tags netgo,osusergo \
+            -ldflags="-s -w -X github.com/xugou/agent/cmd/agent.Version=${VERSION} -X github.com/xugou/agent/cmd/agent.GitCommit=${COMMIT_HASH} -X github.com/xugou/agent/cmd/agent.BuildDate=${BUILD_DATE} -X github.com/xugou/agent/cmd/agent.UpdatePublicKey=${UPDATE_PUBLIC_KEY}" \
+            -o "dist/${{ matrix.name }}" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: agent/dist/${{ matrix.name }}
+          if-no-files-found: error
 
-    # Linux ARM64
-        
-    - name: Upload Linux ARM64 to R2 (latest)
-      uses: ryand56/r2-upload-action@latest
-      with:
-        r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-        r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        r2-bucket: ${{ secrets.R2_BUCKET_NAME }}
-        source-dir: ./xugou-agent-linux-arm64/
-        destination-dir: latest/
-
-    # macOS AMD64
-        
-    - name: Upload macOS AMD64 to R2 (latest)
-      uses: ryand56/r2-upload-action@latest
-      with:
-        r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-        r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        r2-bucket: ${{ secrets.R2_BUCKET_NAME }}
-        source-dir: ./xugou-agent-darwin-amd64/
-        destination-dir: latest/
-
-    # macOS ARM64
-        
-    - name: Upload macOS ARM64 to R2 (latest)
-      uses: ryand56/r2-upload-action@latest
-      with:
-        r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-        r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        r2-bucket: ${{ secrets.R2_BUCKET_NAME }}
-        source-dir: ./xugou-agent-darwin-arm64/
-        destination-dir: latest/
-
-    # Windows AMD64
-        
-    - name: Upload Windows AMD64 to R2 (latest)
-      uses: ryand56/r2-upload-action@latest
-      with:
-        r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-        r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        r2-bucket: ${{ secrets.R2_BUCKET_NAME }}
-        source-dir: ./xugou-agent-windows-amd64/
-        destination-dir: latest/
-
-    # Windows ARM64
-        
-    - name: Upload Windows ARM64 to R2 (latest)
-      uses: ryand56/r2-upload-action@latest
-      with:
-        r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-        r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        r2-bucket: ${{ secrets.R2_BUCKET_NAME }}
-        source-dir: ./xugou-agent-windows-arm64/
-        destination-dir: latest/
+  publish:
+    needs: [metadata, build]
+    runs-on: ubuntu-latest
+    environment: agent-release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate and sign immutable manifest and channel pointer
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+          BUILD_DATE: ${{ needs.metadata.outputs.build_date }}
+          UPDATE_PRIVATE_KEY_B64: ${{ secrets.AGENT_UPDATE_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$UPDATE_PRIVATE_KEY_B64"
+          mkdir -p release-metadata
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          version=os.environ['VERSION']; base=f'https://dl.xugou.mdzz.uk/releases/{version}'
+          items=[]
+          for p in sorted(Path('artifacts').iterdir()):
+            if not p.is_file() or not p.name.startswith('xugou-agent-'): continue
+            suffix=p.name.removeprefix('xugou-agent-').removesuffix('.exe')
+            goos,arch=suffix.split('-',1); data=p.read_bytes()
+            items.append({'os':goos,'arch':arch,'url':f'{base}/{p.name}','size':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+          if len(items)!=6: raise SystemExit(f'expected 6 artifacts, found {len(items)}')
+          manifest={'schema_version':1,'version':version,'artifacts':items,'released_at':os.environ['BUILD_DATE']}
+          raw=json.dumps(manifest,separators=(',',':')).encode()
+          Path('release-metadata/manifest.json').write_bytes(raw)
+          channel={'schema_version':1,'channel':os.environ['CHANNEL'],'version':version,'manifest_url':f'{base}/manifest.json','manifest_sha256':hashlib.sha256(raw).hexdigest(),'released_at':os.environ['BUILD_DATE']}
+          Path('release-metadata/channel.payload.json').write_text(json.dumps(channel,separators=(',',':')))
+          PY
+          printf '%s' "$UPDATE_PRIVATE_KEY_B64" | base64 --decode > release-metadata/key.pem
+          for name in manifest.json channel.payload.json; do
+            openssl pkeyutl -sign -rawin -inkey release-metadata/key.pem -in "release-metadata/$name" -out "release-metadata/$name.sig.bin"
+            base64 -w 0 "release-metadata/$name.sig.bin" > "release-metadata/$name.sig"
+          done
+          python3 - <<'PY'
+          import base64,json
+          from pathlib import Path
+          payload=Path('release-metadata/channel.payload.json').read_bytes()
+          signature=Path('release-metadata/channel.payload.json.sig').read_text()
+          envelope={'schema_version':1,'payload_base64':base64.b64encode(payload).decode(),'signature':signature}
+          Path('release-metadata/channel.json').write_text(json.dumps(envelope,separators=(',',':')))
+          PY
+          shred -u release-metadata/key.pem
+      - name: Publish immutable objects, verify metadata, then switch pointers
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET_NAME }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          publish_mutable() {
+            local file="$1" key="$2" size sha remote_size remote_sha remote_meta_size remote_etag second_etag
+            size="$(wc -c < "$file" | tr -d ' ')"; sha="$(sha256sum "$file" | cut -d' ' -f1)"
+            aws s3 cp "$file" "s3://${R2_BUCKET}/${key}" --endpoint-url "$endpoint" --no-progress --metadata "sha256=${sha},size=${size}"
+            read -r remote_size remote_sha remote_meta_size remote_etag < <(aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" --query '[ContentLength,Metadata.sha256,Metadata.size,ETag]' --output text)
+            second_etag="$(aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" --query 'ETag' --output text)"
+            [[ "$remote_size" == "$size" && "$remote_sha" == "$sha" && "$remote_meta_size" == "$size" ]]
+            [[ -n "$remote_etag" && "$remote_etag" != None && "$second_etag" == "$remote_etag" ]]
+          }
+          publish_immutable() {
+            local file="$1" key="$2"
+            if aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null 2>&1; then
+              echo "immutable object already exists: $key" >&2; exit 1
+            fi
+            publish_mutable "$file" "$key"
+          }
+          for file in artifacts/xugou-agent-* release-metadata/manifest.json release-metadata/manifest.json.sig; do
+            publish_immutable "$file" "releases/${VERSION}/$(basename "$file")"
+          done
+          # 兼容旧 Agent：先更新二进制和签名，清单最后切换。
+          for file in artifacts/xugou-agent-*; do publish_mutable "$file" "latest/$(basename "$file")"; done
+          publish_mutable release-metadata/manifest.json.sig latest/manifest.json.sig
+          publish_mutable release-metadata/manifest.json latest/manifest.json
+          # 通道 JSON 内嵌签名与载荷，是最终的单对象原子指针。
+          publish_mutable release-metadata/channel.json "channels/${CHANNEL}.json"

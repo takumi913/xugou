@@ -2,17 +2,8 @@ import { drizzle } from "drizzle-orm/d1";
 import { Bindings } from "../models/db";
 import * as schema from "../db/schema";
 
-let db: any;
-
-export function initDb(env: Bindings) {
-  db = drizzle(
-    env.DB,
-    {
-      schema: {
-        ...schema
-      }
-    }
-  );
+export function createDb(env: Pick<Bindings, "DB">) {
+  return drizzle(env.DB, { schema });
 }
 
-export { db };
+export type AppDatabase = ReturnType<typeof createDb>;

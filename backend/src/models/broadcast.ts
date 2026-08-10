@@ -1,6 +1,5 @@
 /**
- * 指标实时广播的 wire 类型（Worker 侧 BroadcastService 与 DO 侧
- * MetricsBroadcaster 共用的单一事实源）。
+ * Agent realtime publisher 与 AgentRoom 共用的指标实时 wire 类型。
  */
 
 import type { Metrics } from "./agent";

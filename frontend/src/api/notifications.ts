@@ -1,36 +1,38 @@
-import axios from "axios";
-import api from "./client";
-import type { AxiosResponse } from "axios";
+import type { components } from "./generated/v2-schema";
+import { unwrapOpenApi, v2Client } from "./generated/v2-client";
 import type {
   NotificationChannel,
   NotificationConfig,
   NotificationTemplate,
 } from "../types/notification";
 
-type BackendNotificationChannel = {
-  id: number;
-  name: string;
-  type: string;
-  config: string | Record<string, unknown> | null;
-  enabled: number | boolean;
-  created_by?: number;
-  created_at?: string;
-  updated_at?: string;
-};
-
-type BackendNotificationTemplate = {
-  id: number;
-  name: string;
-  type: string;
-  subject: string;
-  content: string;
-  is_default: number | boolean;
-  created_by?: number;
-  created_at?: string;
-  updated_at?: string;
-};
+type BackendNotificationChannel =
+  components["schemas"]["NotificationChannel"];
+type BackendNotificationTemplate =
+  components["schemas"]["NotificationTemplate"];
+type NotificationChannelCommand =
+  components["schemas"]["NotificationChannelCommand"];
+type NotificationChannelMutation =
+  components["schemas"]["NotificationChannelMutation"];
 
 export type NotificationSettings = NotificationConfig["settings"];
+export type NotificationResourceTarget = "monitor" | "agent";
+export interface NotificationResourceSetting {
+  target_type: NotificationResourceTarget;
+  id: number;
+  name: string;
+  description: string | null;
+  sort_order: number;
+  setting:
+    | NotificationSettings["monitors"]
+    | NotificationSettings["agents"]
+    | null;
+}
+export interface NotificationResourceSettingPage {
+  data: NotificationResourceSetting[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
 
 type RawNotificationSettings = {
   monitors?: unknown;
@@ -38,12 +40,6 @@ type RawNotificationSettings = {
   specificMonitors?: unknown;
   specificAgents?: unknown;
 };
-
-export interface NotificationConfigResponse {
-  success: boolean;
-  message?: string;
-  data?: NotificationConfig;
-}
 
 const parseChannelConfig = (
   config: BackendNotificationChannel["config"]
@@ -58,8 +54,8 @@ const parseChannelConfig = (
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
-    } catch (error) {
-      console.error("解析通知渠道配置失败:", error);
+    } catch {
+      return {};
     }
     return {};
   }
@@ -105,8 +101,7 @@ const normalizeChannelIds = (value: unknown): number[] => {
           .map((item) => Number(item))
           .filter((item) => Number.isInteger(item));
       }
-    } catch (error) {
-      console.error("解析通知渠道ID列表失败:", error);
+    } catch {
       return [];
     }
   }
@@ -131,9 +126,8 @@ const transformChannel = (
   type: channel.type,
   config: parseChannelConfig(channel.config),
   enabled: normalizeBoolean(channel.enabled, true),
-  createdBy: channel.created_by,
-  createdAt: channel.created_at,
-  updatedAt: channel.updated_at,
+  createdAt: channel.created_at ?? undefined,
+  updatedAt: channel.updated_at ?? undefined,
 });
 
 const transformTemplate = (
@@ -145,9 +139,8 @@ const transformTemplate = (
   subject: template.subject,
   content: template.content,
   isDefault: normalizeBoolean(template.is_default, false),
-  createdBy: template.created_by,
-  createdAt: template.created_at,
-  updatedAt: template.updated_at,
+  createdAt: template.created_at ?? undefined,
+  updatedAt: template.updated_at ?? undefined,
 });
 
 const normalizeSettings = (settings: unknown): NotificationSettings => {
@@ -306,147 +299,72 @@ const normalizeSettings = (settings: unknown): NotificationSettings => {
   return normalized;
 };
 
-// 获取完整的通知配置
-export const getNotificationConfig =
-  async (): Promise<NotificationConfigResponse> => {
-    try {
-      const response = await api.get<{
-        success: boolean;
-        message?: string;
-        data?: {
-          channels?: BackendNotificationChannel[];
-          templates?: BackendNotificationTemplate[];
-          settings?: unknown;
-        };
-      }>("/api/notifications");
-
-      const backendData = response.data.data;
-
-      if (!backendData) {
-        return {
-          success: response.data.success,
-          message: response.data.message,
-        };
-      }
-
-      const channels = Array.isArray(backendData.channels)
-        ? (backendData.channels as BackendNotificationChannel[]).map(
-            transformChannel
-          )
-        : [];
-
-      const templates = Array.isArray(backendData.templates)
-        ? (backendData.templates as BackendNotificationTemplate[]).map(
-            transformTemplate
-          )
-        : [];
-
-      return {
-        success: response.data.success,
-        message: response.data.message,
-        data: {
-          channels,
-          templates,
-          settings: normalizeSettings(backendData.settings),
-        },
-      };
-    } catch (error) {
-      console.error("获取通知配置失败:", error);
-      return {
-        success: false,
-        message: "获取通知配置失败",
-      };
-    }
+export const getNotificationConfig = async (): Promise<NotificationConfig> => {
+  const response = unwrapOpenApi(await v2Client.GET("/api/v2/notifications"));
+  const backendData = response.data;
+  return {
+    channels: backendData.channels.map(transformChannel),
+    templates: backendData.templates.map(transformTemplate),
+    channelsHasMore: backendData.channels_has_more,
+    templatesHasMore: backendData.templates_has_more,
+    settings: normalizeSettings(backendData.settings),
   };
-
-// 获取通知渠道列表
-export const getNotificationChannels = async (): Promise<{
-  success: boolean;
-  message?: string;
-  channels?: NotificationChannel[];
-}> => {
-  try {
-    const response = await api.get<{
-      success: boolean;
-      message?: string;
-      data?: BackendNotificationChannel[];
-    }>("/api/notifications/channels");
-
-    const channels = Array.isArray(response.data.data)
-      ? response.data.data.map(transformChannel)
-      : [];
-
-    return {
-      success: response.data.success,
-      message: response.data.message,
-      channels,
-    };
-  } catch (error) {
-    console.error("获取通知渠道失败:", error);
-    return {
-      success: false,
-      message: "获取通知渠道失败",
-    };
-  }
 };
 
-// 获取通知模板列表
-export const getNotificationTemplates = async (): Promise<{
-  success: boolean;
-  message?: string;
-  templates?: NotificationTemplate[];
-}> => {
-  try {
-    const response = await api.get<{
-      success: boolean;
-      message?: string;
-      data?: BackendNotificationTemplate[];
-    }>("/api/notifications/templates");
-
-    const templates = Array.isArray(response.data.data)
-      ? response.data.data.map(transformTemplate)
-      : [];
-
-    return {
-      success: response.data.success,
-      message: response.data.message,
-      templates,
-    };
-  } catch (error) {
-    console.error("获取通知模板失败:", error);
-    return {
-      success: false,
-      message: "获取通知模板失败",
-    };
-  }
+export const getNotificationChannels = async (): Promise<
+  NotificationChannel[]
+> => {
+  const response = unwrapOpenApi(
+    await v2Client.GET("/api/v2/notifications/channels")
+  );
+  return response.data.map(transformChannel);
 };
 
-// 保存通知设置
-export const saveNotificationSettings = async (
-  settings: NotificationSettings
-): Promise<{
-  success: boolean;
-  message?: string;
-}> => {
-  try {
-    // 创建一个请求队列，用于批量保存设置
-    const saveRequests: Promise<AxiosResponse<{ success?: boolean }>>[] = [];
+export const getNotificationTemplates = async (): Promise<
+  NotificationTemplate[]
+> => {
+  const response = unwrapOpenApi(
+    await v2Client.GET("/api/v2/notifications/templates")
+  );
+  return response.data.map(transformTemplate);
+};
 
-    // 转换全局监控设置
-    const monitorSettings = {
+export const getNotificationResourceSettings = async (
+  targetType: NotificationResourceTarget,
+  input: { cursor?: string; limit?: number } = {},
+  signal?: AbortSignal
+): Promise<NotificationResourceSettingPage> => {
+  const response = unwrapOpenApi(
+    await v2Client.GET("/api/v2/notifications/resource-settings", {
+      params: {
+        query: {
+          target_type: targetType,
+          cursor: input.cursor,
+          limit: input.limit ?? 25,
+        },
+      },
+      signal,
+    })
+  );
+  return response as NotificationResourceSettingPage;
+};
+
+type SettingCommand = components["schemas"]["NotificationSettingCommand"];
+
+function settingCommands(settings: NotificationSettings): SettingCommand[] {
+  const commands: SettingCommand[] = [
+    {
       target_type: "global-monitor",
+      target_id: 0,
       enabled: settings.monitors.enabled,
       on_down: settings.monitors.onDown,
       on_recovery: settings.monitors.onRecovery,
       cooldown_minutes: settings.monitors.cooldownMinutes,
-      channels: JSON.stringify(settings.monitors.channels),
-    };
-
-    saveRequests.push(api.post("/api/notifications/settings", monitorSettings));
-
-    // 转换全局客户端设置
-    const agentSettings = {
+      channels: settings.monitors.channels,
+    },
+    {
       target_type: "global-agent",
+      target_id: 0,
       enabled: settings.agents.enabled,
       on_offline: settings.agents.onOffline,
       on_recovery: settings.agents.onRecovery,
@@ -457,324 +375,171 @@ export const saveNotificationSettings = async (
       on_disk_threshold: settings.agents.onDiskThreshold,
       disk_threshold: settings.agents.diskThreshold,
       cooldown_minutes: settings.agents.cooldownMinutes,
-      channels: JSON.stringify(settings.agents.channels),
-    };
+      channels: settings.agents.channels,
+    },
+  ];
+  for (const [monitorId, value] of Object.entries(settings.specificMonitors)) {
+    commands.push({
+      target_type: "monitor",
+      target_id: Number(monitorId),
+      enabled: value.enabled,
+      on_down: value.onDown,
+      on_recovery: value.onRecovery,
+      cooldown_minutes: value.cooldownMinutes,
+      channels: value.channels,
+    });
+  }
+  for (const [agentId, value] of Object.entries(settings.specificAgents)) {
+    commands.push({
+      target_type: "agent",
+      target_id: Number(agentId),
+      enabled: value.enabled,
+      on_offline: value.onOffline,
+      on_recovery: value.onRecovery,
+      on_cpu_threshold: value.onCpuThreshold,
+      cpu_threshold: value.cpuThreshold,
+      on_memory_threshold: value.onMemoryThreshold,
+      memory_threshold: value.memoryThreshold,
+      on_disk_threshold: value.onDiskThreshold,
+      disk_threshold: value.diskThreshold,
+      cooldown_minutes: value.cooldownMinutes,
+      channels: value.channels,
+    });
+  }
+  return commands;
+}
 
-    saveRequests.push(api.post("/api/notifications/settings", agentSettings));
+let pendingSettingsCommand: { fingerprint: string; key: string } | null = null;
 
-    // 处理特定监控设置
-    for (const monitorId in settings.specificMonitors) {
-      const monitorSetting = settings.specificMonitors[monitorId];
-
-      const specificMonitorSettings = {
-        target_type: "monitor",
-        target_id: parseInt(monitorId),
-        enabled: monitorSetting.enabled,
-        on_down: monitorSetting.onDown,
-        on_recovery: monitorSetting.onRecovery,
-        cooldown_minutes: monitorSetting.cooldownMinutes,
-        channels: JSON.stringify(monitorSetting.channels),
-      };
-
-      saveRequests.push(
-        api.post("/api/notifications/settings", specificMonitorSettings)
-      );
-    }
-
-    // 处理特定客户端设置
-    for (const agentId in settings.specificAgents) {
-      const agentSetting = settings.specificAgents[agentId];
-
-      const specificAgentSettings = {
-        target_type: "agent",
-        target_id: parseInt(agentId),
-        enabled: agentSetting.enabled,
-        on_offline: agentSetting.onOffline,
-        on_recovery: agentSetting.onRecovery,
-        on_cpu_threshold: agentSetting.onCpuThreshold,
-        cpu_threshold: agentSetting.cpuThreshold,
-        on_memory_threshold: agentSetting.onMemoryThreshold,
-        memory_threshold: agentSetting.memoryThreshold,
-        on_disk_threshold: agentSetting.onDiskThreshold,
-        disk_threshold: agentSetting.diskThreshold,
-        cooldown_minutes: agentSetting.cooldownMinutes,
-        channels: JSON.stringify(agentSetting.channels),
-      };
-
-      saveRequests.push(
-        api.post("/api/notifications/settings", specificAgentSettings)
-      );
-    }
-
-    // 并行执行所有保存请求
-    const results = await Promise.all(saveRequests);
-
-    // 检查是否有任何请求失败
-    const failedRequests = results.filter(
-      (response) => !response.data?.success
-    );
-
-    if (failedRequests.length > 0) {
-      console.error("部分通知设置保存失败:", failedRequests);
-      return {
-        success: false,
-        message: "部分通知设置保存失败",
-      };
-    }
-
-    return {
-      success: true,
-      message: "通知设置保存成功",
-    };
-  } catch (error) {
-    console.error("保存通知设置失败:", error);
-    return {
-      success: false,
-      message: "保存通知设置失败",
+export const saveNotificationSettings = async (
+  settings: NotificationSettings
+): Promise<void> => {
+  const commands = settingCommands(settings);
+  const fingerprint = JSON.stringify(commands);
+  if (!pendingSettingsCommand || pendingSettingsCommand.fingerprint !== fingerprint) {
+    pendingSettingsCommand = {
+      fingerprint,
+      key: `notification-settings:${crypto.randomUUID()}`,
     };
   }
+  unwrapOpenApi(
+    await v2Client.PUT("/api/v2/notifications/settings/bulk", {
+      params: { header: { "Idempotency-Key": pendingSettingsCommand.key } },
+      body: { settings: commands },
+    })
+  );
+  pendingSettingsCommand = null;
 };
 
-// 创建通知渠道
 export const createNotificationChannel = async (
-  channel: Omit<NotificationChannel, "id" | "createdBy" | "createdAt" | "updatedAt">
-): Promise<{
-  success: boolean;
-  message?: string;
-  channelId?: number;
-}> => {
-  try {
-    const response = await api.post<{
-      success: boolean;
-      message?: string;
-      data?: { id: number };
-    }>("/api/notifications/channels", channel);
-
-    return {
-      success: response.data.success,
-      message: response.data.message,
-      channelId: response.data.data?.id,
-    };
-  } catch (error) {
-    console.error("创建通知渠道失败:", error);
-    return {
-      success: false,
-      message: "创建通知渠道失败",
-    };
-  }
+  channel: NotificationChannelCommand
+): Promise<void> => {
+  unwrapOpenApi(
+    await v2Client.POST("/api/v2/notifications/channels", { body: channel })
+  );
 };
 
-// 更新通知渠道
 export const updateNotificationChannel = async (
   id: number,
-  channel: Partial<
-    Omit<NotificationChannel, "id" | "createdBy" | "createdAt" | "updatedAt">
-  >
-): Promise<{
-  success: boolean;
-  message?: string;
-}> => {
-  try {
-    const payload: Record<string, unknown> = {};
-    if (channel.name !== undefined) payload.name = channel.name;
-    if (channel.type !== undefined) payload.type = channel.type;
-    if (channel.config !== undefined) payload.config = channel.config;
-    if (channel.enabled !== undefined) payload.enabled = channel.enabled;
-
-    const response = await api.put<{
-      success: boolean;
-      message?: string;
-    }>(`/api/notifications/channels/${id}`, payload);
-
-    return response.data;
-  } catch (error) {
-    console.error("更新通知渠道失败:", error);
-    return {
-      success: false,
-      message: "更新通知渠道失败",
-    };
-  }
+  channel: NotificationChannelMutation
+): Promise<void> => {
+  unwrapOpenApi(
+    await v2Client.PATCH("/api/v2/notifications/channels/{id}", {
+      params: { path: { id } },
+      body: channel,
+    })
+  );
 };
 
-// 删除通知渠道
 export const deleteNotificationChannel = async (
   id: number
-): Promise<{
-  success: boolean;
-  message?: string;
-}> => {
-  try {
-    const response = await api.delete<{
-      success: boolean;
-      message?: string;
-    }>(`/api/notifications/channels/${id}`);
-
-    return response.data;
-  } catch (error) {
-    console.error("删除通知渠道失败:", error);
-    return {
-      success: false,
-      message: "删除通知渠道失败",
-    };
-  }
+): Promise<void> => {
+  const result = await v2Client.DELETE("/api/v2/notifications/channels/{id}", {
+    params: { path: { id } },
+  });
+  if (!result.response.ok) unwrapOpenApi(result);
 };
 
-// 发送测试通知（验证渠道配置是否可用）
 export const testNotificationChannel = async (
   id: number
-): Promise<{
-  success: boolean;
-  message?: string;
-}> => {
-  try {
-    const response = await api.post<{
-      success: boolean;
-      message?: string;
-    }>(`/api/notifications/channels/${id}/test`);
-
-    return response.data;
-  } catch (error) {
-    console.error("发送测试通知失败:", error);
-    // 尽量透出后端返回的具体失败原因（例如渠道配置错误）
-    if (
-      axios.isAxiosError(error) &&
-      typeof error.response?.data?.message === "string"
-    ) {
-      return {
-        success: false,
-        message: error.response.data.message,
-      };
-    }
-    return {
-      success: false,
-      message: "发送测试通知失败",
-    };
-  }
+): Promise<void> => {
+  unwrapOpenApi(
+    await v2Client.POST("/api/v2/notifications/channels/{id}/test", {
+      params: { path: { id } },
+    })
+  );
 };
 
-// 创建通知模板
 export const createNotificationTemplate = async (
-  template: Omit<NotificationTemplate, "id" | "createdBy" | "createdAt" | "updatedAt">
-): Promise<{
-  success: boolean;
-  message?: string;
-  templateId?: number;
-}> => {
-  try {
-    const payload = {
-      name: template.name,
-      type: template.type,
-      subject: template.subject,
-      content: template.content,
-      is_default: template.isDefault,
-    };
-
-    const response = await api.post<{
-      success: boolean;
-      message?: string;
-      data?: { id: number };
-    }>("/api/notifications/templates", payload);
-
-    return {
-      success: response.data.success,
-      message: response.data.message,
-      templateId: response.data.data?.id,
-    };
-  } catch (error) {
-    console.error("创建通知模板失败:", error);
-    return {
-      success: false,
-      message: "创建通知模板失败",
-    };
-  }
+  template: Omit<NotificationTemplate, "id" | "createdAt" | "updatedAt">
+): Promise<void> => {
+  const body: components["schemas"]["NotificationTemplateCommand"] = {
+    name: template.name,
+    type: template.type === "agent" ? "agent" : "monitor",
+    subject: template.subject,
+    content: template.content,
+    is_default: template.isDefault,
+  };
+  unwrapOpenApi(
+    await v2Client.POST("/api/v2/notifications/templates", { body })
+  );
 };
 
-// 更新通知模板
 export const updateNotificationTemplate = async (
   id: number,
-  template: Partial<
-    Omit<NotificationTemplate, "id" | "createdBy" | "createdAt" | "updatedAt">
-  >
-): Promise<{
-  success: boolean;
-  message?: string;
-}> => {
-  try {
-    const payload: Record<string, unknown> = {};
-    if (template.name !== undefined) payload.name = template.name;
-    if (template.type !== undefined) payload.type = template.type;
-    if (template.subject !== undefined) payload.subject = template.subject;
-    if (template.content !== undefined) payload.content = template.content;
-    if (template.isDefault !== undefined) {
-      payload.is_default = template.isDefault;
-    }
-
-    const response = await api.put<{ success: boolean; message?: string }>(
-      `/api/notifications/templates/${id}`,
-      payload
-    );
-    return response.data;
-  } catch (error) {
-    console.error("更新通知模板失败:", error);
-    return {
-      success: false,
-      message: "更新通知模板失败",
-    };
-  }
+  template: Partial<Omit<NotificationTemplate, "id" | "createdAt" | "updatedAt">>
+): Promise<void> => {
+  const body: components["schemas"]["NotificationTemplateMutation"] = {};
+  if (template.name !== undefined) body.name = template.name;
+  if (template.type !== undefined)
+    body.type = template.type === "agent" ? "agent" : "monitor";
+  if (template.subject !== undefined) body.subject = template.subject;
+  if (template.content !== undefined) body.content = template.content;
+  if (template.isDefault !== undefined) body.is_default = template.isDefault;
+  unwrapOpenApi(
+    await v2Client.PATCH("/api/v2/notifications/templates/{id}", {
+      params: { path: { id } },
+      body,
+    })
+  );
 };
 
-// 删除通知模板
 export const deleteNotificationTemplate = async (
   id: number
-): Promise<{
-  success: boolean;
-  message?: string;
-}> => {
-  try {
-    const response = await api.delete(`/api/notifications/templates/${id}`);
-    return response.data;
-  } catch (error) {
-    console.error("删除通知模板失败:", error);
-    return {
-      success: false,
-      message: "删除通知模板失败",
-    };
-  }
+): Promise<void> => {
+  const result = await v2Client.DELETE("/api/v2/notifications/templates/{id}", {
+      params: { path: { id } },
+  });
+  if (!result.response.ok) unwrapOpenApi(result);
 };
 
-// 获取通知历史记录
 export const getNotificationHistory = async (params: {
-  type?: string;
+  type?: "monitor" | "agent";
   targetId?: number;
-  status?: string;
+  status?: "success" | "failed";
   limit?: number;
-  offset?: number;
+  cursor?: number;
 }): Promise<{
-  success: boolean;
-  message?: string;
-  data?: unknown[];
+  data: components["schemas"]["NotificationHistory"][];
+  nextCursor: number | null;
+  hasMore: boolean;
 }> => {
-  try {
-    // 构建查询参数
-    const queryParams = new URLSearchParams();
-    if (params.type) queryParams.append("type", params.type);
-    if (params.targetId !== undefined)
-      queryParams.append("targetId", params.targetId.toString());
-    if (params.status) queryParams.append("status", params.status);
-    if (params.limit !== undefined)
-      queryParams.append("limit", params.limit.toString());
-    if (params.offset !== undefined)
-      queryParams.append("offset", params.offset.toString());
-
-    const url = `/api/notifications/history?${queryParams.toString()}`;
-    const response = await api.get(url);
-
-    return response.data;
-  } catch (error) {
-    console.error("获取通知历史记录失败:", error);
-    return {
-      success: false,
-      message: "获取通知历史记录失败",
-    };
-  }
+  const response = unwrapOpenApi(
+    await v2Client.GET("/api/v2/notifications/history", {
+      params: {
+        query: {
+          type: params.type,
+          target_id: params.targetId,
+          status: params.status,
+          limit: params.limit,
+          cursor: params.cursor,
+        },
+      },
+    })
+  );
+  return {
+    data: response.data,
+    nextCursor: response.next_cursor,
+    hasMore: response.has_more,
+  };
 };

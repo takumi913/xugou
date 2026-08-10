@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,50 @@ type RemoteConfig struct {
 	ReportInterval  int
 	// Update 服务端触发自升级指令（update=1）；不持久化，仅当次生效
 	Update bool
+}
+
+// ResolveIntervals 应用 CLI 配置优先级中的旧 --interval Alias：只在对应的新参数
+// 未通过命令行、环境变量或配置文件显式提供时，Alias 才覆盖该参数。
+func ResolveIntervals(
+	legacy, collect, report int,
+	legacySet, collectSet, reportSet bool,
+) (int, int, error) {
+	if legacySet {
+		if !collectSet {
+			collect = legacy
+		}
+		if !reportSet {
+			report = legacy
+		}
+	}
+	if err := ValidateIntervals(collect, report); err != nil {
+		return 0, 0, err
+	}
+	return collect, report, nil
+}
+
+// LoadTokenFile 读取权限受限的 Agent Credential 文件。Unix 上拒绝 group/other
+// 权限，降低凭据被同机其他账号读取的风险。
+func LoadTokenFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("读取凭据文件状态失败: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("凭据文件必须是普通文件")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("凭据文件权限过宽: %o，期望 0600", info.Mode().Perm())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("读取凭据文件失败: %w", err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" || len(token) > 512 || strings.ContainsAny(token, "\r\n\t ") {
+		return "", errors.New("凭据文件内容格式错误")
+	}
+	return token, nil
 }
 
 // ValidateIntervals 校验采集/上报间隔值域：collect 1-3600，report 10-3600 且 >= collect

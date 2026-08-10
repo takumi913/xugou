@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Box, Flex, Text, Grid } from "@/components/ui/theme-shim";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Box, Flex, Text, Grid } from "@/components/ui/layout";
 import { Button, Badge } from "@/components/ui";
 import {
   ArrowLeftIcon,
@@ -13,15 +13,13 @@ import {
   getMonitor,
   deleteMonitor,
   checkMonitor,
-  getMonitorStatusHistoryById,
+  getMonitorHistory,
   getMonitorDailyStats,
 } from "../../api/monitors";
-import { MonitorWithDailyStatsAndStatusHistory } from "../../types/monitors";
 import { useTranslation } from "react-i18next";
 import ResponseTimeChart from "../../components/ResponseTimeChart";
 import PageLoading from "../../components/PageLoading";
 import StatusBar from "../../components/MonitorStatusBar";
-import { usePolling } from "../../hooks/usePolling";
 import { monitorStatusColors } from "../../utils/statusColors";
 
 // 将范围状态码转换为可读形式（2 -> 2xx, 3 -> 3xx 等）
@@ -39,100 +37,71 @@ const formatStatusCode = (code: number | undefined): string => {
 const MonitorDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [monitor, setMonitor] =
-    useState<MonitorWithDailyStatsAndStatusHistory | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
 
   const monitorId = Number(id);
   const hasValidMonitorId = Boolean(id) && !Number.isNaN(monitorId);
 
-  // 获取监控详情数据
-  const fetchMonitorData = useCallback(async (signal?: AbortSignal) => {
-    if (!hasValidMonitorId) return;
-
-    setLoading(true);
-    try {
-      let monitorData: MonitorWithDailyStatsAndStatusHistory | null = null;
+  const monitorQuery = useQuery({
+    queryKey: ["monitors", "detail", monitorId],
+    enabled: hasValidMonitorId,
+    queryFn: async ({ signal }) => {
       const [monitor, history, dailyStats] = await Promise.all([
         getMonitor(monitorId, signal),
-        getMonitorStatusHistoryById(monitorId, signal),
+        getMonitorHistory(monitorId, signal),
         getMonitorDailyStats(monitorId, signal),
       ]);
-      if (signal?.aborted) return;
+      return { ...monitor, history, dailyStats };
+    },
+    refetchInterval: 60_000,
+  });
+  const monitor = monitorQuery.data;
 
-      if (monitor.success && monitor.monitor) {
-        monitorData = {
-          ...monitor.monitor,
-          history: history.history || [],
-          dailyStats: dailyStats.dailyStats || [],
-        };
-      }
-      if (monitorData) {
-        setMonitor(monitorData);
-      } else {
-        setError(t("common.error.fetch"));
-      }
-    } catch (error) {
-      if (!signal?.aborted) {
-        setError(
-          error instanceof Error ? error.message : t("common.error.fetch")
-        );
-      }
-    } finally {
-      if (!signal?.aborted) {
-        setLoading(false);
-      }
-    }
-  }, [hasValidMonitorId, monitorId, t]);
+  const checkMutation = useMutation({
+    mutationFn: () => checkMonitor(monitorId),
+    onSuccess: () => {
+      toast.success(t("monitor.checkCompleted"));
+      queryClient.invalidateQueries({ queryKey: ["monitors"] });
+    },
+    onError: () => toast.error(t("monitor.checkFailed")),
+  });
 
-  usePolling(fetchMonitorData, {
-    enabled: hasValidMonitorId,
-    intervalMs: 60000,
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteMonitor(monitorId),
+    onSuccess: () => {
+      toast.success(t("monitor.deleteSuccess"));
+      queryClient.removeQueries({ queryKey: ["monitors", "detail", monitorId] });
+      navigate("/monitors");
+    },
+    onError: () => toast.error(t("monitor.deleteFailed")),
   });
 
   // 手动检查监控状态
   const handleCheck = async () => {
-    if (!id) return;
-    setLoading(true);
-    const response = await checkMonitor(parseInt(id));
-    if (response.success) {
-      toast.success(t("monitor.checkCompleted"));
-    } else {
-      toast.error(t("monitor.checkFailed"));
-    }
-    setLoading(false);
+    if (hasValidMonitorId) checkMutation.mutate();
   };
 
   // 删除监控
   const handleDelete = async () => {
     if (!id || !window.confirm(t("monitors.delete.confirm"))) return;
 
-    const response = await deleteMonitor(parseInt(id));
-    if (response.success) {
-      toast.success(t("monitor.deleteSuccess")); // Added
-
-      // 短暂延迟后导航，让用户有时间看到提示
-      setTimeout(() => {
-        navigate("/monitors");
-      }, 1500);
-    } else {
-      toast.error(t("monitor.deleteFailed")); // Added
-    }
+    deleteMutation.mutate();
   };
 
   // 加载中显示
-  if (loading) {
+  if (monitorQuery.isPending) {
     return <PageLoading />;
   }
 
   // 错误显示
-  if (error || !monitor) {
+  if (monitorQuery.error || !monitor) {
     return (
       <Box className="monitor-detail" p="4">
         <Text style={{ color: "var(--accent-red)" }}>
-          {error || t("monitor.notExist")}
+          {monitorQuery.error instanceof Error
+            ? monitorQuery.error.message
+            : t("monitor.notExist")}
         </Text>
         <Button variant="secondary" onClick={() => navigate("/monitors")}>
           {t("monitor.returnToList")}
@@ -149,7 +118,7 @@ const MonitorDetail = () => {
             <ArrowLeftIcon />
           </Button>
           <h1 className="prompt-title">{monitor.name}</h1>
-          <Badge color={monitorStatusColors[monitor.status] ?? "gray"}>
+          <Badge color={monitorStatusColors[monitor.status ?? "pending"] ?? "gray"}>
             {monitor.status === "up"
               ? t("monitor.status.normal")
               : monitor.status === "down"
@@ -158,7 +127,11 @@ const MonitorDetail = () => {
           </Badge>
         </Flex>
         <Flex gap="2">
-          <Button variant="secondary" onClick={handleCheck}>
+          <Button
+            variant="secondary"
+            onClick={handleCheck}
+            disabled={checkMutation.isPending}
+          >
             <ReloadIcon />
             {t("monitor.manualCheck")}
           </Button>
@@ -169,7 +142,11 @@ const MonitorDetail = () => {
             <Pencil1Icon />
             {t("monitor.edit")}
           </Button>
-          <Button variant="secondary" onClick={handleDelete}>
+          <Button
+            variant="secondary"
+            onClick={handleDelete}
+            disabled={deleteMutation.isPending}
+          >
             <TrashIcon />
             {t("monitor.delete")}
           </Button>
@@ -186,11 +163,11 @@ const MonitorDetail = () => {
               <Text>{monitor.method}</Text>
               <Text>{t("monitor.interval")}:</Text>
               <Text>
-                {monitor.interval} {t("common.seconds")}
+                {monitor.interval_seconds} {t("common.seconds")}
               </Text>
               <Text>{t("monitor.timeout")}:</Text>
               <Text>
-                {monitor.timeout} {t("common.seconds")}
+                {monitor.timeout_ms / 1000} {t("common.seconds")}
               </Text>
               <Text>{t("monitor.expectedStatus")}:</Text>
               <Text>{formatStatusCode(monitor.expected_status)}</Text>

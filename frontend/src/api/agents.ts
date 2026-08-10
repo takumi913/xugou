@@ -1,172 +1,162 @@
-import api from "./client";
+import type { components } from "./generated/v2-schema";
 import {
-  Agent,
-  AgentResponse,
-  AgentsResponse,
-  AgentWithLatestMetrics,
-  MetricHistory,
-} from "../types/agents";
+  OpenApiRequestError,
+  unwrapOpenApi,
+  v2Client,
+} from "./generated/v2-client";
 
-export const generateToken = async (): Promise<{
-  success: boolean;
-  token?: string;
-  message?: string;
-}> => {
-  try {
-    const response = await api.post("/api/agents/token/generate");
-    return response.data;
-  } catch (error) {
-    console.error("生成客户端注册令牌失败:", error);
-    return {
-      success: false,
-      message: "生成客户端注册令牌失败",
-    };
+export type AgentV2 = components["schemas"]["Agent"];
+export type AgentPage = components["schemas"]["AgentPage"];
+export type AgentUpdate = components["schemas"]["AgentUpdate"];
+export type AgentMetric = components["schemas"]["AgentMetric"];
+export type AgentCredentialMetadata = components["schemas"]["AgentCredential"];
+export type AgentCredentialPage = components["schemas"]["AgentCredentialPage"];
+export type AgentEnrollmentMetadata = components["schemas"]["AgentEnrollment"];
+export type AgentExportItem = components["schemas"]["AgentExportItem"];
+export type AgentImportItem = components["schemas"]["AgentImportItem"];
+export type AgentImportResult = components["schemas"]["AgentImportResult"];
+
+function assertOk(result: { response: Response; error?: unknown }) {
+  if (!result.response.ok) {
+    throw new OpenApiRequestError(result.response.status, result.error);
   }
-};
+}
 
-export const getAllAgents = async (): Promise<AgentsResponse> => {
-  const response = await api.get("/api/agents");
-  return {
-    success: true,
-    agents: response.data.agents,
-  };
-};
-
-export const getAllAgentsWithLatestMetrics = async (): Promise<{
-  success: boolean;
-  agents?: AgentWithLatestMetrics[];
-  message?: string;
-}> => getAllAgentsWithLatestMetricsWithSignal();
-
-export const getAllAgentsWithLatestMetricsWithSignal = async (
+export async function getAgentsPage(
+  input: {
+    cursor?: string;
+    limit?: number;
+    includeLatestMetrics?: boolean;
+  } = {},
   signal?: AbortSignal
-): Promise<{
-  success: boolean;
-  agents?: AgentWithLatestMetrics[];
-  message?: string;
-}> => {
-  const response = await api.get("/api/agents", {
-    params: { includeLatestMetrics: true },
+): Promise<AgentPage> {
+  const result = await v2Client.GET("/api/v2/agents", {
+    params: {
+      query: {
+        cursor: input.cursor,
+        limit: input.limit ?? 50,
+        include_latest_metrics: input.includeLatestMetrics ? "true" : "false",
+      },
+    },
     signal,
   });
-  return {
-    success: response.data.success,
-    agents: response.data.agents,
-    message: response.data.message,
-  };
-};
+  return unwrapOpenApi(result);
+}
 
-export const getAgent = async (
+export async function getAgent(
   id: number,
   signal?: AbortSignal
-): Promise<AgentResponse> => {
-  const response = await api.get(`/api/agents/${id}`, { signal });
-  return {
-    success: true,
-    agent: response.data.agent,
-  };
-};
+): Promise<AgentV2> {
+  const result = await v2Client.GET("/api/v2/agents/{id}", {
+    params: { path: { id } },
+    signal,
+  });
+  return unwrapOpenApi(result).data;
+}
 
-export const deleteAgent = async (
-  id: number
-): Promise<{ success: boolean; message: string }> => {
-  try {
-    const response = await api.delete(`/api/agents/${id}`);
-    return response.data;
-  } catch (error) {
-    console.error(`删除客户端 ${id} 失败:`, error);
-    return {
-      success: false,
-      message: "删除客户端失败",
-    };
-  }
-};
+export async function updateAgent(id: number, input: AgentUpdate) {
+  const result = await v2Client.PATCH("/api/v2/agents/{id}", {
+    params: { path: { id } },
+    body: input,
+  });
+  return unwrapOpenApi(result).data;
+}
 
-export const updateAgent = async (
+export async function deleteAgent(id: number): Promise<void> {
+  const result = await v2Client.DELETE("/api/v2/agents/{id}", {
+    params: { path: { id } },
+  });
+  assertOk(result);
+}
+
+export async function updateAgentsOrder(ids: number[]) {
+  const result = await v2Client.PUT("/api/v2/agents/order", { body: { ids } });
+  return unwrapOpenApi(result).data;
+}
+
+export async function exportAgents(): Promise<AgentExportItem[]> {
+  const result = await v2Client.GET("/api/v2/agents/export");
+  return unwrapOpenApi(result).data;
+}
+
+export async function importAgents(items: unknown[]): Promise<AgentImportResult> {
+  const result = await v2Client.POST("/api/v2/agents/import", {
+    body: items as AgentImportItem[],
+  });
+  return unwrapOpenApi(result).data;
+}
+
+export async function getAgentMetrics(
   id: number,
-  data: Partial<Agent>
-): Promise<AgentResponse> => {
-  try {
-    const response = await api.put(`/api/agents/${id}`, data);
-    return response.data;
-  } catch (error) {
-    console.error(`更新客户端 ${id} 失败:`, error);
-    return {
-      success: false,
-    };
-  }
-};
+  signal?: AbortSignal,
+  hours: "1" | "6" | "12" | "24" | "168" = "24"
+): Promise<AgentMetric[]> {
+  const result = await v2Client.GET("/api/v2/agents/{id}/metrics", {
+    params: { path: { id }, query: { hours } },
+    signal,
+  });
+  return unwrapOpenApi(result).data;
+}
 
-// 手动排序：按数组顺序保存 sort_order
-export const updateAgentsOrder = async (
-  ids: number[]
-): Promise<{ success: boolean; message?: string }> => {
-  try {
-    const response = await api.put("/api/agents/order", { ids });
-    return response.data;
-  } catch (error) {
-    console.error("保存客户端排序失败:", error);
-    return { success: false, message: "保存客户端排序失败" };
-  }
-};
-
-// 导出客户端配置（JSON 数组，含 token）
-export const exportAgents = async (): Promise<unknown[]> => {
-  const response = await api.get("/api/agents/export");
-  return response.data;
-};
-
-// 导入客户端配置，返回 {created, skipped}
-export const importAgents = async (
-  items: unknown[]
-): Promise<{
-  success: boolean;
-  created?: number;
-  skipped?: number;
-  message?: string;
-}> => {
-  try {
-    const response = await api.post("/api/agents/import", items);
-    return response.data;
-  } catch (error) {
-    console.error("导入客户端失败:", error);
-    return { success: false, message: "导入客户端失败" };
-  }
-};
-
-export const getAgentMetrics = async (
+export async function getLatestAgentMetrics(
   id: number,
   signal?: AbortSignal
-): Promise<{
-  success: boolean;
-  agent?: MetricHistory[];
-  message?: string;
-}> => {
-  try {
-    const response = await api.get(`/api/agents/${id}/metrics`, { signal });
-    return response.data;
-  } catch (error) {
-    if (signal?.aborted) {
-      throw error;
+): Promise<AgentMetric | null> {
+  const result = await v2Client.GET("/api/v2/agents/{id}/metrics/latest", {
+    params: { path: { id } },
+    signal,
+  });
+  return unwrapOpenApi(result).data;
+}
+
+export async function generateToken() {
+  const result = await v2Client.POST("/api/v2/agents/enrollments");
+  return unwrapOpenApi(result).data;
+}
+
+export async function getAgentEnrollments(): Promise<AgentEnrollmentMetadata[]> {
+  const result = await v2Client.GET("/api/v2/agents/enrollments");
+  return unwrapOpenApi(result).data;
+}
+
+export async function revokeAgentEnrollment(id: number): Promise<void> {
+  const result = await v2Client.DELETE("/api/v2/agents/enrollments/{id}", {
+    params: { path: { id } },
+  });
+  assertOk(result);
+}
+
+export async function getAgentCredentials(
+  agentId: number,
+  input: { cursor?: number; limit?: number } = {}
+): Promise<AgentCredentialPage> {
+  const result = await v2Client.GET("/api/v2/agents/{id}/credentials", {
+    params: {
+      path: { id: agentId },
+      query: { cursor: input.cursor, limit: input.limit ?? 25 },
+    },
+  });
+  return unwrapOpenApi(result);
+}
+
+export async function rotateAgentCredential(agentId: number) {
+  const result = await v2Client.POST("/api/v2/agents/{id}/credentials", {
+    params: { path: { id: agentId } },
+  });
+  return unwrapOpenApi(result).data;
+}
+
+export async function revokeAgentCredential(
+  agentId: number,
+  credentialId: number
+): Promise<void> {
+  const result = await v2Client.DELETE(
+    "/api/v2/agents/{id}/credentials/{credentialId}",
+    {
+      params: {
+        path: { id: agentId, credentialId },
+      },
     }
-    console.error(`获取客户端 ${id} 的指标失败:`, error);
-    return {
-      success: false,
-      message: "获取客户端指标失败",
-    };
-  }
-};
-
-export const getLatestAgentMetrics = async (
-  id: number,
-  signal?: AbortSignal
-): Promise<{
-  success: boolean;
-  agent?: MetricHistory;
-  message?: string;
-}> => {
-  const response = await api.get(`/api/agents/${id}/metrics/latest`, {
-    signal,
-  });
-  return response.data;
-};
+  );
+  assertOk(result);
+}

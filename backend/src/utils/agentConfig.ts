@@ -32,8 +32,8 @@ export const MAX_REPORT_INTERVAL = 3600;
 export const DEFAULT_COLLECT_INTERVAL = 60;
 export const DEFAULT_REPORT_INTERVAL = 300;
 
-// 单次上报最多承载/广播/缓存的样本条数（zod samples 上限、AgentService 展开上限、
-// BroadcastService 批量队列上限、MetricsBroadcaster 单 agent 上限的单一事实源）
+// 单次上报最多承载/广播/缓存的样本条数（zod samples 上限、Agent Report Adapter 展开上限、
+// realtime publisher 与 AgentRoom 批量上限的单一事实源）
 export const MAX_REPORT_SAMPLES = 300;
 
 export interface AgentIntervalConfig {
@@ -119,35 +119,87 @@ export function serializeAgentConfig(
  * 与 Go 侧 selfmgmt.CompareVersions 语义一致（1.0.0 > 1.0.0-rc1）。
  */
 export function compareSemver(a: string, b: string): number | null {
-  const parse = (v: string): { parts: number[]; pre: string } | null => {
+  const identifier = /^[0-9A-Za-z-]+$/;
+  const parse = (v: string): { core: string[]; pre: string[] } | null => {
     const trimmed = v.trim().replace(/^[vV]/, "");
     if (!trimmed) return null;
-    const [base, ...preParts] = trimmed.split("-");
-    const parts: number[] = [];
-    for (const seg of base.split(".")) {
-      if (!/^\d+$/.test(seg)) return null;
-      parts.push(Number(seg));
+    const buildParts = trimmed.split("+");
+    if (buildParts.length > 2) return null;
+    if (
+      buildParts[1] !== undefined &&
+      buildParts[1].split(".").some((item) => !identifier.test(item))
+    ) {
+      return null;
     }
-    return { parts, pre: preParts.join("-") };
+    const dashIndex = buildParts[0].indexOf("-");
+    const base = dashIndex < 0 ? buildParts[0] : buildParts[0].slice(0, dashIndex);
+    const preValue = dashIndex < 0 ? undefined : buildParts[0].slice(dashIndex + 1);
+    const core = base.split(".");
+    if (
+      core.length !== 3 ||
+      core.some((item) => !/^(0|[1-9]\d*)$/.test(item))
+    ) {
+      return null;
+    }
+    const pre = preValue === undefined ? [] : preValue.split(".");
+    if (
+      pre.some(
+        (item) =>
+          !identifier.test(item) || (/^\d+$/.test(item) && !/^(0|[1-9]\d*)$/.test(item))
+      )
+    ) {
+      return null;
+    }
+    return { core, pre };
   };
 
   const va = parse(a);
   const vb = parse(b);
   if (!va || !vb) return null;
 
-  const len = Math.max(va.parts.length, vb.parts.length);
-  for (let i = 0; i < len; i++) {
-    const ai = va.parts[i] ?? 0;
-    const bi = vb.parts[i] ?? 0;
-    if (ai < bi) return -1;
-    if (ai > bi) return 1;
+  const compareNumeric = (left: string, right: string) =>
+    left.length === right.length
+      ? left === right
+        ? 0
+        : left < right
+          ? -1
+          : 1
+      : left.length < right.length
+        ? -1
+        : 1;
+  for (let i = 0; i < 3; i++) {
+    const result = compareNumeric(va.core[i], vb.core[i]);
+    if (result !== 0) return result;
   }
-
-  // 主版本相同时，无预发布后缀的版本更大（1.0.0 > 1.0.0-rc1）
-  if (va.pre === vb.pre) return 0;
-  if (va.pre === "") return 1;
-  if (vb.pre === "") return -1;
-  return va.pre < vb.pre ? -1 : 1;
+  if (va.pre.length === 0 && vb.pre.length === 0) return 0;
+  if (va.pre.length === 0) return 1;
+  if (vb.pre.length === 0) return -1;
+  for (let i = 0; i < Math.min(va.pre.length, vb.pre.length); i++) {
+    const leftNumeric = /^\d+$/.test(va.pre[i]);
+    const rightNumeric = /^\d+$/.test(vb.pre[i]);
+    if (leftNumeric && !rightNumeric) return -1;
+    if (!leftNumeric && rightNumeric) return 1;
+    let result: number;
+    if (leftNumeric) {
+      result = compareNumeric(va.pre[i], vb.pre[i]);
+    } else {
+      const leftNatural = /^(.+?)(\d+)$/.exec(va.pre[i]);
+      const rightNatural = /^(.+?)(\d+)$/.exec(vb.pre[i]);
+      result =
+        leftNatural && rightNatural && leftNatural[1] === rightNatural[1]
+          ? compareNumeric(
+              leftNatural[2].replace(/^0+(?=\d)/, ""),
+              rightNatural[2].replace(/^0+(?=\d)/, "")
+            )
+          : va.pre[i] === vb.pre[i]
+            ? 0
+            : va.pre[i] < vb.pre[i]
+              ? -1
+              : 1;
+    }
+    if (result !== 0) return result;
+  }
+  return va.pre.length === vb.pre.length ? 0 : va.pre.length < vb.pre.length ? -1 : 1;
 }
 
 /**

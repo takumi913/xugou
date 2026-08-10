@@ -1,11 +1,23 @@
 package selfmgmt
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestBinaryName(t *testing.T) {
@@ -20,21 +32,6 @@ func TestBinaryName(t *testing.T) {
 	for _, c := range cases {
 		if got := BinaryName(c.goos, c.goarch); got != c.want {
 			t.Errorf("BinaryName(%q, %q) = %q, want %q", c.goos, c.goarch, got, c.want)
-		}
-	}
-}
-
-func TestDownloadURL(t *testing.T) {
-	cases := []struct {
-		base, goos, goarch, want string
-	}{
-		{"https://dl.xugou.mdzz.uk/latest", "linux", "amd64", "https://dl.xugou.mdzz.uk/latest/xugou-agent-linux-amd64"},
-		{"https://dl.xugou.mdzz.uk/latest/", "darwin", "arm64", "https://dl.xugou.mdzz.uk/latest/xugou-agent-darwin-arm64"},
-		{"http://example.com/dist//", "windows", "arm64", "http://example.com/dist/xugou-agent-windows-arm64.exe"},
-	}
-	for _, c := range cases {
-		if got := DownloadURL(c.base, c.goos, c.goarch); got != c.want {
-			t.Errorf("DownloadURL(%q, %q, %q) = %q, want %q", c.base, c.goos, c.goarch, got, c.want)
 		}
 	}
 }
@@ -78,7 +75,7 @@ func TestCompareVersions(t *testing.T) {
 		{"v1.0.0", "1.0.0", 0, true},
 		{"1.0.0", "1.0.1", -1, true},
 		{"1.2.0", "1.1.9", 1, true},
-		{"2.0", "2.0.0", 0, true},
+		{"2.0", "2.0.0", 0, false},
 		{"1.9.9", "2.0.0", -1, true},
 		{"v10.0.0", "v9.0.0", 1, true},
 		{"1.0.0-rc1", "1.0.0", -1, true},
@@ -92,6 +89,32 @@ func TestCompareVersions(t *testing.T) {
 		got, ok := CompareVersions(c.a, c.b)
 		if ok != c.wantOK || (ok && got != c.want) {
 			t.Errorf("CompareVersions(%q, %q) = (%d, %v), want (%d, %v)", c.a, c.b, got, ok, c.want, c.wantOK)
+		}
+	}
+
+	fixturePath := filepath.Join("..", "..", "..", "contracts", "semver-cases.json")
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read shared semver fixture: %v", err)
+	}
+	var fixtures []struct {
+		A      string `json:"a"`
+		B      string `json:"b"`
+		Result *int   `json:"result"`
+	}
+	if err := json.Unmarshal(fixtureBytes, &fixtures); err != nil {
+		t.Fatalf("parse shared semver fixture: %v", err)
+	}
+	for _, fixture := range fixtures {
+		got, ok := CompareVersions(fixture.A, fixture.B)
+		if fixture.Result == nil {
+			if ok {
+				t.Errorf("shared CompareVersions(%q, %q) = (%d, true), want invalid", fixture.A, fixture.B, got)
+			}
+			continue
+		}
+		if !ok || got != *fixture.Result {
+			t.Errorf("shared CompareVersions(%q, %q) = (%d, %v), want %d", fixture.A, fixture.B, got, ok, *fixture.Result)
 		}
 	}
 }
@@ -185,80 +208,273 @@ func TestValidateBinaryFile(t *testing.T) {
 	}
 }
 
-func TestReplaceExecutable(t *testing.T) {
-	dir := t.TempDir()
+func TestSignedReleaseManifestAndArtifact(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := append([]byte{0x7f, 'E', 'L', 'F'}, []byte("signed agent body")...)
+	digest := sha256.Sum256(artifact)
+	var manifestBytes []byte
+	var signature string
+	var channelBytes []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manifest.json":
+			_, _ = w.Write(manifestBytes)
+		case "/manifest.json.sig":
+			_, _ = w.Write([]byte(signature))
+		case "/channels/stable.json":
+			_, _ = w.Write(channelBytes)
+		case "/agent":
+			w.Header().Set("Content-Length", fmt.Sprint(len(artifact)))
+			_, _ = w.Write(artifact)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	manifest := ReleaseManifest{
+		SchemaVersion: 1,
+		Version:       "v2.0.0",
+		ReleasedAt:    time.Now().UTC().Format(time.RFC3339),
+		Artifacts: []ReleaseArtifact{{
+			OS:     "linux",
+			Arch:   "amd64",
+			URL:    server.URL + "/agent",
+			Size:   int64(len(artifact)),
+			SHA256: hex.EncodeToString(digest[:]),
+		}},
+	}
+	manifestBytes, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, manifestBytes))
+	manifestDigest := sha256.Sum256(manifestBytes)
+	channelPayload, err := json.Marshal(ReleaseChannel{
+		SchemaVersion:  1,
+		Channel:        "stable",
+		Version:        manifest.Version,
+		ManifestURL:    server.URL + "/manifest.json",
+		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+		ReleasedAt:     manifest.ReleasedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelBytes, err = json.Marshal(signedDocumentEnvelope{
+		SchemaVersion: 1,
+		PayloadBase64: base64.StdEncoding.EncodeToString(channelPayload),
+		Signature: base64.StdEncoding.EncodeToString(
+			ed25519.Sign(privateKey, channelPayload),
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := FetchVerifiedRelease(
+		server.URL+"/channels/stable.json",
+		base64.StdEncoding.EncodeToString(publicKey),
+		"linux",
+		"amd64",
+	)
+	if err != nil {
+		t.Fatalf("FetchVerifiedRelease failed: %v", err)
+	}
+	if release.Manifest.Version != "v2.0.0" || release.Artifact.Size != int64(len(artifact)) {
+		t.Fatalf("unexpected release: %+v", release)
+	}
+	path, err := DownloadVerifiedArtifact(release, t.TempDir())
+	if err != nil {
+		t.Fatalf("DownloadVerifiedArtifact failed: %v", err)
+	}
+	downloaded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(downloaded) != string(artifact) {
+		t.Fatal("verified artifact content mismatch")
+	}
+
+	validChannelBytes := channelBytes
+	var tamperedChannel signedDocumentEnvelope
+	if err := json.Unmarshal(channelBytes, &tamperedChannel); err != nil {
+		t.Fatal(err)
+	}
+	tamperedChannel.Signature = base64.StdEncoding.EncodeToString(
+		make([]byte, ed25519.SignatureSize),
+	)
+	channelBytes, err = json.Marshal(tamperedChannel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FetchVerifiedRelease(
+		server.URL+"/channels/stable.json",
+		base64.StdEncoding.EncodeToString(publicKey),
+		"linux",
+		"amd64",
+	); err == nil {
+		t.Fatal("tampered embedded channel signature must be rejected")
+	}
+	channelBytes = validChannelBytes
+
+	signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
+	if _, err := FetchVerifiedRelease(
+		server.URL+"/manifest.json",
+		base64.StdEncoding.EncodeToString(publicKey),
+		"linux",
+		"amd64",
+	); err == nil {
+		t.Fatal("tampered signature must be rejected")
+	}
+}
+
+func TestConcurrentChannelSwitchReturnsOnlyCompleteReleases(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents := map[string][]byte{}
+	signatures := map[string][]byte{}
+	var activeChannel atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/channels/stable.json" {
+			_, _ = w.Write(activeChannel.Load().([]byte))
+			return
+		}
+		if payload, ok := documents[r.URL.Path]; ok {
+			_, _ = w.Write(payload)
+			return
+		}
+		if signature, ok := signatures[r.URL.Path]; ok {
+			_, _ = w.Write(signature)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	makeRelease := func(version string) []byte {
+		artifact := append([]byte{0x7f, 'E', 'L', 'F'}, []byte(version)...)
+		artifactDigest := sha256.Sum256(artifact)
+		manifestPath := "/releases/" + version + "/manifest.json"
+		manifest, marshalErr := json.Marshal(ReleaseManifest{
+			SchemaVersion: 1,
+			Version:       version,
+			ReleasedAt:    "2026-08-10T00:00:00Z",
+			Artifacts: []ReleaseArtifact{{
+				OS:     "linux",
+				Arch:   "amd64",
+				URL:    server.URL + "/releases/" + version + "/agent",
+				Size:   int64(len(artifact)),
+				SHA256: hex.EncodeToString(artifactDigest[:]),
+			}},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		documents[manifestPath] = manifest
+		signatures[manifestPath+".sig"] = []byte(base64.StdEncoding.EncodeToString(
+			ed25519.Sign(privateKey, manifest),
+		))
+		manifestDigest := sha256.Sum256(manifest)
+		channelPayload, marshalErr := json.Marshal(ReleaseChannel{
+			SchemaVersion:  1,
+			Channel:        "stable",
+			Version:        version,
+			ManifestURL:    server.URL + manifestPath,
+			ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+			ReleasedAt:     "2026-08-10T00:00:00Z",
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		envelope, marshalErr := json.Marshal(signedDocumentEnvelope{
+			SchemaVersion: 1,
+			PayloadBase64: base64.StdEncoding.EncodeToString(channelPayload),
+			Signature: base64.StdEncoding.EncodeToString(
+				ed25519.Sign(privateKey, channelPayload),
+			),
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return envelope
+	}
+	oldChannel := makeRelease("1.0.0")
+	newChannel := makeRelease("2.0.0")
+	activeChannel.Store(oldChannel)
+
+	const readers = 8
+	const readsPerReader = 10
+	errorsSeen := make(chan error, readers*readsPerReader)
+	var readersDone sync.WaitGroup
+	for range readers {
+		readersDone.Add(1)
+		go func() {
+			defer readersDone.Done()
+			for range readsPerReader {
+				release, fetchErr := FetchVerifiedRelease(
+					server.URL+"/channels/stable.json",
+					base64.StdEncoding.EncodeToString(publicKey),
+					"linux",
+					"amd64",
+				)
+				if fetchErr != nil {
+					errorsSeen <- fetchErr
+					continue
+				}
+				version := release.Manifest.Version
+				if (version != "1.0.0" && version != "2.0.0") ||
+					!strings.Contains(release.URL, "/releases/"+version+"/") {
+					errorsSeen <- fmt.Errorf("mixed release observed: %+v", release)
+				}
+			}
+		}()
+	}
+	for index := range 200 {
+		if index%2 == 0 {
+			activeChannel.Store(newChannel)
+		} else {
+			activeChannel.Store(oldChannel)
+		}
+	}
+	activeChannel.Store(newChannel)
+	readersDone.Wait()
+	close(errorsSeen)
+	for observed := range errorsSeen {
+		t.Error(observed)
+	}
+}
+
+func TestReplaceExecutableHealthCheckRollback(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "path with spaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(dir, "agent")
 	newFile := filepath.Join(dir, "agent-new")
-
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(newFile, []byte("new"), 0o644); err != nil {
+	if err := os.WriteFile(newFile, []byte("new"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := ReplaceExecutable(newFile, target); err != nil {
-		t.Fatalf("ReplaceExecutable failed: %v", err)
+	err := replaceExecutableWithHealthCheck(
+		newFile,
+		target,
+		"v2.0.0",
+		func(string) (string, error) { return "", errors.New("startup failed") },
+	)
+	if err == nil {
+		t.Fatal("health check failure must trigger rollback")
 	}
-
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
+	contents, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
-	if string(data) != "new" {
-		t.Errorf("target content = %q, want %q", data, "new")
-	}
-	info, err := os.Stat(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		t.Errorf("target is not executable: %v", info.Mode())
-	}
-	if _, err := os.Stat(target + ".old"); !os.IsNotExist(err) {
-		t.Errorf("backup file should be removed, stat err = %v", err)
-	}
-	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
-		t.Errorf("new file should be renamed away, stat err = %v", err)
-	}
-}
-
-func TestReplaceExecutableMissingTarget(t *testing.T) {
-	dir := t.TempDir()
-	newFile := filepath.Join(dir, "agent-new")
-	if err := os.WriteFile(newFile, []byte("new"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ReplaceExecutable(newFile, filepath.Join(dir, "missing-target")); err == nil {
-		t.Error("expected error when target does not exist")
-	}
-}
-
-func TestDownloadToFile(t *testing.T) {
-	payload := append([]byte{0x7f, 'E', 'L', 'F'}, []byte("fake binary body")...)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/missing" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Write(payload)
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	path, err := DownloadToFile(srv.URL+"/xugou-agent-linux-amd64", dir)
-	if err != nil {
-		t.Fatalf("DownloadToFile failed: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != string(payload) {
-		t.Errorf("downloaded content mismatch")
-	}
-
-	if _, err := DownloadToFile(srv.URL+"/missing", dir); err == nil {
-		t.Error("expected error for 404 response")
+	if string(contents) != "old" {
+		t.Fatalf("rollback restored %q, want old", contents)
 	}
 }

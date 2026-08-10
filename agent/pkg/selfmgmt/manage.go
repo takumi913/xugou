@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,37 +16,6 @@ import (
 
 // downloadTimeout 单次下载的总超时时间
 const downloadTimeout = 5 * time.Minute
-
-// DownloadToFile 将 url 指向的文件下载到 dir 目录下的临时文件，返回临时文件路径。
-// 调用方负责在使用完毕后删除该文件（原子替换成功后该文件已被 rename，删除会静默失败）。
-func DownloadToFile(rawURL, dir string) (string, error) {
-	client := &http.Client{Timeout: downloadTimeout}
-	resp, err := client.Get(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("下载失败: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载失败: 服务器返回 %s", resp.Status)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".xugou-agent-download-*")
-	if err != nil {
-		return "", fmt.Errorf("创建临时文件失败: %w", err)
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("写入临时文件失败: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("关闭临时文件失败: %w", err)
-	}
-	return tmpPath, nil
-}
 
 // ValidateBinaryFile 校验下载的文件是否像一个可执行文件（魔数校验）。
 // 注：分发端未提供 sha256 校验文件，此处只能做基础完整性校验。
@@ -68,26 +36,63 @@ func ValidateBinaryFile(path string) error {
 	return CheckBinaryMagic(header)
 }
 
-// ReplaceExecutable 用 newPath 原子替换 target 可执行文件。
-// 两个路径必须位于同一目录（同一文件系统），采用两步 rename：
-// target -> target.old，newPath -> target，成功后删除 target.old。
-// Linux/macOS 允许 rename/unlink 正在运行的二进制，因此可在运行中自替换。
-func ReplaceExecutable(newPath, target string) error {
+// ReplaceExecutableWithHealthCheck 保留上一版本，原子替换后执行新二进制的
+// 机器可读版本命令作为启动健康检查；检查失败会立刻恢复旧二进制。
+func ReplaceExecutableWithHealthCheck(newPath, target, expectedVersion string) error {
+	return replaceExecutableWithHealthCheck(newPath, target, expectedVersion, BinaryVersion)
+}
+
+func replaceExecutableWithHealthCheck(
+	newPath, target, expectedVersion string,
+	versionProbe func(string) (string, error),
+) error {
 	if err := os.Chmod(newPath, 0o755); err != nil {
 		return fmt.Errorf("设置可执行权限失败: %w", err)
 	}
+	newFile, err := os.Open(newPath)
+	if err != nil {
+		return fmt.Errorf("打开新版本失败: %w", err)
+	}
+	if err := newFile.Sync(); err != nil {
+		newFile.Close()
+		return fmt.Errorf("同步新版本失败: %w", err)
+	}
+	if err := newFile.Close(); err != nil {
+		return fmt.Errorf("关闭新版本失败: %w", err)
+	}
 
+	directory := filepath.Dir(target)
 	backup := target + ".old"
-	_ = os.Remove(backup)
-	if err := os.Rename(target, backup); err != nil {
-		return fmt.Errorf("备份旧版本失败（可能需要 sudo 权限）: %w", err)
+	if err := installExecutable(newPath, target, backup); err != nil {
+		return fmt.Errorf("原子替换可执行文件失败: %w", err)
 	}
-	if err := os.Rename(newPath, target); err != nil {
-		// 回滚，尽量保持原状
-		_ = os.Rename(backup, target)
-		return fmt.Errorf("替换可执行文件失败: %w", err)
+	rollback := func(cause error) error {
+		if restoreErr := restoreExecutable(target, backup); restoreErr != nil {
+			return fmt.Errorf("%v；恢复旧版本失败: %w", cause, restoreErr)
+		}
+		_ = syncDirectory(directory)
+		return fmt.Errorf("新版本启动健康检查失败，已恢复旧版本: %w", cause)
 	}
-	_ = os.Remove(backup)
+	if err := syncDirectory(directory); err != nil {
+		return rollback(fmt.Errorf("同步可执行文件目录失败: %w", err))
+	}
+	actualVersion, err := versionProbe(target)
+	if err != nil {
+		return rollback(err)
+	}
+	if comparison, ok := CompareVersions(actualVersion, expectedVersion); !ok || comparison != 0 {
+		return rollback(fmt.Errorf(
+			"新版本号与签名清单不一致: got=%s want=%s",
+			actualVersion,
+			expectedVersion,
+		))
+	}
+	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("新版本已生效，但清理旧版本备份失败: %w", err)
+	}
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("新版本已生效，但同步目录失败: %w", err)
+	}
 	return nil
 }
 
@@ -199,9 +204,4 @@ func Systemctl(args ...string) error {
 		return fmt.Errorf("systemctl %s 失败: %s", strings.Join(args, " "), msg)
 	}
 	return nil
-}
-
-// IsRoot 当前进程是否以 root 身份运行（Windows 上恒为 false）
-func IsRoot() bool {
-	return os.Geteuid() == 0
 }

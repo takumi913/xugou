@@ -1,23 +1,19 @@
 import { Hono } from "hono";
-import { JwtPayload } from "../types";
+import { AdminSessionPrincipal } from "../types";
 import { Bindings } from "../models/db";
-import {
-  getStatusPageConfig,
-  saveStatusPageConfig,
-  getStatusPagePublicData,
-  getPublicAgentMetrics,
-  StatusPageConfigValidationError,
-} from "../services/StatusService";
 import { badRequest, statusPageConfigSchema } from "./schemas";
 import { getEnvNumber } from "../utils/env";
+import { createStatusUseCases } from "../modules/status/composition";
+import { ApplicationProblem } from "../shared/errors/ApplicationProblem";
 
 // 创建API路由
 const status = new Hono<{
   Bindings: Bindings;
-  Variables: { jwtPayload: JwtPayload };
+  Variables: { admin: AdminSessionPrincipal };
 }>();
 const STATUS_PAGE_CACHE_TTL_SECONDS = 30;
 const PUBLIC_METRICS_CACHE_TTL_SECONDS = 120;
+const PUBLIC_STATUS_CACHE_SCHEMA_VERSION = "2";
 
 type WorkerCacheStorage = CacheStorage & {
   default: Cache;
@@ -61,24 +57,27 @@ function notModifiedResponse(
   });
 }
 
+function getPublicStatusCacheKey(request: Request) {
+  const url = new URL(request.url);
+  url.searchParams.set(
+    "__xugou_public_schema",
+    PUBLIC_STATUS_CACHE_SCHEMA_VERSION
+  );
+  return new Request(url.toString(), request);
+}
+
 // 获取状态页配置(管理员)
 status.get("/config", async (c) => {
-  const payload = c.get("jwtPayload") as JwtPayload;
-  const userId = payload.id;
-
   try {
-    const config = await getStatusPageConfig(userId);
+    const config = await createStatusUseCases(c.env).getConfig();
     return c.json(config);
   } catch (error) {
-    console.error("获取状态页配置失败:", error);
     return c.json({ error: "获取状态页配置失败" }, 500);
   }
 });
 
 // 保存状态页配置
 status.post("/config", async (c) => {
-  const payload = c.get("jwtPayload") as JwtPayload;
-  const userId = payload.id;
   const parsed = statusPageConfigSchema.safeParse(await c.req.json());
 
   if (!parsed.success) {
@@ -86,24 +85,19 @@ status.post("/config", async (c) => {
   }
 
   try {
-    const result = await saveStatusPageConfig(userId, parsed.data, c.env);
+    const result = await createStatusUseCases(c.env).saveConfig(parsed.data);
     return c.json(result);
   } catch (error) {
-    if (error instanceof StatusPageConfigValidationError) {
+    if (error instanceof ApplicationProblem && error.status === 400) {
       return c.json(badRequest(error.message), 400);
     }
-    console.error("保存状态页配置失败:", error);
     return c.json({ error: "保存状态页配置失败" }, 500);
   }
 });
 
-status.get("/public/:userId/data", async (c) => {
-  const userId = parseInt(c.req.param("userId"));
-  if (isNaN(userId)) {
-    return c.json({ error: "无效的用户ID" }, 400);
-  }
-
-  const cacheKey = new Request(c.req.url, c.req.raw);
+status.get("/public/data", async (c) => {
+  // 使用版本化内部 Cache Key，部署白名单投影后不会命中旧版敏感快照。
+  const cacheKey = getPublicStatusCacheKey(c.req.raw);
   const cache = (caches as WorkerCacheStorage).default;
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) {
@@ -119,10 +113,21 @@ status.get("/public/:userId/data", async (c) => {
     return response;
   }
 
-  const result = await getStatusPagePublicData(userId, c.env, (promise) =>
-    c.executionCtx.waitUntil(promise)
-  );
-  const { body, etag } = jsonWithEtag(result);
+  let publication;
+  try {
+    publication = await createStatusUseCases(c.env).getPublicData();
+  } catch (error) {
+    if (error instanceof ApplicationProblem && error.code === "PUBLICATION_NOT_READY") {
+      c.header("Retry-After", "30");
+      return c.json(
+        { success: false, code: error.code, message: error.message },
+        503
+      );
+    }
+    throw error;
+  }
+  const body = publication.payloadJson;
+  const etag = publication.etag || jsonWithEtag(JSON.parse(body)).etag;
   const cacheControl = `public, max-age=${getEnvNumber(
     c.env,
     "STATUS_PAGE_CACHE_TTL_SECONDS",
@@ -146,10 +151,9 @@ status.get("/public/:userId/data", async (c) => {
   return response;
 });
 
-status.get("/public/:userId/agents/:agentId/metrics", async (c) => {
-  const userId = parseInt(c.req.param("userId"));
+status.get("/public/agents/:agentId/metrics", async (c) => {
   const agentId = parseInt(c.req.param("agentId"));
-  if (isNaN(userId) || isNaN(agentId)) {
+  if (isNaN(agentId)) {
     return c.json({ error: "无效的ID" }, 400);
   }
 
@@ -169,13 +173,17 @@ status.get("/public/:userId/agents/:agentId/metrics", async (c) => {
     return response;
   }
 
-  const result = await getPublicAgentMetrics(userId, agentId);
-  const payload = {
-    success: result.success,
-    agent: result.metrics,
-    message: result.message,
-  };
-  const { body, etag } = jsonWithEtag(payload);
+  let publication;
+  try {
+    publication = await createStatusUseCases(c.env).getPublicAgentMetrics(agentId);
+  } catch (error) {
+    if (error instanceof ApplicationProblem && error.status === 404) {
+      return c.json({ success: false, agent: [], message: error.message }, 404);
+    }
+    throw error;
+  }
+  const body = publication.payloadJson;
+  const etag = publication.etag;
   const cacheControl = `public, max-age=${getEnvNumber(
     c.env,
     "PUBLIC_METRICS_CACHE_TTL_SECONDS",
@@ -188,7 +196,7 @@ status.get("/public/:userId/agents/:agentId/metrics", async (c) => {
   }
 
   const response = new Response(body, {
-    status: result.status,
+    status: 200,
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": cacheControl,
@@ -197,9 +205,7 @@ status.get("/public/:userId/agents/:agentId/metrics", async (c) => {
     },
   });
 
-  if (result.success) {
-    await cache.put(cacheKey, response.clone());
-  }
+  await cache.put(cacheKey, response.clone());
 
   return response;
 });

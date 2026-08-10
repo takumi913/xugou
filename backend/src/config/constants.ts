@@ -3,22 +3,6 @@
  */
 
 /**
- * JWT 配置
- */
-export const JWT_CONFIG = {
-  /**
-   * Access Token 有效期：30天
-   * 用户登录后 30 天内无需重新登录
-   */
-  ACCESS_TOKEN_EXPIRES_IN: "30d",
-
-  /**
-   * 默认 JWT 密钥（生产环境应使用 CloudFlare 版本 ID）
-   */
-  DEFAULT_SECRET: "your-secret-key-change-in-production",
-};
-
-/**
  * 认证相关配置
  */
 export const AUTH_CONFIG = {

@@ -37,18 +37,17 @@ const NotificationsConfig = lazy(
   () => import("../pages/notifications/NotificationsConfig")
 );
 
+// 运维页面组件
+const QueueFailures = lazy(
+  () => import("../pages/operations/QueueFailures")
+);
+
 // 主题列表页面组件
 const ThemeList = lazy(() => import("../pages/themes/ThemeList"));
 
 // 认证页面组件
 const Login = lazy(() => import("../pages/auth/Login"));
-const Register = lazy(() => import("../pages/auth/Register"));
-
-// 用户管理页面组件
-const UsersList = lazy(() => import("../pages/users/UsersList"));
 const UserProfile = lazy(() => import("../pages/users/UserProfile"));
-const CreateUser = lazy(() => import("../pages/users/CreateUser"));
-const EditUser = lazy(() => import("../pages/users/EditUser"));
 
 // 用于包装Layout并提供children
 interface LayoutWrapperProps {
@@ -125,7 +124,7 @@ const protectedRoutes: RouteObject[] = [
     path: "/status",
     children: [
       {
-        path: "public/:userId",
+        path: "public",
         element: (
           <Suspense fallback={<PageLoading />}>
             <StatusPage />
@@ -201,6 +200,17 @@ const protectedRoutes: RouteObject[] = [
       </ProtectedRoute>
     ),
   },
+  // 同一 Worker 队列运维页面
+  {
+    path: "/operations/queue-failures",
+    element: (
+      <ProtectedRoute>
+        <Suspense fallback={<PageLoading />}>
+          <QueueFailures />
+        </Suspense>
+      </ProtectedRoute>
+    ),
+  },
   // 主题列表页面
   {
     path: "/themes",
@@ -212,43 +222,6 @@ const protectedRoutes: RouteObject[] = [
       </ProtectedRoute>
     ),
   },
-  // 用户管理
-  {
-    path: "/users",
-    children: [
-      {
-        path: "",
-        element: (
-          <ProtectedRoute>
-            <Suspense fallback={<PageLoading />}>
-              <UsersList />
-            </Suspense>
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "create",
-        element: (
-          <ProtectedRoute>
-            <Suspense fallback={<PageLoading />}>
-              <CreateUser />
-            </Suspense>
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: ":id",
-        element: (
-          <ProtectedRoute>
-            <Suspense fallback={<PageLoading />}>
-              <EditUser />
-            </Suspense>
-          </ProtectedRoute>
-        ),
-      },
-    ],
-  },
-
   // 个人资料
   {
     path: "/profile",
@@ -277,14 +250,6 @@ const publicRoutes: RouteObject[] = [
     element: (
       <Suspense fallback={<PageLoading />}>
         <Login />
-      </Suspense>
-    ),
-  },
-  {
-    path: "/register",
-    element: (
-      <Suspense fallback={<PageLoading />}>
-        <Register />
       </Suspense>
     ),
   },

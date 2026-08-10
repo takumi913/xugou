@@ -1,19 +1,23 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   agentImportSchema,
   agentRegisterSchema,
   agentStatusSchema,
   agentUpdateSchema,
-  authCredentialsSchema,
   monitorImportSchema,
   monitorSchema,
+  notificationHistoryQuerySchema,
   notificationSettingsSchema,
   orderUpdateSchema,
-  registerSchema,
+  securityAuditQuerySchema,
   statusPageConfigSchema,
-  userCreateSchema,
-  validateNotificationChannelConfig,
 } from "../src/api/schemas";
+import {
+  adminPasswordChangeSchema as changePasswordSchema,
+  authCredentialsSchema,
+} from "../src/modules/auth/http/schemas";
+import { validateNotificationChannelConfig } from "../src/modules/notifications/http/channel-config";
 import {
   MAX_REPORT_SAMPLES,
   compareSemver,
@@ -25,7 +29,6 @@ import {
   shouldTriggerAgentUpdate,
 } from "../src/utils/agentConfig";
 import {
-  canAccessOwnedResource,
   dedupeResourceIds,
   getMissingResourceIds,
 } from "../src/utils/access";
@@ -37,7 +40,6 @@ import {
   normalizeAgentMetricsHours,
   normalizeHistoryPartitionId,
 } from "../src/utils/historyId";
-import { MemCache, getHistoryCacheTtlMs } from "../src/utils/memCache";
 import {
   computeTraffic,
   getTrafficPeriodStart,
@@ -45,7 +47,22 @@ import {
   sumNetworkTotals,
 } from "../src/utils/traffic";
 import { normalizeAgentGeo } from "../src/utils/geo";
-import { toPublicAgent } from "../src/services/StatusService";
+import {
+  toPublicAgent,
+  toPublicMonitor,
+  parsePublicStatusSnapshot,
+  type PublicAgentSource,
+  type PublicMonitorSource,
+} from "../src/modules/status/domain/public-contract";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_OFFSET,
+  MAX_PAGE_SIZE,
+  normalizePageOffset,
+  normalizePageSize,
+} from "../src/utils/pagination";
+import { toAgentExportRecord } from "../src/modules/agents/persistence/D1LegacyAgentFacade";
+import { getEnvNumber } from "../src/utils/env";
 
 const expectValid = (name: string, result: { success: boolean }) => {
   assert.equal(result.success, true, `${name} should be valid`);
@@ -55,22 +72,10 @@ const expectInvalid = (name: string, result: { success: boolean }) => {
   assert.equal(result.success, false, `${name} should be invalid`);
 };
 
-expectValid(
-  "register payload",
-  registerSchema.safeParse({
-    username: "admin",
-    password: "admin123",
-    email: "admin@example.com",
-  })
-);
-expectInvalid(
-  "register payload with invalid email",
-  registerSchema.safeParse({
-    username: "admin",
-    password: "admin123",
-    email: "not-email",
-  })
-);
+assert.equal(getEnvNumber(undefined, "MISSING", 30, { min: 1 }), 30);
+assert.equal(getEnvNumber({}, "MISSING", 30, { min: 1 }), 30);
+assert.equal(getEnvNumber({ VALUE: "" }, "VALUE", 30, { min: 1 }), 30);
+assert.equal(getEnvNumber({ VALUE: "5" }, "VALUE", 30, { min: 1 }), 5);
 
 expectValid(
   "login payload",
@@ -80,6 +85,55 @@ expectValid(
   })
 );
 expectInvalid("login payload without password", authCredentialsSchema.safeParse({ username: "admin" }));
+
+expectValid(
+  "security audit query",
+  securityAuditQuerySchema.safeParse({
+    eventType: "auth.login",
+    outcome: "failure",
+    page: "2",
+    pageSize: "50",
+  })
+);
+expectInvalid(
+  "security audit query with unknown key",
+  securityAuditQuerySchema.safeParse({ page: 1, includeSecrets: true })
+);
+expectInvalid(
+  "security audit query with oversized page",
+  securityAuditQuerySchema.safeParse({ pageSize: MAX_PAGE_SIZE + 1 })
+);
+
+const legacyAgentWithSensitiveFields = {
+  id: 1,
+  name: "fixture-agent",
+  token: "fixture-plaintext-token",
+  status: "active",
+  created_at: "2026-01-01T00:00:00.000Z",
+  updated_at: "2026-01-01T00:00:00.000Z",
+  hostname: "fixture",
+  keepalive: null,
+  ip_addresses: null,
+  os: "linux",
+  version: "1.0.0",
+  last_seen_at: null,
+  last_state_changed_at: null,
+  next_offline_at: null,
+};
+const agentExportRecord = toAgentExportRecord(legacyAgentWithSensitiveFields);
+assert.equal("token" in agentExportRecord, false, "Agent export must omit Token");
+
+expectValid(
+  "change password payload",
+  changePasswordSchema.safeParse({
+    currentPassword: "admin123",
+    newPassword: "new-password",
+  })
+);
+expectInvalid(
+  "change password payload without current password",
+  changePasswordSchema.safeParse({ newPassword: "new-password" })
+);
 
 expectValid(
   "monitor payload",
@@ -293,6 +347,18 @@ assert.equal(
   "2026-07-15",
   "period start uses this month's reset day when passed"
 );
+for (const key of ["token", "api_key", "access_token", "secret"]) {
+  assert.equal(
+    parsePublicStatusSnapshot(
+      JSON.stringify({
+        monitors: [],
+        agents: [{ id: 1, metrics: { disk_metrics: JSON.stringify([{ [key]: "value" }]) } }],
+      })
+    ),
+    null,
+    `public status validation must inspect stringified JSON for ${key}`
+  );
+}
 assert.equal(
   getTrafficPeriodStart(new Date(Date.UTC(2026, 6, 10)), 15),
   "2026-06-15",
@@ -457,11 +523,10 @@ assert.equal(
 
 // ---- 地图：公开状态页 agent 投影绝不含 geo_*（隐私分级负向断言） ----
 
-const publicAgentProjection = toPublicAgent({
+const publicAgentSource: PublicAgentSource & Record<string, unknown> = {
   id: 1,
   name: "server-1",
   token: "secret-token",
-  created_by: 10,
   status: "active",
   created_at: "2026-07-26T00:00:00.000Z",
   updated_at: "2026-07-26T00:00:00.000Z",
@@ -478,7 +543,8 @@ const publicAgentProjection = toPublicAgent({
   geo_longitude: 139.6917,
   geo_city: "Tokyo",
   geo_region_name: "Tokyo",
-} as any);
+};
+const publicAgentProjection = toPublicAgent(publicAgentSource);
 assert.equal(
   Object.keys(publicAgentProjection).some((key) => key.startsWith("geo_")),
   false,
@@ -498,6 +564,65 @@ assert.equal(
   publicAgentProjection.region,
   "JP",
   "public agent projection keeps coarse country-level region"
+);
+
+const publicMonitorSource: PublicMonitorSource & Record<string, unknown> = {
+  id: 7,
+  name: "private-api",
+  url: "https://internal.example.com/health",
+  method: "POST",
+  interval: 60,
+  timeout: 5000,
+  expected_status: 204,
+  headers: { Authorization: "Bearer SECRET" },
+  body: '{"secret":"value"}',
+  active: true,
+  status: "up",
+  response_time: 42,
+  last_checked: "2026-07-26T00:00:00.000Z",
+  created_at: "2026-07-25T00:00:00.000Z",
+  updated_at: "2026-07-26T00:00:00.000Z",
+};
+const publicMonitorProjection = toPublicMonitor(publicMonitorSource);
+assert.deepEqual(
+  Object.keys(publicMonitorProjection).sort(),
+  [
+    "created_at",
+    "id",
+    "last_checked",
+    "name",
+    "response_time",
+    "status",
+    "updated_at",
+  ],
+  "public monitor projection must only expose the documented whitelist"
+);
+for (const privateField of [
+  "url",
+  "method",
+  "headers",
+  "body",
+  "timeout",
+  "interval",
+  "expected_status",
+  "active",
+]) {
+  assert.equal(
+    privateField in publicMonitorProjection,
+    false,
+    `public monitor projection must not expose ${privateField}`
+  );
+}
+assert.ok(
+  parsePublicStatusSnapshot('{"monitors":[],"agents":[]}'),
+  "safe public status snapshot must pass validation"
+);
+assert.equal(
+  parsePublicStatusSnapshot(
+    '{"monitors":[],"agents":[{"id":1,"metrics":{"nested":{"token":"secret"}}}]}'
+  ),
+  null,
+  "public status validation must reject private keys at any nesting depth"
 );
 
 // ---- 探针配置下发协议 ----
@@ -699,6 +824,27 @@ expectInvalid(
     },
   ])
 );
+expectInvalid(
+  "monitor payload with oversized body",
+  monitorSchema.safeParse({
+    name: "API",
+    url: "https://example.com/health",
+    method: "GET",
+    interval: 60,
+    timeout: 5000,
+    expected_status: 200,
+    body: "x".repeat(1024 * 1024 + 1),
+  })
+);
+expectInvalid(
+  "legacy agent payload with oversized ping map",
+  agentStatusSchema.safeParse({
+    token: "agent-token",
+    ping: Object.fromEntries(
+      Array.from({ length: 129 }, (_, index) => [`target_${index}`, { latency_ms: 1 }])
+    ),
+  })
+);
 
 expectValid(
   "status page payload",
@@ -720,6 +866,15 @@ expectInvalid(
     agents: [],
   })
 );
+expectInvalid(
+  "status page payload with duplicate monitor id",
+  statusPageConfigSchema.safeParse({
+    title: "Status",
+    description: "Service status",
+    monitors: [1, 1],
+    agents: [],
+  })
+);
 
 expectValid(
   "notification settings payload",
@@ -738,6 +893,53 @@ expectInvalid(
     channels: [1],
     cooldown_minutes: 1441,
   })
+);
+
+const defaultHistoryQuery = notificationHistoryQuerySchema.parse({});
+assert.deepEqual(
+  defaultHistoryQuery,
+  { limit: DEFAULT_PAGE_SIZE, page: 1 },
+  "notification history query should have bounded defaults"
+);
+expectValid(
+  "notification history query at maximum page size",
+  notificationHistoryQuerySchema.safeParse({
+    type: "monitor",
+    target_id: "1",
+    status: "success",
+    limit: String(MAX_PAGE_SIZE),
+    page: "100000",
+  })
+);
+expectInvalid(
+  "notification history query above maximum page size",
+  notificationHistoryQuerySchema.safeParse({
+    limit: String(MAX_PAGE_SIZE + 1),
+  })
+);
+expectInvalid(
+  "notification history query with zero page",
+  notificationHistoryQuerySchema.safeParse({ page: "0" })
+);
+assert.equal(
+  normalizePageSize(Number.MAX_SAFE_INTEGER),
+  MAX_PAGE_SIZE,
+  "repository page-size guard should clamp oversized direct calls"
+);
+assert.equal(
+  normalizePageOffset(Number.MAX_SAFE_INTEGER),
+  MAX_PAGE_OFFSET,
+  "repository offset guard should clamp oversized direct calls"
+);
+
+const bootstrapMigrationSource = readFileSync(
+  new URL("../drizzle/0023_runtime_bootstrap_defaults.sql", import.meta.url),
+  "utf8"
+);
+assert.equal(
+  bootstrapMigrationSource.includes("botToken"),
+  false,
+  "bootstrap data migration must not contain third-party credential fields"
 );
 
 // ---- B4b：新增通知渠道 config 校验 ----
@@ -853,50 +1055,6 @@ expectInvalid(
   })
 );
 
-expectValid(
-  "user create payload",
-  userCreateSchema.safeParse({
-    username: "alice",
-    password: "password123",
-    email: "alice@example.com",
-    role: "manager",
-  })
-);
-expectInvalid(
-  "user create payload with invalid role",
-  userCreateSchema.safeParse({
-    username: "alice",
-    password: "password123",
-    role: "owner",
-  })
-);
-
-const ownedAgent = {
-  id: 1,
-  created_by: 10,
-} as any;
-
-assert.equal(
-  canAccessOwnedResource(ownedAgent, 10, "user"),
-  true,
-  "agent owner should access own agent"
-);
-assert.equal(
-  canAccessOwnedResource(ownedAgent, 11, "user"),
-  false,
-  "non-owner should not access another user's agent"
-);
-assert.equal(
-  canAccessOwnedResource(ownedAgent, 11, "admin"),
-  true,
-  "admin should access cross-user agent"
-);
-assert.equal(
-  canAccessOwnedResource(null, 10, "admin"),
-  false,
-  "missing agent should not be accessible"
-);
-
 assert.deepEqual(
   dedupeResourceIds([1, 1, 2, 0, -1, 3.5, 2]),
   [1, 2],
@@ -950,20 +1108,3 @@ assert.equal(normalizeAgentMetricsHours(undefined), 24, "hours defaults to 24");
 assert.equal(normalizeAgentMetricsHours("168"), 168, "hours 168 is allowed");
 assert.equal(normalizeAgentMetricsHours("2"), null, "hours 2 is rejected");
 assert.equal(normalizeAgentMetricsHours("abc"), null, "non-numeric hours rejected");
-
-// ---- isolate 内存缓存 ----
-
-const cache = new MemCache<number>(2);
-cache.set("a", 1, 60_000);
-cache.set("b", 2, 60_000);
-cache.set("c", 3, 60_000); // 超容量，应淘汰最早的 a
-assert.equal(cache.get("a"), undefined, "oldest entry evicted at capacity");
-assert.equal(cache.get("c"), 3, "newest entry retained");
-cache.deleteByPrefix("b");
-assert.equal(cache.get("b"), undefined, "deleteByPrefix removes matching keys");
-assert.equal(
-  getHistoryCacheTtlMs(1) < getHistoryCacheTtlMs(24) &&
-    getHistoryCacheTtlMs(24) < getHistoryCacheTtlMs(168),
-  true,
-  "history cache TTL grows with hours"
-);

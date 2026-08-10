@@ -15,7 +15,6 @@ type HTTPReporter struct {
 
 // RegisterPayload 定义注册到后端的数据结构
 type RegisterPayload struct {
-	Token       string   `json:"token"`        // API令牌
 	Name        string   `json:"name"`         // 客户端名称
 	Hostname    string   `json:"hostname"`     // 主机名
 	IPAddresses []string `json:"ip_addresses"` // IP地址列表
@@ -25,9 +24,8 @@ type RegisterPayload struct {
 
 // RegisterResponse 定义注册响应结构
 type RegisterResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Agent   struct {
-		ID int `json:"id"`
-	} `json:"agent"`
+	Data struct {
+		AgentID int  `json:"agent_id"`
+		Created bool `json:"created"`
+	} `json:"data"`
 }

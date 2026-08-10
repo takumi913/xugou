@@ -1,10 +1,9 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useLocation, Link } from "react-router-dom"; // 导入 Link
-import { Flex, Text } from "@/components/ui/theme-shim";
+import { useNavigate, useLocation } from "react-router-dom";
+import { Flex, Text } from "@/components/ui/layout";
 import { Button, Input } from "@/components/ui";
 import { useAuth } from "../../providers/AuthProvider";
 import { useTranslation } from "react-i18next";
-import { getAllowNewUserRegistration } from "../../api/settings"; // 导入新的 API 函数
 
 type LoginLocationState = {
   from?: {
@@ -19,7 +18,6 @@ const Login = () => {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [showRegister, setShowRegister] = useState(false); // 新增状态
 
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -37,19 +35,6 @@ const Login = () => {
 
   // 检查是否有来自注册页面的消息
   useEffect(() => {
-    // 检查是否允许注册
-    const checkRegistrationStatus = async () => {
-      try {
-        const response = await getAllowNewUserRegistration();
-        if (response.success) {
-          setShowRegister(response.allow);
-        }
-      } catch (e) {
-        console.error("检查注册状态失败", e);
-      }
-    };
-    checkRegistrationStatus();
-
     if (locationState?.message) {
       setMessage(locationState.message);
     }
@@ -121,18 +106,6 @@ const Login = () => {
               </Flex>
             </form>
 
-            {/* 新增：根据设置显示注册链接 */}
-            {showRegister && (
-              <Text align="center" size="2" className="mt-4">
-                {t("login.registerLink")}{" "}
-                <Link
-                  to="/register"
-                  className="text-[var(--accent-green)] no-underline hover:underline"
-                >
-                  {t("navbar.register")}
-                </Link>
-              </Text>
-            )}
           </Flex>
         </div>
       </Flex>

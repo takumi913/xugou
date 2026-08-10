@@ -1,0 +1,201 @@
+{
+  "formatVersion": 1,
+  "architecture": "single-worker-modular-monolith",
+  "execution": "independent-contract-release",
+  "requiredGates": [
+    "release_ready",
+    "contract_worker_ready",
+    "contract_evidence_active",
+    "credential_contract_ready",
+    "management_v1_sunset_ready",
+    "agent_v1_sunset_ready",
+    "all_data_conserved",
+    "sqlite_integrity_ok",
+    "bookmark_and_sql_export_verified"
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": "deploy-contract-compatible-worker",
+      "description": "Deploy the same xugou Worker after removing v1 routes, legacy JWT upgrade, dual writes and source-table fallback reads."
+    },
+    {
+      "order": 2,
+      "action": "freeze-and-export",
+      "description": "Pause both Queue deliveries, wait for ledgers to drain, create a fresh D1 Bookmark and full SQL Export, then compile a new evidence bundle."
+    },
+    {
+      "order": 3,
+      "action": "apply-contract-migration",
+      "description": "Apply the rendered one-shot D1 Contract SQL: seal the v2 evidence bundle, drop archived legacy source tables, rename agents.token to a redacted anchor_nonce, and prune identity anchors in place with ALTER TABLE DROP COLUMN so ON DELETE CASCADE child facts remain untouched."
+    },
+    {
+      "order": 4,
+      "action": "verify-and-resume",
+      "description": "Run integrity, foreign-key, identity-set and row-conservation checks before resuming Queue delivery."
+    }
+  ],
+  "identityAnchorRebuilds": [
+    {
+      "table": "agents",
+      "strategy": "in-place-prune",
+      "renameColumns": {
+        "token": "anchor_nonce"
+      },
+      "dropColumns": [
+        "name",
+        "status",
+        "hostname",
+        "ip_addresses",
+        "os",
+        "version",
+        "keepalive",
+        "last_seen_at",
+        "last_state_changed_at",
+        "next_offline_at",
+        "history_partition_id",
+        "collect_interval",
+        "report_interval",
+        "region",
+        "geo_latitude",
+        "geo_longitude",
+        "geo_city",
+        "geo_region_name",
+        "boot_time",
+        "price",
+        "currency",
+        "billing_cycle",
+        "expire_date",
+        "auto_renewal",
+        "is_hidden",
+        "traffic_limit_gb",
+        "traffic_reset_day",
+        "traffic_calc_type",
+        "auto_update",
+        "group_name",
+        "tags",
+        "sort_order",
+        "deleted_at"
+      ],
+      "preserve": [
+        "id",
+        "anchor_nonce",
+        "created_at",
+        "updated_at"
+      ],
+      "canonicalData": [
+        "agent_nodes",
+        "agent_runtime",
+        "agent_current_metrics",
+        "agent_credentials"
+      ]
+    },
+    {
+      "table": "monitors",
+      "strategy": "in-place-prune",
+      "dropColumns": [
+        "name",
+        "url",
+        "method",
+        "interval",
+        "timeout",
+        "timeout_ms",
+        "expected_status",
+        "headers",
+        "body",
+        "active",
+        "status",
+        "response_time",
+        "last_checked",
+        "next_check_at",
+        "deleted_at",
+        "sort_order"
+      ],
+      "preserve": [
+        "id",
+        "created_at",
+        "updated_at"
+      ],
+      "canonicalData": [
+        "monitor_definitions",
+        "monitor_runtime"
+      ]
+    },
+    {
+      "table": "notification_channels",
+      "strategy": "in-place-prune",
+      "dropColumns": [
+        "config"
+      ],
+      "preserve": [
+        "id",
+        "name",
+        "type",
+        "enabled",
+        "deleted_at",
+        "created_at",
+        "updated_at"
+      ],
+      "canonicalData": [
+        "notification_endpoints",
+        "notification_secrets"
+      ]
+    },
+    {
+      "table": "notification_templates",
+      "strategy": "in-place-prune",
+      "dropColumns": [
+        "subject",
+        "content"
+      ],
+      "preserve": [
+        "id",
+        "name",
+        "type",
+        "is_default",
+        "deleted_at",
+        "created_at",
+        "updated_at"
+      ],
+      "canonicalData": [
+        "notification_template_definitions",
+        "notification_template_versions"
+      ]
+    }
+  ],
+  "dropTablesAfterArchive": [
+    "agent_metrics_24h",
+    "agent_metrics_history",
+    "agent_metrics_history_old",
+    "agent_metrics_history_*",
+    "agent_latest_metrics",
+    "monitor_status_history_24h",
+    "monitor_daily_stats",
+    "notification_history",
+    "notification_settings",
+    "status_page_config",
+    "status_page_monitors",
+    "status_page_agents",
+    "public_status_snapshots"
+  ],
+  "preserveTables": [
+    "migration_checkpoints",
+    "migration_anomalies",
+    "legacy_id_map",
+    "api_compatibility_hits",
+    "raw_sample_archive_batches",
+    "raw_sample_archive_members",
+    "notification_template_versions",
+    "security_audit_events",
+    "contract_release_evidence",
+    "contract_release_state"
+  ],
+  "notes": [
+    "This file is a reviewed release plan, not an automatically applied Wrangler Expand migration.",
+    "backend/tooling/contract/render-migration.ts compiles the validated v2 bundle into a one-shot SQL file; the generated artifact is mode 0600 and is never committed.",
+    "D1 keeps foreign keys enabled inside implicit transactions and deferred constraints do not suppress ON DELETE CASCADE, so identity anchors are pruned in place instead of DROP-and-rename rebuilds.",
+    "agents.anchor_nonce contains only contract-anchor:<id>; no legacy Agent credential or management data remains in the anchor.",
+    "Dynamic agent_metrics_history_* tables are discovered from the sealed preflight manifest.",
+    "Migration and Contract evidence ledgers remain queryable through the post-Contract observation period."
+  ]
+}

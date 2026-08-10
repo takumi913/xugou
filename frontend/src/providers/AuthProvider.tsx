@@ -1,103 +1,76 @@
 import React, {
   createContext,
-  useContext,
-  useState,
-  useEffect,
   useCallback,
+  useContext,
+  useEffect,
+  useState,
   ReactNode,
 } from "react";
 import {
-  login as apiLogin,
-  register as apiRegister,
   getCurrentUser,
+  login as apiLogin,
+  logout as apiLogout,
 } from "../api/auth";
-import { getAllowNewUserRegistration } from "../api/settings"; // 新增
-import { getStoredToken } from "../api/client";
-import { User, LoginRequest, RegisterRequest, AuthContextType } from "../types";
+import { AuthContextType, LoginRequest, User } from "../types";
 import { useTranslation } from "react-i18next";
+import { queryClient } from "./QueryProvider";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function clearLegacyAuthStorage() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+}
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const { t } = useTranslation();
 
   const clearAuthState = useCallback(() => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setToken(null);
+    clearLegacyAuthStorage();
+    queryClient.clear();
     setUser(null);
   }, []);
 
-  // 验证 token 是否有效
-  const verifyToken = useCallback(async () => {
-    try {
-      const response = await getCurrentUser();
-      if (response.success && response.user) {
-        setUser(response.user);
-        localStorage.setItem("user", JSON.stringify(response.user));
-      } else {
-        // Token 无效，清除登录状态
-        clearAuthState();
-      }
-    } catch (error) {
-      console.error(t("auth.error.fetchUser"), error);
-      // Token 验证失败，清除登录状态
-      clearAuthState();
-    } finally {
-      setIsLoading(false);
-    }
-  }, [clearAuthState, t]);
-
   useEffect(() => {
-    // 从 localStorage 获取 token 和 user
-    const storedToken = getStoredToken();
-    const storedUser = localStorage.getItem("user");
+    let active = true;
 
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
-      // 验证 token 是否有效
-      verifyToken();
-    } else {
-      setIsLoading(false);
-    }
-  }, [verifyToken]);
-
-  const fetchCurrentUser = useCallback(async () => {
-    try {
-      const response = await getCurrentUser();
-      if (response.success && response.user) {
-        setUser(response.user);
-        localStorage.setItem("user", JSON.stringify(response.user));
-      } else {
-        // 如果获取用户信息失败，清除 token 和 user
-        clearAuthState();
+    const restoreSession = async () => {
+      try {
+        const response = await getCurrentUser();
+        if (active && response.success && response.user) {
+          setUser(response.user);
+          // 清理早期版本留下的可读认证数据；当前会话只由 Cookie 承载。
+          clearLegacyAuthStorage();
+        } else if (active) {
+          clearAuthState();
+        }
+      } catch (error) {
+        if (active) {
+          console.error(t("auth.error.fetchUser"), error);
+          clearAuthState();
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
       }
-    } catch (error) {
-      console.error(t("auth.error.fetchUser"), error);
-      clearAuthState();
-    }
-  }, [clearAuthState, t]);
+    };
 
-  useEffect(() => {
-    // 如果有 token，但没有 user，则获取用户信息
-    if (token && !user) {
-      fetchCurrentUser();
-    }
-  }, [token, user, fetchCurrentUser]);
+    void restoreSession();
+    return () => {
+      active = false;
+    };
+  }, [clearAuthState, t]);
 
   const login = async (data: LoginRequest) => {
     try {
       const response = await apiLogin(data);
-      if (response.success && response.token && response.user) {
-        localStorage.setItem("token", response.token);
-        localStorage.setItem("user", JSON.stringify(response.user));
-        setToken(response.token);
+      if (response.success && response.user) {
+        clearLegacyAuthStorage();
         setUser(response.user);
       }
       return { success: response.success, message: response.message };
@@ -107,35 +80,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  const register = async (data: RegisterRequest) => {
+  const logout = async () => {
     try {
-      // 客户端再次检查是否允许注册
-      const allowResponse = await getAllowNewUserRegistration();
-      if (!allowResponse.success || !allowResponse.allow) {
-        return { success: false, message: t("register.disabled") };
-      }
-      const response = await apiRegister(data);
-      return { success: response.success, message: response.message };
+      await apiLogout();
     } catch (error) {
-      console.error(t("auth.error.register"), error);
-      return { success: false, message: t("register.error.tryAgain") };
+      console.error(t("auth.error.logout", "退出登录失败"), error);
+    } finally {
+      clearAuthState();
     }
-  };
-
-  const logout = () => {
-    clearAuthState();
-    window.location.href = "/login";
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        token,
-        isAuthenticated: !!token,
+        isAuthenticated: Boolean(user),
         isLoading,
         login,
-        register,
         logout,
       }}
     >

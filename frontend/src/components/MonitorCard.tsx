@@ -1,19 +1,32 @@
 import { useMemo } from "react";
 import { monitorStatusColors, statusAccentColor } from "../utils/statusColors";
-import { MonitorWithDailyStatsAndStatusHistory } from "../types/monitors";
+import {
+  PublicMonitor,
+} from "../types/monitors";
+import type {
+  MonitorDailyStats,
+  MonitorHistory,
+  MonitorV2,
+} from "../api/monitors";
 import { useTranslation } from "react-i18next";
 import StatusBar from "./MonitorStatusBar";
 import ResponseTimeChart from "./ResponseTimeChart";
 
 interface MonitorCardProps {
-  monitor: MonitorWithDailyStatsAndStatusHistory;
+  monitor:
+    | PublicMonitor
+    | (MonitorV2 & {
+        dailyStats: MonitorDailyStats[];
+        history: MonitorHistory[];
+      });
+  compact?: boolean;
 }
 
 /**
  * API监控卡片组件（终端条形卡风格）
  * 用于显示单个API监控服务的状态信息
  */
-const MonitorCard = ({ monitor }: MonitorCardProps) => {
+const MonitorCard = ({ monitor, compact = false }: MonitorCardProps) => {
   const { t } = useTranslation();
 
   // 状态文本映射
@@ -25,6 +38,10 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
 
   // 获取当前监控的状态
   const currentStatus = monitor.status || "pending";
+  const responseTime =
+    "response_time_ms" in monitor
+      ? monitor.response_time_ms
+      : monitor.response_time;
   const statusColor = statusAccentColor(monitorStatusColors, currentStatus);
 
   // 最近一天的可用率（取 dailyStats 中日期最新的一条）
@@ -64,7 +81,7 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
         <span>
           {t("monitorCard.responseTime")}:{" "}
           <span style={{ color: "var(--accent-cyan)", fontWeight: 600 }}>
-            {monitor.response_time ? `${monitor.response_time}ms` : "-"}
+            {responseTime ? `${responseTime}ms` : "-"}
           </span>
         </span>
         {latestAvailability !== null && (
@@ -77,19 +94,23 @@ const MonitorCard = ({ monitor }: MonitorCardProps) => {
         )}
       </div>
 
-      {/* 状态条显示 */}
-      <div className="w-full pt-2">
-        <StatusBar dailyStats={monitor.dailyStats} />
-      </div>
+      {compact ? null : (
+        <>
+          {/* 状态条显示 */}
+          <div className="w-full pt-2">
+            <StatusBar dailyStats={monitor.dailyStats} />
+          </div>
 
-      {/* 响应时间图表 */}
-      <div className="w-full pt-2">
-        <ResponseTimeChart
-          history={monitor.history}
-          height={150}
-          showTimeLabels={true}
-        />
-      </div>
+          {/* 响应时间图表 */}
+          <div className="w-full pt-2">
+            <ResponseTimeChart
+              history={monitor.history}
+              height={150}
+              showTimeLabels={true}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 };

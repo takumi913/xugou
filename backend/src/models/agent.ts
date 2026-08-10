@@ -3,7 +3,6 @@ export interface Agent {
   id: number;
   name: string;
   token: string;
-  created_by: number;
   status: string | null;
   created_at: string;
   updated_at: string;
@@ -48,6 +47,7 @@ export interface Agent {
   tags?: string | null;
   // 手动排序权重
   sort_order?: number | null;
+  deleted_at?: string | null;
 }
 
 // 客户端类型定义
@@ -55,7 +55,6 @@ export interface AgentWithMetrics {
   id: number;
   name: string;
   token: string;
-  created_by: number;
   status: string;
   created_at: string;
   updated_at: string;
@@ -67,6 +66,7 @@ export interface AgentWithMetrics {
   last_seen_at: string | null;
   last_state_changed_at: string | null;
   next_offline_at: string | null;
+  deleted_at?: string | null;
   metrics: Metrics[] | null;
 }
 

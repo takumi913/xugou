@@ -11,6 +11,8 @@ var (
 	Version   = "0.1.0"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
+	// UpdatePublicKey 是发布流水线注入的 Ed25519 原始公钥 Base64。
+	UpdatePublicKey = ""
 )
 
 func init() {

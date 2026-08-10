@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useMemo, useCallback } from "react";
-import { Box } from "@/components/ui/theme-shim";
+import { Box } from "@/components/ui/layout";
 import { MonitorStatusHistory } from "../types/monitors";
 import { useTranslation } from "react-i18next";
 import { Line } from "react-chartjs-2";

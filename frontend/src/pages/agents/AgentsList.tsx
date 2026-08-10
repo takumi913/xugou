@@ -1,13 +1,13 @@
-import { useState, useCallback, useRef, type DragEvent } from "react";
+import { useState, useRef, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Box,
   Flex,
   Text,
-  IconButton,
   Grid,
   Container,
-} from "@/components/ui/theme-shim";
+} from "@/components/ui/layout";
 import {
   Button,
   Card,
@@ -40,25 +40,22 @@ import {
 } from "@radix-ui/react-icons";
 import { toast } from "sonner";
 import {
-  getAllAgentsWithLatestMetricsWithSignal,
+  getAgentsPage,
   deleteAgent,
   updateAgentsOrder,
   exportAgents,
   importAgents,
+  type AgentV2,
 } from "../../api/agents";
 import AgentStatusBar from "../../components/AgentStatusBar";
 import PageLoading from "../../components/PageLoading";
 import { useTranslation } from "react-i18next";
-import { AgentWithLatestMetrics } from "../../types";
-import { usePolling } from "../../hooks/usePolling";
 import { agentStatusColors } from "../../utils/statusColors";
 import { downloadJson, readJsonArrayFile } from "../../utils/importExport";
 
 const AgentsList = () => {
   const navigate = useNavigate();
-  const [agents, setAgents] = useState<AgentWithLatestMetrics[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<"table" | "card">("card"); // 默认使用卡片视图
@@ -67,44 +64,95 @@ const AgentsList = () => {
   const [dragOverId, setDragOverId] = useState<number | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const { t } = useTranslation();
+  const [cursor, setCursor] = useState<string | undefined>();
+  const [cursorHistory, setCursorHistory] = useState<(string | undefined)[]>([]);
+  const agentListQueryKey = ["agents", "management-list"] as const;
+  const agentPageQueryKey = [...agentListQueryKey, cursor ?? null] as const;
 
-  // 获取客户端数据
-  const fetchAgents = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await getAllAgentsWithLatestMetricsWithSignal(signal);
-      if (signal?.aborted) return;
+  const agentsQuery = useQuery({
+    queryKey: agentPageQueryKey,
+    queryFn: ({ signal }) =>
+      getAgentsPage(
+        { cursor, limit: 50, includeLatestMetrics: true },
+        signal
+      ),
+    refetchInterval: 60_000,
+  });
+  const agents: AgentV2[] = agentsQuery.data?.data ?? [];
+  const nextCursor = agentsQuery.data?.has_more
+    ? agentsQuery.data.next_cursor
+    : null;
+  const canReorder = cursorHistory.length === 0 && !nextCursor;
+  const loading = agentsQuery.isPending;
+  const error = agentsQuery.error;
 
-      if (response.agents) {
-        setAgents(response.agents);
-      } else if (!response.success) {
-        setError(response.message || t("common.error.fetch"));
+  const orderMutation = useMutation({
+    mutationFn: async (next: AgentV2[]) =>
+      updateAgentsOrder(next.map((agent) => agent.id)),
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: agentPageQueryKey });
+      const previous = queryClient.getQueryData<typeof agentsQuery.data>(
+        agentPageQueryKey
+      );
+      queryClient.setQueryData(agentPageQueryKey, (current: typeof previous) =>
+        current ? { ...current, data: next } : current
+      );
+      return { previous };
+    },
+    onError: (_error, _next, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(agentPageQueryKey, context.previous);
       }
-    } catch (error) {
-      if (!signal?.aborted) {
-        setError(
-          error instanceof Error ? error.message : t("common.error.fetch")
-        );
-      }
-    } finally {
-      if (!signal?.aborted) {
-        setLoading(false);
-      }
-    }
-  }, [t]);
+      toast.error(t("common.orderSaveError"));
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
+  });
 
-  usePolling(fetchAgents, {
-    intervalMs: 60000,
+  const deleteMutation = useMutation({
+    mutationFn: deleteAgent,
+    onSuccess: (_value, id) => {
+      queryClient.setQueryData(agentPageQueryKey, (current: typeof agentsQuery.data) =>
+        current
+          ? {
+              ...current,
+              data: current.data.filter((agent: AgentV2) => agent.id !== id),
+            }
+          : current
+      );
+    },
+    onError: () => toast.error(t("common.error.delete")),
+    onSettled: () => {
+      setDeleteDialogOpen(false);
+      setSelectedAgentId(null);
+      queryClient.invalidateQueries({ queryKey: agentListQueryKey });
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: importAgents,
+    onSuccess: (result) => {
+      toast.success(
+        t("common.importResult", {
+          created: result.created,
+          skipped: result.skipped,
+        })
+      );
+      if (result.issuedCredentials.length > 0) {
+        downloadJson(result.issuedCredentials, "xugou-agent-credentials.json");
+      }
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+    onError: () => toast.error(t("common.importError")),
   });
 
   // 刷新客户端列表
   const handleRefresh = () => {
-    fetchAgents();
+    agentsQuery.refetch();
   };
 
   // 拖拽落点：本地乐观重排 → 调 order 接口，失败回滚并 toast
   const handleDrop = async (targetId: number) => {
+    if (!canReorder) return;
     const sourceId = draggingId;
     setDraggingId(null);
     setDragOverId(null);
@@ -114,17 +162,21 @@ const AgentsList = () => {
     const toIndex = agents.findIndex((agent) => agent.id === targetId);
     if (fromIndex < 0 || toIndex < 0) return;
 
-    const previous = agents;
     const next = [...agents];
     const [moved] = next.splice(fromIndex, 1);
     next.splice(toIndex, 0, moved);
-    setAgents(next);
+    orderMutation.mutate(next);
+  };
 
-    const response = await updateAgentsOrder(next.map((agent) => agent.id));
-    if (!response.success) {
-      setAgents(previous);
-      toast.error(t("common.orderSaveError"));
-    }
+  const nextPage = () => {
+    if (!nextCursor) return;
+    setCursorHistory((history) => [...history, cursor]);
+    setCursor(nextCursor);
+  };
+
+  const previousPage = () => {
+    setCursor(cursorHistory.at(-1));
+    setCursorHistory((history) => history.slice(0, -1));
   };
 
   // 导出为 JSON 文件下载
@@ -138,25 +190,14 @@ const AgentsList = () => {
     }
   };
 
-  // 导入：读取文件 → POST → toast 显示 {created, skipped}
+  // 导入：读取文件；缺少 Token 时将一次性签发的凭据单独下载。
   const handleImportFile = async (file: File) => {
     const items = await readJsonArrayFile(file);
     if (!items) {
       toast.error(t("common.importInvalidFile"));
       return;
     }
-    const response = await importAgents(items);
-    if (response.success) {
-      toast.success(
-        t("common.importResult", {
-          created: response.created ?? 0,
-          skipped: response.skipped ?? 0,
-        })
-      );
-      fetchAgents();
-    } else {
-      toast.error(response.message || t("common.importError"));
-    }
+    importMutation.mutate(items);
   };
 
   // 打开删除确认对话框
@@ -168,24 +209,7 @@ const AgentsList = () => {
   // 确认删除客户端
   const handleDeleteConfirm = async () => {
     if (selectedAgentId) {
-      setLoading(true);
-      try {
-        const response = await deleteAgent(selectedAgentId);
-
-        if (response.success) {
-          // 删除成功，刷新客户端列表
-          fetchAgents();
-        } else {
-          setError(response.message || t("common.error.delete"));
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : t("common.error.delete"));
-        console.error("删除客户端错误:", err);
-      } finally {
-        setDeleteDialogOpen(false);
-        setSelectedAgentId(null);
-        setLoading(false);
-      }
+      deleteMutation.mutate(selectedAgentId);
     }
   };
 
@@ -203,7 +227,7 @@ const AgentsList = () => {
                 ? " drag-over"
                 : ""
             }`}
-            draggable
+            draggable={canReorder}
             onDragStart={(e: DragEvent<HTMLDivElement>) => {
               setDraggingId(agent.id);
               e.dataTransfer.effectAllowed = "move";
@@ -227,31 +251,31 @@ const AgentsList = () => {
           >
             <AgentStatusBar latestMetric={agent.metrics} agent={agent} />
             <Flex gap="2" className="absolute top-4 right-4">
-              <IconButton
+              <Button
                 variant="ghost"
-                size="1"
+                size="icon"
                 onClick={() => navigate(`/agents/${agent.id}`)}
                 title={t("agent.details")}
               >
                 <InfoCircledIcon />
-              </IconButton>
-              <IconButton
+              </Button>
+              <Button
                 variant="ghost"
-                size="1"
+                size="icon"
                 onClick={() => navigate(`/agents/edit/${agent.id}`)}
                 title={t("agent.edit")}
               >
                 <Pencil1Icon />
-              </IconButton>
-              <IconButton
+              </Button>
+              <Button
                 variant="ghost"
-                size="1"
-                color="red"
+                size="icon"
+                className="text-destructive hover:text-destructive"
                 onClick={() => handleDeleteClick(agent.id)}
                 title={t("agent.delete")}
               >
                 <TrashIcon />
-              </IconButton>
+              </Button>
             </Flex>
           </Box>
         ))}
@@ -285,19 +309,8 @@ const AgentsList = () => {
               </TableCell>
               <TableCell>
                 <Text>
-                  {agent.ip_addresses
-                    ? (() => {
-                        try {
-                          const ipArray = JSON.parse(
-                            String(agent.ip_addresses)
-                          );
-                          return Array.isArray(ipArray) && ipArray.length > 0
-                            ? ipArray.join(", ")
-                            : String(agent.ip_addresses);
-                        } catch {
-                          return String(agent.ip_addresses);
-                        }
-                      })()
+                  {agent.ip_addresses.length > 0
+                    ? agent.ip_addresses.join(", ")
                     : t("common.notFound")}
                 </Text>
               </TableCell>
@@ -318,25 +331,28 @@ const AgentsList = () => {
               </TableCell>
               <TableCell>
                 <Flex gap="2">
-                  <IconButton
-                    variant="soft"
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => navigate(`/agents/${agent.id}`)}
                   >
                     <InfoCircledIcon />
-                  </IconButton>
-                  <IconButton
-                    variant="soft"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => navigate(`/agents/edit/${agent.id}`)}
                   >
                     <Pencil1Icon />
-                  </IconButton>
-                  <IconButton
-                    variant="soft"
-                    color="red"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-destructive hover:text-destructive"
                     onClick={() => handleDeleteClick(agent.id)}
                   >
                     <TrashIcon />
-                  </IconButton>
+                  </Button>
                 </Flex>
               </TableCell>
             </TableRow>
@@ -357,7 +373,7 @@ const AgentsList = () => {
       <Box className="page-container detail-page">
         <Card>
           <Flex>
-            <Text>{error}</Text>
+            <Text>{error instanceof Error ? error.message : t("common.error.fetch")}</Text>
           </Flex>
         </Card>
         <Button variant="secondary" onClick={() => window.location.reload()}>
@@ -393,7 +409,7 @@ const AgentsList = () => {
           <Button
             variant="secondary"
             onClick={handleRefresh}
-            disabled={loading}
+            disabled={agentsQuery.isFetching}
           >
             <ReloadIcon />
             {t("common.refresh")}
@@ -431,6 +447,11 @@ const AgentsList = () => {
       </Flex>
 
       <Box className="my-4 space-x-2">
+        {!canReorder && agents.length > 0 ? (
+          <p className="mb-3 text-xs text-muted-foreground">
+            {t("common.reorderSinglePageOnly")}
+          </p>
+        ) : null}
         {agents.length === 0 ? (
           <Card>
             <Flex direction="column" align="center" justify="center" gap="3" pb="6">
@@ -450,6 +471,30 @@ const AgentsList = () => {
         )}
       </Box>
 
+      <div className="mb-4 flex items-center justify-between px-4">
+        <span className="text-xs text-muted-foreground">
+          {t("common.pageItemCount", { count: agents.length })}
+        </span>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={agentsQuery.isFetching || cursorHistory.length === 0}
+            onClick={previousPage}
+          >
+            {t("common.previousPage")}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={agentsQuery.isFetching || !nextCursor}
+            onClick={nextPage}
+          >
+            {t("common.nextPage")}
+          </Button>
+        </div>
+      </div>
+
       {/* 删除确认对话框 */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
@@ -463,7 +508,11 @@ const AgentsList = () => {
                 {t("common.cancel")}
               </Button>
             </DialogClose>
-            <Button color="red" onClick={handleDeleteConfirm}>
+            <Button
+              color="red"
+              onClick={handleDeleteConfirm}
+              disabled={deleteMutation.isPending}
+            >
               {t("common.delete")}
             </Button>
           </Flex>

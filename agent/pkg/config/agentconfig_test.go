@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -66,6 +67,43 @@ func TestValidateIntervals(t *testing.T) {
 	for _, c := range invalid {
 		if err := ValidateIntervals(c[0], c[1]); err == nil {
 			t.Fatalf("ValidateIntervals(%d, %d) 应失败", c[0], c[1])
+		}
+	}
+}
+
+func TestResolveIntervalsOnlyUsesLegacyAliasForUnsetNewFields(t *testing.T) {
+	collect, report, err := ResolveIntervals(120, 60, 300, true, false, false)
+	if err != nil || collect != 120 || report != 120 {
+		t.Fatalf("旧 Alias 应覆盖两个未设置的新字段: collect=%d report=%d err=%v", collect, report, err)
+	}
+	collect, report, err = ResolveIntervals(120, 30, 300, true, true, false)
+	if err != nil || collect != 30 || report != 120 {
+		t.Fatalf("显式 collect 应优先于旧 Alias: collect=%d report=%d err=%v", collect, report, err)
+	}
+	collect, report, err = ResolveIntervals(120, 30, 240, true, true, true)
+	if err != nil || collect != 30 || report != 240 {
+		t.Fatalf("两个显式新字段都应优先: collect=%d report=%d err=%v", collect, report, err)
+	}
+	if _, _, err := ResolveIntervals(5, 60, 300, true, false, false); err == nil {
+		t.Fatal("旧 Alias 产生越界 report 时应返回校验错误")
+	}
+}
+
+func TestLoadTokenFileRequiresRestrictedPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.token")
+	if err := os.WriteFile(path, []byte("xga_test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token, err := LoadTokenFile(path)
+	if err != nil || token != "xga_test" {
+		t.Fatalf("读取凭据文件异常: token=%q err=%v", token, err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadTokenFile(path); err == nil {
+			t.Fatal("权限过宽的凭据文件应失败")
 		}
 	}
 }

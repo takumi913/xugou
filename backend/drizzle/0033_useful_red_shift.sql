@@ -1,0 +1,1 @@
+ALTER TABLE `monitor_check_rollups` ADD `response_time_min` integer DEFAULT 0 NOT NULL;

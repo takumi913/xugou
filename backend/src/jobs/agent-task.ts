@@ -1,345 +1,153 @@
-// 定期检查客户端状态的任务
-import {
-  setAgentInactive,
-  getAgentById,
-  getFormattedIPAddresses,
-} from "../services";
-import {
-  getAgentsToMarkOffline,
-  getEffectiveAgentNotificationSetting,
-} from "../repositories";
-import { shouldSendNotification, sendNotification } from "../services";
-import { Hono } from "hono";
+import type { Bindings } from "../models/db";
+import { writeStructuredLog } from "../platform/observability/StructuredLogger";
+import { QueueJobPublisher } from "../platform/queues/QueuePublisher";
 import { getEnvNumber } from "../utils/env";
+import { legacyAgentModelCoverage } from "../platform/migrations/LegacyAgentModelBackfill";
+import { isContractMode } from "../platform/compatibility/CompatibilityMode";
 
-const agentTask = new Hono<{}>();
 const DEFAULT_AGENT_OFFLINE_BATCH_SIZE = 50;
 
 interface AgentResult {
   id: number;
-  name: string;
-  status: string;
-  updated_at: string;
-  keepalive: string;
-  created_by: number; // 添加 created_by 以便获取 userId
+  updated_at?: string;
   last_seen_at?: string | null;
   next_offline_at?: string | null;
+  updated_at_ms?: number;
+  last_seen_at_ms?: number | null;
+  next_offline_at_ms?: number | null;
 }
 
-type ThresholdMetricValue = {
-  cpu?: number | null;
-  memory?: number | null;
-  disk?: number | null;
-};
+/** Cron 只推进离线状态并写 outbox，通知与状态页由 Queue Consumer 处理。 */
+export async function checkAgentsStatus(env: Bindings) {
+  const batchSize = getEnvNumber(
+    env,
+    "AGENT_OFFLINE_BATCH_SIZE",
+    DEFAULT_AGENT_OFFLINE_BATCH_SIZE,
+    { min: 1, max: 500 }
+  );
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const contractMode = isContractMode(env);
+  const targetReady =
+    contractMode || (await legacyAgentModelCoverage(env)).read_ready;
+  const { results } = await env.DB.prepare(
+    targetReady
+      ? `SELECT node.id, runtime.updated_at_ms, runtime.last_seen_at_ms,
+                runtime.next_offline_at_ms
+         FROM agent_nodes node
+         JOIN agent_runtime runtime ON runtime.agent_id = node.id
+         WHERE runtime.status = 'active' AND node.deleted_at_ms IS NULL
+           AND runtime.next_offline_at_ms <= ?
+         ORDER BY runtime.next_offline_at_ms ASC LIMIT ?`
+      : `SELECT id, updated_at, last_seen_at, next_offline_at
+         FROM agents
+         WHERE status = 'active' AND deleted_at IS NULL AND next_offline_at <= ?
+         ORDER BY next_offline_at ASC LIMIT ?`
+  )
+    .bind(targetReady ? nowMs : now, batchSize)
+    .all<AgentResult>();
+  const publisher = new QueueJobPublisher(env.XUGOU_JOBS);
 
-export const checkAgentsStatus = async (c: any) => {
-  try {
-    const batchSize = getEnvNumber(
-      c?.env,
-      "AGENT_OFFLINE_BATCH_SIZE",
-      DEFAULT_AGENT_OFFLINE_BATCH_SIZE,
-      { min: 1, max: 500 }
-    );
-    const activeAgents = await getAgentsToMarkOffline(batchSize);
-
-    if (!activeAgents || activeAgents.length === 0) {
-      return;
-    }
-
-    for (const agent of activeAgents as AgentResult[]) {
-      await setAgentInactive(agent.id);
-      await handleAgentOfflineNotification(c.env, agent.id, agent.name, agent.created_by);
-    }
-  } catch (error) {
-    console.error("定时任务: 检查客户端状态出错:", error);
-  }
-};
-
-/**
- * 处理客户端离线通知
- * @param env 环境变量
- * @param agentId 客户端ID
- * @param agentName 客户端名称
- * @param userId 用户ID
- */
-async function handleAgentOfflineNotification(
-  env: any,
-  agentId: number,
-  agentName: string,
-  userId: number
-) {
-  try {
-    // 检查是否需要发送通知
-    const notificationCheck = await shouldSendNotification(
-      userId, // 修复: 传入 userId
-      "agent",
-      agentId,
-      "online", // 上一个状态
-      "offline" // 当前状态
-    );
-
-    if (
-      !notificationCheck.shouldSend ||
-      notificationCheck.channels.length === 0
-    ) {
-      return;
-    }
-
-    // 获取客户端完整信息
-    const agent = await getAgentById(agentId);
-    if (!agent) {
-      console.error(`找不到客户端数据 (ID: ${agentId})`);
-      return;
-    }
-
-    // 准备通知变量
-    const formattedIP = getFormattedIPAddresses(agent.ip_addresses);
-    const variables = {
-      name: agentName,
-      status: "offline",
-      previous_status: "online", // 添加previous_status变量
-      time: new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }),
-      hostname: agent.hostname || "未知",
-      ip_addresses: formattedIP,
-      ip_address: formattedIP, // 兼容旧模板
-      os: agent.os || "未知",
-      error: "客户端连接超时 🔴",
-      details: `主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}\n最后连接时间: ${new Date(agent.last_seen_at || agent.updated_at).toLocaleString("zh-CN")}`,
-    };
-
-    // 发送通知
-    const notificationResult = await sendNotification(
-      "agent",
-      agentId,
-      variables,
-      notificationCheck.channels,
-      userId, // 修复: 传入 userId
-      notificationCheck.cooldownMinutes
-    );
-
-    if (!notificationResult.success) {
-      console.error(`客户端 ${agentName} (ID: ${agentId}) 离线通知发送失败`);
-    }
-  } catch (error) {
-    console.error(
-      `处理客户端离线通知时出错 (${agentName}, ID: ${agentId}):`,
-      error
-    );
-  }
-}
-
-/**
- * 处理客户端上线通知
- * @param env 环境变量
- * @param agentId 客户端ID
- * @param agentName 客户端名称
- * @param userId 用户ID
- */
-export async function handleAgentOnlineNotification(
-  env: any,
-  agentId: number,
-  agentName: string,
-  userId: number
-) {
-  try {
-    // 检查是否需要发送通知
-    // 注意：这里状态是从 offline 变为 online
-    const notificationCheck = await shouldSendNotification(
-      userId,
-      "agent",
-      agentId,
-      "offline", // 上一个状态
-      "online"   // 当前状态
-    );
-
-    if (
-      !notificationCheck.shouldSend ||
-      notificationCheck.channels.length === 0
-    ) {
-      return;
-    }
-
-    // 获取客户端完整信息
-    const agent = await getAgentById(agentId);
-    if (!agent) {
-      console.error(`找不到客户端数据 (ID: ${agentId})`);
-      return;
-    }
-
-    // 准备通知变量
-    const formattedIP = getFormattedIPAddresses(agent.ip_addresses);
-    const variables = {
-      name: agentName,
-      status: "online",
-      previous_status: "offline",
-      time: new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }),
-      hostname: agent.hostname || "未知",
-      ip_addresses: formattedIP,
-      ip_address: formattedIP, // 兼容旧模板
-      os: agent.os || "未知",
-      error: "客户端连接已恢复 🟢",
-      details: `主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}\n恢复时间: ${new Date().toLocaleString("zh-CN")}`,
-    };
-
-    // 发送通知
-    const notificationResult = await sendNotification(
-      "agent",
-      agentId,
-      variables,
-      notificationCheck.channels,
-      userId,
-      notificationCheck.cooldownMinutes
-    );
-
-    if (!notificationResult.success) {
-      console.error(`客户端 ${agentName} (ID: ${agentId}) 上线通知发送失败`);
-    }
-  } catch (error) {
-    console.error(
-      `处理客户端上线通知时出错 (${agentName}, ID: ${agentId}):`,
-      error
-    );
-  }
-}
-
-/**
- * 处理客户端阈值超出通知
- * 此函数可以单独调用，也可以在客户端上报数据时触发
- */
-export async function handleAgentThresholdNotification(
-  agentId: number,
-  metricType: string,
-  value: number
-) {
-  return handleAgentThresholdNotifications(agentId, {
-    [metricType]: value,
-  });
-}
-
-export async function handleAgentThresholdNotifications(
-  agentId: number,
-  values: ThresholdMetricValue
-) {
-  try {
-    // 获取客户端配置
-    const agent = await getAgentById(agentId);
-
-    if (!agent) {
-      console.error(`找不到客户端 (ID: ${agentId})`);
-      throw new Error(`找不到客户端 (ID: ${agentId})`);
-    }
-
-    const userId = agent.created_by; // 获取 userId
-
-    // 资源级设置优先、缺省回退 global-agent 全局设置（与 expiry-task 共用同一实现）
-    const finalSettings = await getEffectiveAgentNotificationSetting(
-      agentId,
-      userId
-    );
-
-    if (!finalSettings) {
-      return;
-    }
-
-    const thresholdEvents = [
-      {
-        key: "cpu",
-        name: "CPU使用率",
-        value: values.cpu,
-        threshold: finalSettings.cpu_threshold,
-        enabled: Boolean(finalSettings.on_cpu_threshold),
-      },
-      {
-        key: "memory",
-        name: "内存使用率",
-        value: values.memory,
-        threshold: finalSettings.memory_threshold,
-        enabled: Boolean(finalSettings.on_memory_threshold),
-      },
-      {
-        key: "disk",
-        name: "磁盘使用率",
-        value: values.disk,
-        threshold: finalSettings.disk_threshold,
-        enabled: Boolean(finalSettings.on_disk_threshold),
-      },
-    ].filter(
-      (event) =>
-        event.enabled &&
-        typeof event.value === "number" &&
-        Number.isFinite(event.value) &&
-        event.value >= event.threshold
-    );
-
-    if (thresholdEvents.length === 0) {
-      return;
-    }
-
-    // 获取通知渠道
-    let channels = [];
-    try {
-      channels = JSON.parse(finalSettings.channels || "[]");
-    } catch (e) {
-      console.error(`解析通知渠道失败 (${agent.name}, ID: ${agentId}):`, e);
-      return;
-    }
-
-    if (channels.length === 0) {
-      return;
-    }
-
-    // 准备通知变量
-    const formattedIP = getFormattedIPAddresses(agent.ip_addresses);
-    const metricNames = thresholdEvents.map((event) => event.name).join("、");
-    const details = thresholdEvents
-      .map(
-        (event) =>
-          `${event.name}: ${event.value!.toFixed(2)}%\n阈值: ${event.threshold}%`
-      )
-      .join("\n\n");
-
-    const variables = {
-      name: agent.name,
-      status: `资源阈值告警: ${metricNames}`,
-      previous_status: "normal", // 添加previous_status变量
-      time: new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }),
-      hostname: agent.hostname || "未知",
-      ip_addresses: formattedIP,
-      ip_address: formattedIP, // 兼容旧模板
-      os: agent.os || "未知",
-      error: `${metricNames}超过阈值`,
-      details: `${details}\n\n主机名: ${agent.hostname || "未知"}\nIP地址: ${formattedIP}\n操作系统: ${agent.os || "未知"}`,
-    };
-
-    // 发送通知
-    const notificationResult = await sendNotification(
-      "agent",
-      agentId,
-      variables,
-      channels,
-      userId, // 修复: 传入 userId
-      finalSettings.cooldown_minutes
-    );
-
-    if (!notificationResult.success) {
-      console.error(
-        `客户端 ${agent.name} (ID: ${agentId}) 资源阈值聚合通知发送失败`
+  for (const agent of results) {
+    const deadline = targetReady
+      ? String(agent.next_offline_at_ms ?? nowMs)
+      : agent.next_offline_at ?? now;
+    const lastSeenAt = targetReady
+      ? new Date(agent.last_seen_at_ms ?? agent.updated_at_ms ?? nowMs).toISOString()
+      : agent.last_seen_at ?? agent.updated_at ?? now;
+    const eventId = `agent.status.changed:${agent.id}:offline:${deadline}`;
+    const statements = [
+      env.DB.prepare(
+        contractMode
+          ? `INSERT OR IGNORE INTO domain_outbox
+         (event_id, event_type, aggregate_type, aggregate_id, payload_json,
+          status, attempts, available_at, created_at, updated_at)
+         SELECT ?, 'agent.status.changed', 'agent', CAST(runtime.agent_id AS TEXT), ?,
+                'pending', 0, ?, ?, ?
+         FROM agent_runtime runtime
+         JOIN agent_nodes node ON node.id = runtime.agent_id
+         WHERE runtime.agent_id = ? AND runtime.status = 'active'
+           AND node.deleted_at_ms IS NULL AND runtime.next_offline_at_ms <= ?`
+          : `INSERT OR IGNORE INTO domain_outbox
+         (event_id, event_type, aggregate_type, aggregate_id, payload_json,
+          status, attempts, available_at, created_at, updated_at)
+         SELECT ?, 'agent.status.changed', 'agent', CAST(id AS TEXT), ?,
+                'pending', 0, ?, ?, ?
+         FROM agents
+         WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+           AND next_offline_at <= ?`
+      ).bind(
+        eventId,
+        JSON.stringify({
+          agent_id: agent.id,
+          previous_status: "online",
+          status: "offline",
+          changed_at: now,
+          last_seen_at: lastSeenAt,
+        }),
+        now,
+        now,
+        now,
+        agent.id,
+        contractMode ? nowMs : now
+      ),
+      env.DB.prepare(
+        `UPDATE agent_runtime SET status = 'inactive',
+         last_state_changed_at_ms = ?, next_offline_at_ms = NULL,
+         version = version + 1, updated_at_ms = ?
+         WHERE agent_id = ? AND status = 'active' AND next_offline_at_ms <= ?`
+      ).bind(nowMs, nowMs, agent.id, nowMs),
+    ];
+    if (!contractMode) {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE agents SET status = 'inactive',
+           last_state_changed_at = ?, next_offline_at = NULL
+           WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+             AND next_offline_at <= ?`
+        ).bind(now, agent.id, now)
       );
     }
-  } catch (error) {
-    console.error(`处理客户端阈值通知时出错 (ID: ${agentId}):`, error);
+    await env.DB.batch(statements);
+    const pending = await env.DB.prepare(
+      `SELECT event_id FROM domain_outbox
+       WHERE event_id = ? AND status = 'pending' LIMIT 1`
+    )
+      .bind(eventId)
+      .first<{ event_id: string }>();
+    if (!pending) continue;
+    try {
+      await publisher.publishOutbox(eventId);
+      const publishedAt = new Date().toISOString();
+      await env.DB.prepare(
+        `UPDATE domain_outbox SET status = 'published', attempts = attempts + 1,
+         published_at = ?, last_error = NULL, updated_at = ?
+         WHERE event_id = ? AND status = 'pending'`
+      )
+        .bind(publishedAt, publishedAt, eventId)
+        .run();
+    } catch (error) {
+      writeStructuredLog(env, {
+        service: "queue",
+        operation: "publish_agent_offline_outbox",
+        result: "deferred",
+        eventId,
+        entityType: "agent",
+        entityId: agent.id,
+        errorCode: "AGENT_OFFLINE_PUBLISH_DEFERRED",
+        error,
+      });
+    }
   }
+  return { checked: results.length };
 }
 
-// 在 Cloudflare Workers 中设置定时触发器
-// 历史指标已切换为 agent_metrics_history 周表轮换（见 rotation-task.ts），
-// 不再对 agent_metrics_24h 做按行 DELETE 清理。
 export default {
-  async scheduled(event: any, env: any, ctx: any) {
-    const c = { env };
-
-    // 默认执行监控检查任务
-    return await checkAgentsStatus(c);
+  async scheduled(
+    _event: ScheduledController,
+    env: Bindings,
+    _ctx: ExecutionContext
+  ) {
+    return checkAgentsStatus(env);
   },
-  fetch: agentTask.fetch,
 };

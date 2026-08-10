@@ -23,6 +23,7 @@ type DynamicMetrics struct {
 // SystemInfo 包含系统的各种信息
 type SystemInfo struct {
 	Token                  string    `json:"token"`
+	AgentVersion           string    `json:"-"`
 	Timestamp              time.Time `json:"timestamp"`
 	Hostname               string    `json:"hostname"`
 	Platform               string    `json:"platform"`
@@ -69,6 +70,37 @@ func NewSample(info *SystemInfo) *Sample {
 type StatusReport struct {
 	*SystemInfo
 	Samples []*Sample `json:"samples,omitempty"`
+}
+
+// AgentReportSample 是 v4 数据面的一条采样。时间使用带时区的 RFC3339，
+// 其余动态指标与采集模型共用同一组字段定义。
+type AgentReportSample struct {
+	CollectedAt string `json:"collected_at"`
+	DynamicMetrics
+}
+
+// AgentReport 是 v4 数据面持久化和传输的稳定信封。report_id 在本地 Spool
+// 首次组批时生成，网络重试和进程重启后保持不变。
+type AgentReport struct {
+	ProtocolVersion       int                  `json:"protocol_version"`
+	AgentVersion          string               `json:"agent_version,omitempty"`
+	ReportID              string               `json:"report_id"`
+	Hostname              string               `json:"hostname,omitempty"`
+	IPAddresses           []string             `json:"ip_addresses,omitempty"`
+	OS                    string               `json:"os,omitempty"`
+	Version               string               `json:"version,omitempty"`
+	BootTime              int64                `json:"boot_time,omitempty"`
+	KeepaliveSeconds      int                  `json:"keepalive_seconds,omitempty"`
+	ReportIntervalSeconds int                  `json:"report_interval_seconds,omitempty"`
+	Samples               []*AgentReportSample `json:"samples"`
+}
+
+// NewAgentReportSample 从一次完整采集中生成不含凭据的 v4 样本。
+func NewAgentReportSample(info *SystemInfo) *AgentReportSample {
+	return &AgentReportSample{
+		CollectedAt:    info.Timestamp.UTC().Format(time.RFC3339Nano),
+		DynamicMetrics: info.DynamicMetrics,
+	}
 }
 
 // CPUInfo 包含CPU相关信息

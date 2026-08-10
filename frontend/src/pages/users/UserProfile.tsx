@@ -1,10 +1,14 @@
 import { useState, useEffect } from "react";
-import { Flex, Text, Box } from "@/components/ui/theme-shim";
+import { Flex, Text, Box } from "@/components/ui/layout";
 import { Button, Input } from "@/components/ui";
 import PageLoading from "../../components/PageLoading";
 import { useAuth } from "../../providers/AuthProvider";
-import { updateUser, changePassword, getUser } from "../../api/users";
-import { UpdateUserRequest, ChangePasswordRequest } from "../../types/users";
+import {
+  updateProfile,
+  changePassword,
+  UpdateProfileRequest,
+  ChangePasswordRequest,
+} from "../../api/profile";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -23,15 +27,8 @@ const UserProfile = () => {
 
   useEffect(() => {
     if (user) {
-      // 获取完整的用户信息，包括电子邮件
-      const fetchUserData = async () => {
-        const response = await getUser(user.id);
-        if (response.success && response.user) {
-          setUsername(response.user.username);
-          setEmail(response.user.email || "");
-        }
-      };
-      fetchUserData();
+      setUsername(user.username);
+      setEmail(user.email || "");
     }
   }, [user]);
 
@@ -45,13 +42,13 @@ const UserProfile = () => {
       return;
     }
 
-    const data: UpdateUserRequest = {
+    const data: UpdateProfileRequest = {
       username,
       email: email || undefined,
     };
 
     try {
-      const response = await updateUser(user.id, data);
+      const response = await updateProfile(data);
       if (response.success) {
         toast.success(t("profile.success.updated"));
       } else {
@@ -87,7 +84,7 @@ const UserProfile = () => {
     };
 
     try {
-      const response = await changePassword(user.id, data);
+      const response = await changePassword(data);
       if (response.success) {
         toast.success(t("profile.success.passwordChanged"));
         setCurrentPassword("");

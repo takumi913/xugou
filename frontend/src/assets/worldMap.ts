@@ -1,4 +1,3 @@
-/* eslint-disable */
 // 本文件由 scripts/generate-world-map.mjs 生成，请勿手改。
 // 再生成：在 frontend/ 目录执行 node scripts/generate-world-map.mjs
 // 数据源：world-atlas countries-110m.json（Natural Earth，公有领域）

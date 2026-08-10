@@ -5,7 +5,6 @@ export interface NotificationChannel {
   type: string; // email, telegram
   config: string; // JSON字符串
   enabled: boolean;
-  created_by: number;
   created_at: string;
   updated_at: string;
 }
@@ -18,7 +17,6 @@ export interface NotificationTemplate {
   subject: string;
   content: string;
   is_default: boolean;
-  created_by: number;
   created_at: string;
   updated_at: string;
 }
@@ -26,7 +24,6 @@ export interface NotificationTemplate {
 // 统一通知设置类型定义
 export interface NotificationSettings {
   id: number;
-  user_id: number;
   target_type: string; // global-monitor, global-agent, monitor, agent
   target_id: number | 0; // 当target_type为monitor或agent时有效，存储monitor_id或agent_id
 

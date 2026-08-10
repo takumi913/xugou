@@ -1,0 +1,30 @@
+CREATE TABLE `agent_current_metrics` (
+	`agent_id` integer PRIMARY KEY NOT NULL,
+	`metrics_json` text NOT NULL,
+	`collected_at_ms` integer,
+	`reported_at_ms` integer NOT NULL,
+	`cpu_usage` real,
+	`memory_usage_rate` real,
+	`disk_usage_rate` real,
+	`swap_total` integer,
+	`swap_used` integer,
+	`process_count` integer,
+	`tcp_connections` integer,
+	`udp_connections` integer,
+	`ping_json` text,
+	`ipv4_reachable` integer,
+	`ipv6_reachable` integer,
+	`network_rx_speed` real,
+	`network_tx_speed` real,
+	`month_rx` integer DEFAULT 0 NOT NULL,
+	`month_tx` integer DEFAULT 0 NOT NULL,
+	`last_total_rx` integer,
+	`last_total_tx` integer,
+	`traffic_period_start` text,
+	`version` integer DEFAULT 0 NOT NULL,
+	`created_at_ms` integer NOT NULL,
+	`updated_at_ms` integer NOT NULL,
+	FOREIGN KEY (`agent_id`) REFERENCES `agent_nodes`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `agent_current_metrics_reported_at_idx` ON `agent_current_metrics` (`reported_at_ms`);

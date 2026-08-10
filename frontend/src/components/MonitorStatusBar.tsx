@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Box, Text, Flex } from "@/components/ui/theme-shim";
+import { Box, Text, Flex } from "@/components/ui/layout";
 import {
   Tooltip,
   TooltipContent,
@@ -80,12 +80,8 @@ const StatusBar: React.FC<StatusBarProps> = ({ dailyStats = [] }) => {
           width: "100%",
         }}
       >
-        {dailyHistory?.map((dayData) => {
-          // 确保 dayData 和 monitor_id 存在
-          const key =
-            dayData && dayData.monitor_id
-              ? `${dayData.monitor_id}-${dayData.date}-${Math.random()}`
-              : `day-${dayData?.date}-${Math.random()}`;
+        {dailyHistory?.map((dayData, index) => {
+          const key = `${dayData.monitor_id ?? "day"}-${dayData.date}-${index}`;
           return (
             <Tooltip key={key}>
               <TooltipContent>

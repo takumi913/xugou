@@ -11,17 +11,56 @@ import {
   MIN_TRAFFIC_RESET_DAY,
   TRAFFIC_CALC_TYPES,
 } from "../utils/traffic";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_NUMBER,
+  MAX_PAGE_SIZE,
+} from "../utils/pagination";
 
-export const idParamSchema = z.coerce.number().int().positive();
+export const idParamSchema = z.coerce
+  .number()
+  .int()
+  .positive()
+  .max(Number.MAX_SAFE_INTEGER);
 
-export const authCredentialsSchema = z.object({
-  username: z.string().trim().min(1).max(64),
-  password: z.string().min(1).max(256),
-});
+export const notificationHistoryQuerySchema = z
+  .object({
+    type: z.string().trim().max(64).optional(),
+    target_id: idParamSchema.optional(),
+    status: z.string().trim().max(64).optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAGE_SIZE)
+      .default(DEFAULT_PAGE_SIZE),
+    page: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAGE_NUMBER)
+      .default(1),
+  })
+  .strict();
 
-export const registerSchema = authCredentialsSchema.extend({
-  email: z.string().trim().email().max(254).nullable().optional(),
-});
+export const securityAuditQuerySchema = z
+  .object({
+    eventType: z.string().trim().min(1).max(128).optional(),
+    outcome: z.enum(["success", "failure", "denied"]).optional(),
+    page: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAGE_NUMBER)
+      .default(1),
+    pageSize: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAGE_SIZE)
+      .default(DEFAULT_PAGE_SIZE),
+  })
+  .strict();
 
 export const monitorSchema = z.object({
   name: z.string().trim().min(1).max(128),
@@ -30,8 +69,25 @@ export const monitorSchema = z.object({
   interval: z.coerce.number().int().positive().max(86400),
   timeout: z.coerce.number().int().positive().max(120000),
   expected_status: z.coerce.number().int().min(100).max(599),
-  headers: z.union([z.string(), z.record(z.unknown())]).default("{}"),
-  body: z.string().nullable().optional(),
+  headers: z.union([
+    z.string().max(1_000_000),
+    z.record(z.string().max(8192)).superRefine((headers, context) => {
+      const entries = Object.entries(headers);
+      if (entries.length > 50) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "最多允许 50 个请求头",
+        });
+      }
+      if (entries.some(([key]) => key.length === 0 || key.length > 128)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "请求头名称长度无效",
+        });
+      }
+    }),
+  ]).default("{}"),
+  body: z.string().max(1024 * 1024).nullable().optional(),
   active: z.boolean().optional(),
 });
 
@@ -122,7 +178,7 @@ export const agentUpdateSchema = agentUpdateFieldsSchema.refine(
 
 // PUT /api/agents/order 与 /api/monitors/order 请求体
 export const orderUpdateSchema = z.object({
-  ids: z.array(z.coerce.number().int().positive()).min(1).max(1000),
+  ids: z.array(idParamSchema).min(1).max(1000),
 });
 
 // 导入的单个 agent：name 必填，token 可选（缺失/冲突时服务端重新生成）
@@ -148,22 +204,22 @@ export const monitorImportSchema = z
   .max(500);
 
 const diskMetricSchema = z.object({
-  device: z.string().optional(),
-  mount_point: z.string().optional(),
+  device: z.string().max(128).optional(),
+  mount_point: z.string().max(512).optional(),
   total: z.number().optional(),
   used: z.number().optional(),
   free: z.number().optional(),
   usage_rate: z.number().optional(),
-  fs_type: z.string().optional(),
-});
+  fs_type: z.string().max(128).optional(),
+}).strict();
 
 const networkMetricSchema = z.object({
-  interface: z.string().optional(),
+  interface: z.string().max(128).optional(),
   bytes_sent: z.number().optional(),
   bytes_recv: z.number().optional(),
   packets_sent: z.number().optional(),
   packets_recv: z.number().optional(),
-});
+}).strict();
 
 // B3 采集增强字段（旧 agent 不上报时全部可缺省）
 const swapMetricSchema = z
@@ -172,23 +228,49 @@ const swapMetricSchema = z
     used: z.number().optional(),
     usage_rate: z.number().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((value, context) => {
+    if (Object.keys(value).length > 16) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Swap 指标字段过多",
+      });
+    }
+  });
 
 // 四线路 TCP 拨测结果（键为 ct/cu/cm/bd）
 const pingResultSchema = z
   .object({
-    target: z.string().optional(),
-    latency_ms: z.number().optional(),
+    target: z.string().max(512).optional(),
+    latency_ms: z.number().finite().min(-1).max(Number.MAX_SAFE_INTEGER).optional(),
     loss: z.boolean().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((value, context) => {
+    if (Object.keys(value).length > 16) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Ping 结果字段过多",
+      });
+    }
+  });
 
 const agentExtraMetricFields = {
   swap: swapMetricSchema.nullable().optional(),
   process_count: z.number().int().nonnegative().optional(),
   tcp_connections: z.number().int().nonnegative().optional(),
   udp_connections: z.number().int().nonnegative().optional(),
-  ping: z.record(pingResultSchema).optional(),
+  ping: z
+    .record(pingResultSchema)
+    .superRefine((value, context) => {
+      if (Object.keys(value).length > 128) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Ping 目标过多",
+        });
+      }
+    })
+    .optional(),
   ipv4_reachable: z.boolean().nullable().optional(),
   ipv6_reachable: z.boolean().nullable().optional(),
 };
@@ -196,7 +278,12 @@ const agentExtraMetricFields = {
 // 新协议批量上报中的单个采集样本（只含动态指标，token/元数据由顶层承载）
 export const agentStatusSampleSchema = z
   .object({
-    ts: z.number().int().positive().optional(), // Unix 毫秒
+    ts: z
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(), // Unix 毫秒
     timestamp: z.union([z.string(), z.date()]).optional(),
     cpu: z
       .object({
@@ -220,8 +307,8 @@ export const agentStatusSampleSchema = z
         load15: z.number().optional(),
       })
       .optional(),
-    disks: z.array(diskMetricSchema).optional(),
-    network: z.array(networkMetricSchema).optional(),
+    disks: z.array(diskMetricSchema).max(128).optional(),
+    network: z.array(networkMetricSchema).max(128).optional(),
     ...agentExtraMetricFields,
   })
   .passthrough();
@@ -240,8 +327,30 @@ export const agentStatusItemSchema = z.object({
   window_start: z.string().optional(),
   window_end: z.string().optional(),
   sample_count: z.number().int().nonnegative().optional(),
-  rollup: z.record(z.unknown()).optional(),
-  threshold_events: z.array(z.record(z.unknown())).optional(),
+  rollup: z
+    .record(z.unknown())
+    .superRefine((value, context) => {
+      if (Object.keys(value).length > 128) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Rollup 字段过多",
+        });
+      }
+    })
+    .optional(),
+  threshold_events: z
+    .array(
+      z.record(z.unknown()).superRefine((value, context) => {
+        if (Object.keys(value).length > 32) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "阈值事件字段过多",
+          });
+        }
+      })
+    )
+    .max(128)
+    .optional(),
   cpu: z
     .object({
       usage: z.number().optional(),
@@ -264,8 +373,8 @@ export const agentStatusItemSchema = z.object({
       load15: z.number().optional(),
     })
     .optional(),
-  disks: z.array(diskMetricSchema).optional(),
-  network: z.array(networkMetricSchema).optional(),
+  disks: z.array(diskMetricSchema).max(128).optional(),
+  network: z.array(networkMetricSchema).max(128).optional(),
   // 主机启动时间（Unix 秒，稳定元数据）
   boot_time: z.number().int().nonnegative().optional(),
   ...agentExtraMetricFields,
@@ -291,37 +400,28 @@ export const statusPageConfigSchema = z.object({
     .regex(/^[a-z0-9][a-z0-9-]{0,31}$/)
     .optional()
     .default("mono"),
-  monitors: z.array(z.coerce.number().int().positive()).default([]),
-  agents: z.array(z.coerce.number().int().positive()).default([]),
-});
-
-export const userCreateSchema = z.object({
-  username: z.string().trim().min(1).max(64),
-  password: z.string().min(6).max(256),
-  email: z.string().trim().email().max(254).nullable().optional(),
-  role: z.enum(["manager", "user"]).default("user"),
-});
-
-export const userUpdateSchema = z
-  .object({
-    username: z.string().trim().min(1).max(64).optional(),
-    email: z.string().trim().email().max(254).nullable().optional(),
-    role: z.enum(["manager", "user"]).optional(),
-  })
-  .refine((value) => Object.keys(value).length > 0, "至少需要提供一个更新字段");
-
-export const changePasswordSchema = z.object({
-  currentPassword: z.string().optional(),
-  newPassword: z.string().min(6).max(256),
-});
-
-export const allowRegistrationSchema = z.object({
-  allow: z.boolean(),
+  monitors: z.array(idParamSchema).max(100).default([]),
+  agents: z.array(idParamSchema).max(100).default([]),
+}).superRefine((value, context) => {
+  if (new Set(value.monitors).size !== value.monitors.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["monitors"],
+      message: "Monitor IDs must be unique",
+    });
+  }
+  if (new Set(value.agents).size !== value.agents.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["agents"],
+      message: "Agent IDs must be unique",
+    });
+  }
 });
 
 export const notificationSettingsSchema = z.object({
-  target_type: z.string(),
-  target_id: z.number().nullable().optional(),
+  target_type: z.enum(["global-monitor", "global-agent", "monitor", "agent"]),
+  target_id: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
   enabled: z.boolean(),
   on_down: z.boolean().optional(),
   on_recovery: z.boolean().optional(),
@@ -333,113 +433,8 @@ export const notificationSettingsSchema = z.object({
   on_disk_threshold: z.boolean().optional(),
   disk_threshold: z.number().optional(),
   cooldown_minutes: z.number().int().min(0).max(1440).optional(),
-  channels: z.array(z.number()).or(z.string()),
+  channels: z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).max(100).or(z.string().max(8192)),
 });
-
-// ---- B4b：通知渠道 config 校验 ----
-
-// 可选字符串：空串/纯空白视为未填写
-const optionalConfigString = z.preprocess(
-  (value) =>
-    typeof value === "string" && value.trim() === "" ? undefined : value,
-  z.string().trim().max(512).optional()
-);
-
-const httpUrlSchema = z.string().trim().url().max(2048);
-
-const optionalHttpUrlSchema = z.preprocess(
-  (value) =>
-    typeof value === "string" && value.trim() === "" ? undefined : value,
-  httpUrlSchema.optional()
-);
-
-// Gotify 优先级：可选，空串视为未填写，接受数字或数字字符串
-const optionalPrioritySchema = z.preprocess(
-  (value) =>
-    value === "" || value === null || value === undefined ? undefined : value,
-  z.coerce.number().int().min(0).max(10).optional()
-);
-
-// 各渠道类型的 config 结构（多余字段默认剥离，与前端扁平表单兼容）
-export const notificationChannelConfigSchemas: Record<string, z.ZodTypeAny> = {
-  telegram: z.object({
-    botToken: z.string().trim().min(1, "Bot Token 不能为空"),
-    chatId: z.string().trim().min(1, "Chat ID 不能为空"),
-  }),
-  resend: z.object({
-    apiKey: z.string().trim().min(1, "API 密钥不能为空"),
-    from: z.string().trim().min(1, "发件人不能为空"),
-    to: z.string().trim().min(1, "收件人不能为空"),
-  }),
-  feishu: z.object({
-    webhookUrl: httpUrlSchema,
-  }),
-  wecom: z.object({
-    webhookUrl: httpUrlSchema,
-  }),
-  dingtalk: z.object({
-    webhook_url: httpUrlSchema,
-    secret: optionalConfigString,
-  }),
-  bark: z.object({
-    server_url: optionalHttpUrlSchema,
-    device_key: z.string().trim().min(1, "Device Key 不能为空"),
-    sound: optionalConfigString,
-    group: optionalConfigString,
-  }),
-  serverchan: z.object({
-    send_key: z.string().trim().min(1, "SendKey 不能为空"),
-  }),
-  wxpusher: z
-    .object({
-      app_token: z.string().trim().min(1, "App Token 不能为空"),
-      uids: optionalConfigString,
-      topic_ids: optionalConfigString,
-    })
-    .refine(
-      (value) => Boolean(value.uids || value.topic_ids),
-      "uids 与 topic_ids 至少需要填写一个"
-    ),
-  gotify: z.object({
-    server_url: httpUrlSchema,
-    app_token: z.string().trim().min(1, "App Token 不能为空"),
-    priority: optionalPrioritySchema,
-  }),
-  // OneBot v11 HTTP（QQ）：api_url 为 OneBot HTTP 服务地址，
-  // target_id 为 QQ 号或群号（按 message_type 区分）
-  onebot: z.object({
-    api_url: httpUrlSchema,
-    access_token: optionalConfigString,
-    message_type: z.enum(["private", "group"]),
-    target_id: z
-      .string()
-      .trim()
-      .regex(/^\d{1,20}$/, "QQ 号/群号需为数字"),
-  }),
-};
-
-export function validateNotificationChannelConfig(
-  type: string,
-  config: unknown
-): { success: boolean; config?: unknown; message?: string } {
-  const schema = notificationChannelConfigSchemas[type];
-  if (!schema) {
-    // 未注册专用校验的类型保持原有行为（原样透传）
-    return { success: true, config };
-  }
-
-  const result = schema.safeParse(config ?? {});
-  if (!result.success) {
-    const issue = result.error.issues[0];
-    const path = issue?.path?.join(".") || "config";
-    return {
-      success: false,
-      message: `渠道配置无效: ${path} ${issue?.message ?? "格式错误"}`,
-    };
-  }
-
-  return { success: true, config: result.data };
-}
 
 export function badRequest(message = "无效的请求数据") {
   return { success: false, message };

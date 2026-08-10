@@ -7,7 +7,7 @@ import { VitePWA } from 'vite-plugin-pwa'; // 导入 PWA 插件
 
 // 读取 package.json version，构建时注入 __APP_VERSION__（Footer 版本号显示）
 const pkg = JSON.parse(
-  readFileSync(path.resolve(__dirname, "package.json"), "utf-8")
+  readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8")
 ) as { version?: string };
 
 // https://vite.dev/config/
@@ -61,24 +61,27 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"), // __dirname 指向 vite.config.ts 文件所在的目录
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   build: {
     rollupOptions: {
       external: [],
       output: {
-        manualChunks: {
-          // 将 lucide-react 图标单独打包
-          'lucide-icons': ['lucide-react'],
-          // 将主要的 React 相关库打包
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          // 将 UI 组件库打包
-          'ui-vendor': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-select'],
+        manualChunks(id) {
+          if (id.includes("/node_modules/lucide-react/")) return "lucide-icons";
+          if (
+            id.includes("/node_modules/react/") ||
+            id.includes("/node_modules/react-dom/") ||
+            id.includes("/node_modules/react-router-dom/")
+          ) {
+            return "react-vendor";
+          }
+          if (id.includes("/node_modules/@radix-ui/")) {
+            return "ui-vendor";
+          }
         },
       },
-      // 限制并发处理的文件数量
-      maxParallelFileOps: 3,
     },
     commonjsOptions: {
       include: [/node_modules/],

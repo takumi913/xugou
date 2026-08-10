@@ -1,4 +1,4 @@
-import { Text } from "@/components/ui/theme-shim";
+import { Text } from "@/components/ui/layout";
 import {
   Select,
   SelectContent,

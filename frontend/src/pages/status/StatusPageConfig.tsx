@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
-import { Box, Flex, Text, Container } from "@/components/ui/theme-shim";
+import { useState, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Box, Flex, Text, Container } from "@/components/ui/layout";
 import PageLoading from "../../components/PageLoading";
 import TagSelect from "../../components/TagSelect";
 import {
@@ -16,7 +17,6 @@ import { toast } from "sonner";
 import { getStatusPageConfig, saveStatusPageConfig } from "../../api/status";
 import { StatusPageConfig as StatusConfig } from "../../types/status";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "../../providers/AuthProvider";
 
 // 监控项带选择状态
 interface MonitorWithSelection {
@@ -46,10 +46,9 @@ interface StatusConfigWithDetails {
 }
 
 const StatusPageConfig = () => {
-  const { user } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const { t } = useTranslation();
 
   // 初始化配置对象
@@ -65,56 +64,45 @@ const StatusPageConfig = () => {
   });
 
   useEffect(() => {
-    if (user) {
-      setConfig((prev) => ({
-        ...prev,
-        publicUrl: `${window.location.origin}/status/public/${user.id}`,
-      }));
-    }
-  }, [user]);
+    setConfig((prev) => ({
+      ...prev,
+      publicUrl: `${window.location.origin}/status/public`,
+    }));
+  }, []);
 
-  const fetchData = useCallback(async (signal?: AbortSignal) => {
-    // 获取状态页配置
-    setLoading(true);
-    try {
-      const configResponse = await getStatusPageConfig(signal);
+  const configQuery = useQuery({
+    queryKey: ["status", "config"],
+    queryFn: ({ signal }) => getStatusPageConfig(signal),
+  });
 
-      if (signal?.aborted) {
-        return;
-      }
-
-      // 如果获取到有效的配置数据，直接使用
-      if (configResponse) {
-        setConfig((prev) => ({
-          ...prev,
-          title: configResponse?.title || t("statusPage.title"),
-          description:
-            configResponse?.description || t("statusPage.allOperational"),
-          logoUrl: configResponse?.logoUrl || "",
-          customCss: configResponse?.customCss || "",
-          theme: configResponse?.theme || "mono",
-          monitors: configResponse.monitors || [],
-          agents: configResponse.agents || [],
-        }));
-      }
-    } catch {
-      if (!signal?.aborted) {
-        toast.error(t("common.error.fetch"));
-      }
-    } finally {
-      if (!signal?.aborted) {
-        setLoading(false);
-      }
-    }
-  }, [t]);
-
-  // 从API获取数据
   useEffect(() => {
-    const abortController = new AbortController();
-    fetchData(abortController.signal);
+    const configResponse = configQuery.data;
+    if (!configResponse || dirty) return;
+    setConfig((prev) => ({
+      ...prev,
+      title: configResponse.title || t("statusPage.title"),
+      description: configResponse.description || t("statusPage.allOperational"),
+      logoUrl: configResponse.logoUrl || "",
+      customCss: configResponse.customCss || "",
+      theme: configResponse.theme || "mono",
+      monitors: configResponse.monitors || [],
+      agents: configResponse.agents || [],
+    }));
+  }, [configQuery.data, dirty, t]);
 
-    return () => abortController.abort();
-  }, [fetchData]);
+  useEffect(() => {
+    if (configQuery.error) toast.error(t("common.error.fetch"));
+  }, [configQuery.error, t]);
+
+  const saveMutation = useMutation({
+    mutationFn: saveStatusPageConfig,
+    onSuccess: async () => {
+      setDirty(false);
+      toast.success(t("statusPageConfig.configSaved"));
+      await queryClient.invalidateQueries({ queryKey: ["status"] });
+    },
+    onError: () => toast.error(t("statusPageConfig.saveError")),
+  });
 
   // 处理表单字段变化
   const handleChange = (
@@ -125,6 +113,7 @@ const StatusPageConfig = () => {
       ...prev,
       [name]: value,
     }));
+    setDirty(true);
   };
 
   // 复制公共URL
@@ -135,8 +124,7 @@ const StatusPageConfig = () => {
   };
 
   // 保存配置
-  const handleSave = async () => {
-    setSaving(true);
+  const handleSave = () => {
     // 构建要保存的配置对象
     const configToSave: StatusConfig = {
       title: config.title,
@@ -152,25 +140,16 @@ const StatusPageConfig = () => {
         .map((a: AgentWithSelection) => a.id),
     };
 
-    const response = await saveStatusPageConfig(configToSave);
-
-    if (response) {
-      toast.success(t("statusPageConfig.configSaved"));
-    } else {
-      toast.error(t("statusPageConfig.saveError"));
-    }
-    setSaving(false);
+    saveMutation.mutate(configToSave);
   };
 
   // 预览状态页
   const handlePreview = () => {
     // 在新标签页中打开状态页
-    if (user) {
-      window.open(`/status/public/${user.id}`, "_blank");
-    }
+    window.open("/status/public", "_blank");
   };
 
-  if (loading) {
+  if (configQuery.isPending) {
     return (
       <Box>
         <div className="page-container detail-page">
@@ -200,8 +179,8 @@ const StatusPageConfig = () => {
               <EyeOpenIcon width="8" height="8" />
               <Text size="2">{t("statusPageConfig.preview")}</Text>
             </Button>
-            <Button variant="secondary" onClick={handleSave} disabled={saving}>
-              {saving ? (
+            <Button variant="secondary" onClick={handleSave} disabled={saveMutation.isPending || !dirty}>
+              {saveMutation.isPending ? (
                 <>
                   <span className="inline-flex h-4 w-4 items-center justify-center">
                     <svg
@@ -328,6 +307,11 @@ const StatusPageConfig = () => {
                     [{config.monitors.length}]
                   </span>
                 </h2>
+                {configQuery.data?.monitors_has_more ? (
+                  <Text className="mb-2 text-xs text-[var(--text-secondary)]">
+                    {t("statusPageConfig.candidatesTruncated")}
+                  </Text>
+                ) : null}
 
                 <TagSelect
                   options={config.monitors.map((monitor) => ({
@@ -337,15 +321,20 @@ const StatusPageConfig = () => {
                   selectedIds={config.monitors
                     .filter((monitor) => monitor.selected)
                     .map((monitor) => monitor.id)}
-                  onChange={(ids) =>
+                  onChange={(ids) => {
+                    if (ids.length > 100) {
+                      toast.error(t("statusPageConfig.selectionLimit"));
+                      return;
+                    }
                     setConfig((prev) => ({
                       ...prev,
                       monitors: prev.monitors.map((monitor) => ({
                         ...monitor,
                         selected: ids.includes(monitor.id),
                       })),
-                    }))
-                  }
+                    }));
+                    setDirty(true);
+                  }}
                   bulkActions
                   emptyText={t("monitors.noMonitors")}
                 />
@@ -358,6 +347,11 @@ const StatusPageConfig = () => {
                   {t("statusPageConfig.selectAgentsPrompt")}{" "}
                   <span className="group-count">[{config.agents.length}]</span>
                 </h2>
+                {configQuery.data?.agents_has_more ? (
+                  <Text className="mb-2 text-xs text-[var(--text-secondary)]">
+                    {t("statusPageConfig.candidatesTruncated")}
+                  </Text>
+                ) : null}
 
                 <TagSelect
                   options={config.agents.map((agent) => ({
@@ -367,15 +361,20 @@ const StatusPageConfig = () => {
                   selectedIds={config.agents
                     .filter((agent) => agent.selected)
                     .map((agent) => agent.id)}
-                  onChange={(ids) =>
+                  onChange={(ids) => {
+                    if (ids.length > 100) {
+                      toast.error(t("statusPageConfig.selectionLimit"));
+                      return;
+                    }
                     setConfig((prev) => ({
                       ...prev,
                       agents: prev.agents.map((agent) => ({
                         ...agent,
                         selected: ids.includes(agent.id),
                       })),
-                    }))
-                  }
+                    }));
+                    setDirty(true);
+                  }}
                   bulkActions
                   emptyText={t("agents.noAgents")}
                 />

@@ -2,40 +2,433 @@
 import monitorTask from "./monitor-task";
 import agentTask from "./agent-task";
 import {
-  isRotationWindow,
-  shouldRunWeeklyRotation,
-  weeklyRotation,
-} from "./rotation-task";
-import {
   checkExpiringAgents,
   shouldRunDailyExpiryCheck,
 } from "./expiry-task";
-import { db } from "../config";
-import * as schema from "../db/schema";
-import { and, lt, sql } from "drizzle-orm";
 import { getEnvNumber } from "../utils/env";
+import { backfillLegacyAgentCredentials } from "../modules/agents/persistence/D1AgentCredentialStore";
+import {
+  backfillNotificationSecrets,
+  rotateNotificationSecretKek,
+} from "../modules/notifications/persistence/NotificationSecretMaintenance";
+import {
+  deleteOldSecurityAuditEvents,
+  deleteStaleSecurityRateLimits,
+  writeSecurityAuditEvent,
+} from "../platform/security/SecurityStore";
+import type { Bindings } from "../models/db";
+import { writeStructuredLog } from "../platform/observability/StructuredLogger";
+import { backfillLegacyAgentHistory } from "../platform/migrations/LegacyAgentHistoryBackfill";
+import { backfillLegacyAgentModel } from "../platform/migrations/LegacyAgentModelBackfill";
+import { backfillLegacyAgentCurrentMetrics } from "../platform/migrations/LegacyAgentCurrentMetricsBackfill";
+import { backfillLegacyStatusPage } from "../platform/migrations/LegacyStatusPageBackfill";
+import { backfillLegacyNotificationRules } from "../platform/migrations/LegacyNotificationRulesBackfill";
+import { backfillLegacyNotificationTemplates } from "../platform/migrations/LegacyNotificationTemplatesBackfill";
+import { backfillLegacyMonitorHistory } from "../platform/migrations/LegacyMonitorHistoryBackfill";
+import { backfillLegacyMonitorDailyStats } from "../platform/migrations/LegacyMonitorDailyStatsBackfill";
+import { backfillLegacyMonitorModel } from "../platform/migrations/LegacyMonitorModelBackfill";
+import { backfillLegacyNotificationHistory } from "../platform/migrations/LegacyNotificationHistoryBackfill";
+import {
+  archiveRawSamples,
+  cleanupVerifiedRawSamples,
+  shouldRunRawSampleArchive,
+} from "../platform/archive/RawSampleArchive";
+import { isContractMode } from "../platform/compatibility/CompatibilityMode";
 
 const DEFAULT_AGENT_ROLLUP_RETENTION_DAYS = 30;
 const DEFAULT_MONITOR_ROLLUP_RETENTION_DAYS = 90;
+const DEFAULT_MONITOR_DAILY_ROLLUP_RETENTION_DAYS = 3650;
 const DEFAULT_MONITOR_INCIDENT_RETENTION_DAYS = 180;
+const DEFAULT_SECURITY_AUDIT_RETENTION_DAYS = 180;
+const DEFAULT_STATUS_PUBLICATION_RETENTION_DAYS = 7;
+const DEFAULT_QUEUE_FAILURE_RETENTION_DAYS = 30;
+const DEFAULT_PROCESSED_EVENT_RETENTION_DAYS = 30;
+const DEFAULT_NOTIFICATION_EVENT_RETENTION_DAYS = 90;
+const DEFAULT_API_COMPATIBILITY_HIT_RETENTION_DAYS = 400;
+const SECURITY_RATE_LIMIT_RETENTION_DAYS = 7;
+
+// Exported for the isolated SQL-Export rehearsal harness. The production
+// scheduler invokes the same function below, keeping rehearsal and runtime on
+// one backfill implementation.
+export async function runLegacyBackfills(env: Bindings) {
+  // 每次 Cron 小批量回填旧 Agent 明文 Token；同一 Worker 内执行，迁移期间旧配置保持有效。
+  try {
+    const agentModelBackfill = await backfillLegacyAgentModel(env);
+    if (agentModelBackfill.migrated > 0 || agentModelBackfill.anomalies > 0) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_agent_model_backfill",
+        result: agentModelBackfill.remaining ? "deferred" : "success",
+        fields: agentModelBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_agent_model_backfill",
+      result: "failure",
+      errorCode: "LEGACY_AGENT_MODEL_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const metricsBackfill = await backfillLegacyAgentCurrentMetrics(env);
+    if (
+      metricsBackfill.migrated > 0 ||
+      Number("reconciled" in metricsBackfill ? metricsBackfill.reconciled : 0) > 0 ||
+      metricsBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_agent_current_metrics_backfill",
+        result: metricsBackfill.remaining ? "deferred" : "success",
+        fields: metricsBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_agent_current_metrics_backfill",
+      result: "failure",
+      errorCode: "LEGACY_AGENT_CURRENT_METRICS_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const statusPageBackfill = await backfillLegacyStatusPage(env);
+    if (
+      statusPageBackfill.migrated > 0 ||
+      Number(
+        "reconciled" in statusPageBackfill
+          ? statusPageBackfill.reconciled
+          : 0
+      ) > 0 ||
+      statusPageBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_status_page_backfill",
+        result: statusPageBackfill.remaining ? "deferred" : "success",
+        fields: statusPageBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_status_page_backfill",
+      result: "failure",
+      errorCode: "LEGACY_STATUS_PAGE_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const notificationRulesBackfill = await backfillLegacyNotificationRules(env);
+    if (
+      notificationRulesBackfill.migrated > 0 ||
+      Number(
+        "reconciled" in notificationRulesBackfill
+          ? notificationRulesBackfill.reconciled
+          : 0
+      ) > 0 ||
+      notificationRulesBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_notification_rules_backfill",
+        result: notificationRulesBackfill.remaining ? "deferred" : "success",
+        fields: notificationRulesBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_notification_rules_backfill",
+      result: "failure",
+      errorCode: "LEGACY_NOTIFICATION_RULES_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const notificationTemplatesBackfill =
+      await backfillLegacyNotificationTemplates(env);
+    if (
+      notificationTemplatesBackfill.migrated > 0 ||
+      Number(
+        "reconciled" in notificationTemplatesBackfill
+          ? notificationTemplatesBackfill.reconciled
+          : 0
+      ) > 0 ||
+      notificationTemplatesBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_notification_templates_backfill",
+        result: notificationTemplatesBackfill.remaining
+          ? "deferred"
+          : "success",
+        fields: notificationTemplatesBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_notification_templates_backfill",
+      result: "failure",
+      errorCode: "LEGACY_NOTIFICATION_TEMPLATES_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const credentialBackfill = await backfillLegacyAgentCredentials(env, 25);
+    if (credentialBackfill.migrated > 0) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "agent_credential_backfill",
+        result: credentialBackfill.remaining ? "deferred" : "success",
+        fields: credentialBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "agent_credential_backfill",
+      result: "failure",
+      errorCode: "AGENT_CREDENTIAL_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const monitorModelBackfill = await backfillLegacyMonitorModel(env);
+    if (
+      monitorModelBackfill.migrated > 0 ||
+      Number(
+        "reconciled" in monitorModelBackfill
+          ? monitorModelBackfill.reconciled
+          : 0
+      ) > 0 ||
+      monitorModelBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_monitor_model_backfill",
+        result: monitorModelBackfill.remaining ? "deferred" : "success",
+        fields: monitorModelBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_monitor_model_backfill",
+      result: "failure",
+      errorCode: "LEGACY_MONITOR_MODEL_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const monitorHistoryBackfill = await backfillLegacyMonitorHistory(env);
+    if (
+      monitorHistoryBackfill.migrated > 0 ||
+      monitorHistoryBackfill.deduplicated > 0 ||
+      monitorHistoryBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_monitor_history_backfill",
+        result: monitorHistoryBackfill.remaining ? "deferred" : "success",
+        fields: monitorHistoryBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_monitor_history_backfill",
+      result: "failure",
+      errorCode: "LEGACY_MONITOR_HISTORY_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const monitorDailyBackfill = await backfillLegacyMonitorDailyStats(env);
+    if (
+      monitorDailyBackfill.migrated > 0 ||
+      monitorDailyBackfill.deduplicated > 0 ||
+      monitorDailyBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_monitor_daily_stats_backfill",
+        result: monitorDailyBackfill.remaining ? "deferred" : "success",
+        fields: monitorDailyBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_monitor_daily_stats_backfill",
+      result: "failure",
+      errorCode: "LEGACY_MONITOR_DAILY_STATS_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const historyBackfill = await backfillLegacyAgentHistory(env);
+    if (
+      historyBackfill.migrated > 0 ||
+      historyBackfill.deduplicated > 0 ||
+      historyBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_agent_history_backfill",
+        result: historyBackfill.remaining ? "deferred" : "success",
+        fields: historyBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_agent_history_backfill",
+      result: "failure",
+      errorCode: "LEGACY_AGENT_HISTORY_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const notificationBackfill = await backfillNotificationSecrets(env, 10);
+    if (notificationBackfill.migrated > 0) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "notification_secret_backfill",
+        result: notificationBackfill.remaining ? "deferred" : "success",
+        fields: notificationBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "notification_secret_backfill",
+      result: "failure",
+      errorCode: "NOTIFICATION_SECRET_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+  try {
+    const notificationHistoryBackfill =
+      await backfillLegacyNotificationHistory(env);
+    if (
+      notificationHistoryBackfill.migrated > 0 ||
+      notificationHistoryBackfill.deduplicated > 0 ||
+      notificationHistoryBackfill.anomalies > 0
+    ) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "legacy_notification_history_backfill",
+        result: notificationHistoryBackfill.remaining ? "deferred" : "success",
+        fields: notificationHistoryBackfill,
+      });
+    }
+  } catch (error) {
+    writeStructuredLog(env, {
+      service: "migration",
+      operation: "legacy_notification_history_backfill",
+      result: "failure",
+      errorCode: "LEGACY_NOTIFICATION_HISTORY_BACKFILL_FAILED",
+      error,
+    });
+  }
+
+}
 
 // 统一的定时任务处理函数
-export const runScheduledTasks = async (event: any, env: any, ctx: any) => {
+export const runScheduledTasks = async (
+  event: ScheduledController,
+  env: Bindings,
+  ctx: ExecutionContext
+) => {
   try {
     const now = new Date();
+
+    // Contract Worker 不再读取任何 Legacy 源表；回填与追赶只在 Expand 阶段运行。
+    if (!isContractMode(env)) await runLegacyBackfills(env);
+
+    try {
+      const notificationRotation = await rotateNotificationSecretKek(env, 10);
+      if (notificationRotation.rotated > 0) {
+        writeStructuredLog(env, {
+          service: "migration",
+          operation: "notification_kek_rotate",
+          result: notificationRotation.remaining ? "deferred" : "success",
+          fields: {
+            rows_written: notificationRotation.rotated,
+            remaining: notificationRotation.remaining,
+            target_key_version: notificationRotation.targetKeyVersion,
+          },
+        });
+        await writeSecurityAuditEvent(env, {
+          eventType: "notification.kek.rotate",
+          outcome: "success",
+          actorType: "system",
+          metadata: {
+            rotated: notificationRotation.rotated,
+            target_key_version: notificationRotation.targetKeyVersion,
+          },
+        });
+      }
+    } catch (error) {
+      writeStructuredLog(env, {
+        service: "migration",
+        operation: "notification_kek_rotate",
+        result: "failure",
+        errorCode: "NOTIFICATION_KEK_ROTATE_FAILED",
+        error,
+      });
+    }
+
+    if (shouldRunRawSampleArchive(now)) {
+      try {
+        const archiveResults = await archiveRawSamples(env, now);
+        const archivedRows = archiveResults.reduce(
+          (total, result) => total + result.archivedRows,
+          0
+        );
+        if (archivedRows > 0) {
+          writeStructuredLog(env, {
+            service: "archive",
+            operation: "raw_sample_archive",
+            result: "success",
+            fields: {
+              archived_rows: archivedRows,
+              batches: archiveResults.filter((result) => result.batchId).length,
+            },
+          });
+        }
+      } catch (error) {
+        writeStructuredLog(env, {
+          service: "archive",
+          operation: "raw_sample_archive",
+          result: "failure",
+          errorCode: "RAW_SAMPLE_ARCHIVE_FAILED",
+          error,
+        });
+      }
+    }
 
     // 执行监控检查任务
     await monitorTask.scheduled(event, env, ctx);
 
-    // 每周日 UTC 00:00 执行历史指标周表轮换（RENAME + DROP 代替按行 DELETE）
-    if (shouldRunWeeklyRotation(now)) {
-      await weeklyRotation();
-    }
-
-    // 执行客户端状态检查任务；轮换保护窗口（周日 0:00-0:05 UTC）内跳过离线检测防误报
-    if (!isRotationWindow(now)) {
-      await agentTask.scheduled(event, env, ctx);
-    }
+    // 新指标只写不可变 report samples；旧历史由可恢复 Backfill 读取，不再运行时改表。
+    await agentTask.scheduled(event, env, ctx);
 
     // 执行清理任务 - 每天执行一次
     const hour = now.getUTCHours();
@@ -46,10 +439,10 @@ export const runScheduledTasks = async (event: any, env: any, ctx: any) => {
 
     // 客户端账单到期检测/自动续费 - 每天 UTC 12:00 执行一次
     if (shouldRunDailyExpiryCheck(now)) {
-      await checkExpiringAgents();
+      await checkExpiringAgents(env);
     }
   } catch (error) {
-    console.error("定时任务执行出错:", error);
+    throw error;
   }
 };
 
@@ -60,19 +453,13 @@ function getCutoffIso(days: number) {
   return cutoff.toISOString();
 }
 
-export async function cleanupOldRecords(env?: Record<string, unknown>) {
-  // 清理30天以前的 monitor_daily_stats
-  const now = new Date();
-  now.setDate(now.getDate() - 30);
-  const dateStr = now.toISOString().split("T")[0];
-  await db.delete(schema.monitorDailyStats).where(
-    lt(schema.monitorDailyStats.date, dateStr)
-  );
-
-  // 清理通知历史记录
-  await db.delete(schema.notificationHistory).where(
-    lt(schema.notificationHistory.sent_at, dateStr)
-  );
+export async function cleanupOldRecords(env: Bindings) {
+  const cleanupStartedAt = new Date().toISOString();
+  // monitor_daily_stats 与 notification_history 在兼容窗口内仍是 Backfill 源和
+  // 回切证据；只清理目标模型及无迁移依赖的数据。旧源表由独立 Contract 发布处理。
+  await env.DB.prepare(`DELETE FROM admin_sessions WHERE expires_at <= ?`)
+    .bind(cleanupStartedAt)
+    .run();
 
   const agentRollupCutoff = getCutoffIso(
     getEnvNumber(
@@ -90,6 +477,14 @@ export async function cleanupOldRecords(env?: Record<string, unknown>) {
       { min: 1, max: 3650 }
     )
   );
+  const monitorDailyRollupCutoff = getCutoffIso(
+    getEnvNumber(
+      env,
+      "MONITOR_DAILY_ROLLUP_RETENTION_DAYS",
+      DEFAULT_MONITOR_DAILY_ROLLUP_RETENTION_DAYS,
+      { min: 30, max: 36500 }
+    )
+  );
   const monitorIncidentCutoff = getCutoffIso(
     getEnvNumber(
       env,
@@ -98,21 +493,94 @@ export async function cleanupOldRecords(env?: Record<string, unknown>) {
       { min: 1, max: 3650 }
     )
   );
-
-  await db.delete(schema.agentMetricRollups).where(
-    lt(schema.agentMetricRollups.bucket_start, agentRollupCutoff)
-  );
-  await db.delete(schema.monitorCheckRollups).where(
-    lt(schema.monitorCheckRollups.bucket_start, monitorRollupCutoff)
-  );
-  await db.delete(schema.monitorIncidents).where(
-    and(
-      lt(schema.monitorIncidents.started_at, monitorIncidentCutoff),
-      sql`${schema.monitorIncidents.ended_at} is not null`
+  const securityAuditCutoff = getCutoffIso(
+    getEnvNumber(
+      env,
+      "SECURITY_AUDIT_RETENTION_DAYS",
+      DEFAULT_SECURITY_AUDIT_RETENTION_DAYS,
+      { min: 30, max: 3650 }
     )
   );
+  const statusPublicationCutoff = getCutoffIso(
+    getEnvNumber(env, "STATUS_PUBLICATION_RETENTION_DAYS", DEFAULT_STATUS_PUBLICATION_RETENTION_DAYS, {
+      min: 1,
+      max: 365,
+    })
+  );
+  const queueFailureCutoff = getCutoffIso(
+    getEnvNumber(env, "QUEUE_FAILURE_RETENTION_DAYS", DEFAULT_QUEUE_FAILURE_RETENTION_DAYS, {
+      min: 1,
+      max: 3650,
+    })
+  );
+  const processedEventCutoff = getCutoffIso(
+    getEnvNumber(env, "PROCESSED_EVENT_RETENTION_DAYS", DEFAULT_PROCESSED_EVENT_RETENTION_DAYS, {
+      min: 1,
+      max: 3650,
+    })
+  );
+  const notificationEventCutoff = getCutoffIso(
+    getEnvNumber(env, "NOTIFICATION_EVENT_RETENTION_DAYS", DEFAULT_NOTIFICATION_EVENT_RETENTION_DAYS, {
+      min: 1,
+      max: 3650,
+    })
+  );
+  const compatibilityHitCutoff = getCutoffIso(
+    getEnvNumber(
+      env,
+      "API_COMPATIBILITY_HIT_RETENTION_DAYS",
+      DEFAULT_API_COMPATIBILITY_HIT_RETENTION_DAYS,
+      { min: 60, max: 3650 }
+    )
+  ).slice(0, 10);
+
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM agent_metric_rollups WHERE bucket_start < ?`).bind(
+      agentRollupCutoff
+    ),
+    env.DB.prepare(
+      `DELETE FROM monitor_check_rollups
+       WHERE bucket_size_seconds < 86400 AND bucket_start < ?`
+    ).bind(monitorRollupCutoff),
+    env.DB.prepare(
+      `DELETE FROM monitor_check_rollups
+       WHERE bucket_size_seconds >= 86400 AND bucket_start < ?`
+    ).bind(monitorDailyRollupCutoff),
+    env.DB.prepare(
+      `DELETE FROM monitor_incidents WHERE started_at < ? AND ended_at IS NOT NULL`
+    ).bind(monitorIncidentCutoff),
+  ]);
+  await deleteOldSecurityAuditEvents(env, securityAuditCutoff);
+  await deleteStaleSecurityRateLimits(
+    env,
+    getCutoffIso(SECURITY_RATE_LIMIT_RETENTION_DAYS)
+  );
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM processed_events WHERE processed_at < ?`).bind(
+      processedEventCutoff
+    ),
+    env.DB.prepare(
+      `DELETE FROM queue_failures WHERE updated_at < ? AND status <> 'open'`
+    ).bind(queueFailureCutoff),
+    env.DB.prepare(
+      `DELETE FROM notification_events WHERE updated_at < ? AND status = 'completed'`
+    ).bind(notificationEventCutoff),
+    env.DB.prepare(
+      `DELETE FROM status_publications
+       WHERE generated_at < ?
+         AND id NOT IN (
+           SELECT active_publication_id FROM status_publication_state
+           WHERE active_publication_id IS NOT NULL
+         )`
+    ).bind(statusPublicationCutoff),
+    env.DB.prepare(`DELETE FROM api_compatibility_hits WHERE day < ?`).bind(
+      compatibilityHitCutoff
+    ),
+  ]);
+  const rawSamples = await cleanupVerifiedRawSamples(env);
 
   return {
     success: true,
+    rawSamples,
   };
 }

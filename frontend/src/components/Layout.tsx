@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
-import { Box, Flex, Text, Container } from "@/components/ui/theme-shim";
+import { Box, Flex, Text, Container } from "@/components/ui/layout";
 import { Separator, Button, Toaster } from "./ui";
 import Navbar from "./Navbar";
 import { Mail, Rss } from "lucide-react";

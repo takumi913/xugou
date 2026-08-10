@@ -1,7 +1,7 @@
 /**
  * 指标派生/合并的共享纯函数（AgentCard / AgentDetail / AgentStatusBar / Dashboard 共用）
  */
-import type { MetricHistory } from "../types/agents";
+import type { DisplayMetricHistory, MetricHistory } from "../types/agents";
 
 // 单块磁盘指标（disk_metrics JSON 字符串内的元素）
 export interface DiskMetric {
@@ -22,7 +22,7 @@ export interface DiskUsage {
 
 // 内存使用率：优先用后端算好的 memory_usage_rate，缺失时按 used/total 派生
 export function memoryPercent(
-  metric?: Partial<MetricHistory> | null
+  metric?: Partial<DisplayMetricHistory> | null
 ): number | undefined {
   if (!metric) return undefined;
   return (
@@ -35,11 +35,13 @@ export function memoryPercent(
 
 // 聚合磁盘用量：解析 disk_metrics JSON 求和算 percent；无数据/解析失败/total<=0 返回 null
 export function parseDiskUsage(
-  metric?: Partial<MetricHistory> | null
+  metric?: Partial<DisplayMetricHistory> | null
 ): DiskUsage | null {
   if (!metric?.disk_metrics) return null;
   try {
-    const disks = JSON.parse(metric.disk_metrics) as DiskMetric[];
+    const disks = Array.isArray(metric.disk_metrics)
+      ? (metric.disk_metrics as DiskMetric[])
+      : (JSON.parse(metric.disk_metrics) as DiskMetric[]);
     let total = 0;
     let used = 0;
     disks.forEach((disk) => {

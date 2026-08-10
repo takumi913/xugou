@@ -1,20 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Flex, Heading, Text, Code } from "@/components/ui/theme-shim";
-import { Button, Separator, Switch, Input } from "@/components/ui";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Box, Flex, Heading, Text, Code } from "@/components/ui/layout";
+import { Button, Separator, Switch, Input, Badge } from "@/components/ui";
 import {
   ArrowLeftIcon,
   CopyIcon,
   CheckIcon,
   InfoCircledIcon,
 } from "@radix-ui/react-icons";
-import { generateToken } from "../../api/agents";
+import {
+  generateToken,
+  getAgentEnrollments,
+  revokeAgentEnrollment,
+  type AgentEnrollmentMetadata,
+} from "../../api/agents";
 import { useTranslation } from "react-i18next";
 import { ENV_API_BASE_URL } from "../../config";
+import { toast } from "sonner";
 
 const CreateAgent = () => {
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [token, setToken] = useState("");
   // 获取服务端地址。优先从环境变量获取，如果没有则使用当前窗口的源(origin)
   const serverUrl = ENV_API_BASE_URL || window.location.origin;
@@ -29,26 +36,37 @@ const CreateAgent = () => {
   const [useProxy, setUseProxy] = useState(false);
   const [customProxyUrl, setCustomProxyUrl] = useState("https://gh-proxy.com/");
 
-  // 生成服务端验证的 token
-  useEffect(() => {
-    const fetchToken = async () => {
-      setLoading(true);
-      try {
-        const response = await generateToken();
-        if (response.success && response.token) {
-          setToken(response.token);
-        } else {
-          console.error("获取 token 失败:", response.message);
-        }
-      } catch (error) {
-        console.error("获取 token 失败:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const enrollmentsQuery = useQuery({
+    queryKey: ["agents", "enrollments"],
+    queryFn: getAgentEnrollments,
+  });
+  const enrollments: AgentEnrollmentMetadata[] = enrollmentsQuery.data ?? [];
 
-    fetchToken();
-  }, []);
+  const generateMutation = useMutation({
+    mutationFn: generateToken,
+    onSuccess: (result) => {
+      setToken(result.token);
+      queryClient.invalidateQueries({ queryKey: ["agents", "enrollments"] });
+    },
+    onError: () => toast.error(t("agent.add.tokenGenerateError")),
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: revokeAgentEnrollment,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents", "enrollments"] });
+      toast.success(t("agent.add.tokenRevoked"));
+    },
+    onError: () => toast.error(t("agent.add.tokenRevokeError")),
+  });
+
+  const handleGenerateToken = () => {
+    generateMutation.mutate();
+  };
+
+  const handleRevokeEnrollment = (enrollmentId: number) => {
+    revokeMutation.mutate(enrollmentId);
+  };
 
   // 复制Server URL
   const handleCopyServerUrl = () => {
@@ -129,9 +147,9 @@ const CreateAgent = () => {
             <Text as="label" size="2" weight="bold">
               {t("agent.add.registrationToken")}
             </Text>
-            {loading ? (
+            {generateMutation.isPending ? (
               <Text>{t("agent.add.generatingToken")}</Text>
-            ) : (
+            ) : token ? (
               <>
                 <Flex gap="2" align="center">
                   <Text className="token-display break-all">{token}</Text>
@@ -144,13 +162,65 @@ const CreateAgent = () => {
                   {t("agent.add.tokenHelp")}
                 </Text>
               </>
+            ) : (
+              <Button variant="secondary" onClick={handleGenerateToken}>
+                {t("agent.add.generateToken")}
+              </Button>
             )}
           </Box>
+
+          {enrollments.length > 0 && (
+            <Box>
+              <Text as="div" size="2" weight="bold" mb="2">
+                {t("agent.add.recentTokens")}
+              </Text>
+              <Flex direction="column" gap="2">
+                {enrollments.slice(0, 10).map((enrollment) => {
+                  const active =
+                    !enrollment.used_at &&
+                    !enrollment.revoked_at &&
+                    Date.parse(enrollment.expires_at) > Date.now();
+                  return (
+                    <Flex
+                      key={enrollment.id}
+                      justify="between"
+                      align="center"
+                      gap="3"
+                      className="rounded-md border p-3"
+                    >
+                      <Box>
+                        <Text as="div" size="2">
+                          #{enrollment.id} · {new Date(enrollment.expires_at).toLocaleString()}
+                        </Text>
+                        <Badge color={active ? "green" : "gray"}>
+                          {enrollment.used_at
+                            ? t("agent.add.tokenUsed")
+                            : enrollment.revoked_at
+                              ? t("agent.add.tokenRevokedStatus")
+                              : active
+                                ? t("agent.add.tokenActive")
+                                : t("agent.add.tokenExpired")}
+                        </Badge>
+                      </Box>
+                      {active && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleRevokeEnrollment(enrollment.id)}
+                        >
+                          {t("agent.add.revokeToken")}
+                        </Button>
+                      )}
+                    </Flex>
+                  );
+                })}
+              </Flex>
+            </Box>
+          )}
 
           <Separator />
 
           {/* 安装指南 */}
-          <Box>
+          {token && <Box>
             <Flex align="baseline" gap="2" mb="3">
               <Heading size="4">{t("agent.add.installGuide")}</Heading>
               <Text size="2" color="gray">
@@ -209,7 +279,7 @@ const CreateAgent = () => {
                 </Text>
               </Flex>
             </div>
-          </Box>
+          </Box>}
 
           {/* 返回按钮 */}
           <Flex justify="end" gap="3" mt="4">

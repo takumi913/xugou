@@ -98,6 +98,7 @@ func (c *DefaultCollector) getStableMetadata() (*stableMetadata, error) {
 func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, error) {
 	info := &model.SystemInfo{
 		Timestamp:              time.Now(),
+		AgentVersion:           config.AgentVersion,
 		Keepalive:              config.ReportInterval,
 		CollectIntervalSeconds: config.CollectInterval,
 		ReportIntervalSeconds:  config.ReportInterval,

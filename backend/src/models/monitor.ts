@@ -6,10 +6,10 @@ export interface Monitor {
   method: string;
   interval: number;
   timeout: number;
+  timeout_ms?: number;
   expected_status: number;
   headers: Record<string, string>;
   body: string;
-  created_by: number;
   active: boolean;
   status: string;
   response_time: number;

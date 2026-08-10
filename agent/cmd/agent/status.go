@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -57,13 +58,20 @@ func runStatus(noProbe bool) {
 	} else {
 		fmt.Printf("  服务器地址:   %s\n", server)
 	}
-	if token := viper.GetString("token"); token == "" {
+	if tokenFile := viper.GetString("token-file"); tokenFile != "" {
+		fmt.Printf("  API 凭据:     文件 %s\n", tokenFile)
+	} else if token := viper.GetString("token"); token == "" {
 		fmt.Println("  API 令牌:     未配置")
 	} else {
 		fmt.Printf("  API 令牌:     %s\n", selfmgmt.MaskToken(token))
 	}
 	fmt.Printf("  采集间隔:     %d 秒\n", viper.GetInt("collect-interval"))
 	fmt.Printf("  上报间隔:     %d 秒\n", viper.GetInt("report-interval"))
+	spoolDir := viper.GetString("spool-dir")
+	if spoolDir == "" {
+		spoolDir = filepath.Join(filepath.Dir(cfgFile), ".xugou-spool")
+	}
+	fmt.Printf("  Spool 目录:   %s\n", spoolDir)
 	if proxy := viper.GetString("proxy"); proxy != "" {
 		fmt.Printf("  代理服务器:   %s\n", proxy)
 	}

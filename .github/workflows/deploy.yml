@@ -1,100 +1,178 @@
-# 工作流的名称，会显示在 GitHub Actions 页面
 name: Deploy to Cloudflare
 
-# 'on' 关键字定义了触发此工作流的事件
 on:
-  # 当有代码推送到 'main' 分支时，自动触发此工作流
   push:
-    branches:
-      - main
-  # 允许你在 GitHub Actions 页面手动点击按钮来触发此工作流
+    branches: [main]
   workflow_dispatch:
 
-# 'jobs' 关键字定义了工作流中要执行的一系列任务
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  GO_VERSION: "1.26.5"
+
 jobs:
-  # 定义一个名为 'deploy' 的任务
   deploy:
-    # 指定此任务运行在最新版的 Ubuntu 虚拟环境中
+    name: Verify, migrate, deploy and verify
     runs-on: ubuntu-latest
-    # 此任务在 GitHub UI 中显示的名称
-    name: Deploy
-    # 'steps' 关键字定义了任务中要按顺序执行的一系列步骤
+    environment: production
     steps:
-      # 第一步：检出代码
-      # 使用官方的 'checkout' action 来获取你的仓库代码
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # 第二步：设置 pnpm 包管理器
-      # 使用 pnpm 官方的 'action-setup' 来安装和配置 pnpm
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v4
         with:
-          # 指定要使用的 pnpm 版本
-          version: 8
-
-      # 第三步：设置 Node.js 环境
-      # 使用官方的 'setup-node' action 来安装指定版本的 Node.js
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
         with:
-          # 指定 Node.js 的版本，Wrangler 4 需要 Node.js 22 或更高版本
-          node-version: '22'
-          # 为 pnpm 配置依赖缓存，以加快后续运行速度
-          cache: 'pnpm'
-
-      # 第四步：安装项目依赖
-      # 执行 'pnpm install' 命令来安装所有在 'package.json' 和 'pnpm-lock.yaml' 中定义的依赖
-      - name: Install dependencies
-        run: pnpm install
-
-      # 第五步：检查 Wrangler
-      # Wrangler 已作为根工作区 devDependency 安装，这里只校验版本，避免 CI 中动态修改依赖树
-      - name: Check Wrangler
-        run: pnpm exec wrangler --version
-
-      # 第六步：构建项目
-      # 执行在 'package.json' 中定义的 'build' 脚本，通常用于编译前端和后端代码
-      - name: Build
-        run: pnpm run build
-
-      # 第七步：配置 Wrangler 的 toml 文件
-      # 这是关键的一步，在部署前动态地将占位符替换为真实的 secrets 值
-      - name: Configure Wrangler
-        run: |
-          # 使用 sed 命令在 wrangler.toml 文件中查找并替换 D1 数据库 ID 的占位符
-          sed -i "s/\${D1_DATABASE_ID}/${D1_DATABASE_ID}/g" wrangler.toml
-          # 使用 sed 命令在 wrangler.toml 文件中查找并替换 D1 数据库名称的占位符
-          sed -i "s/\${D1_DATABASE_NAME}/${D1_DATABASE_NAME}/g" wrangler.toml
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: agent/go.sum
+      - run: pnpm install --frozen-lockfile
+      - name: Validate deployment credentials
         env:
-          # 从 GitHub Secrets 中读取 D1 数据库 ID 和名称，并将其作为环境变量注入到此步骤中
-          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
-          D1_DATABASE_NAME: ${{ secrets.D1_DATABASE_NAME }}
-
-      # 新增步骤：检查 Cloudflare 密钥是否存在
-      - name: Check for Cloudflare credentials
-        id: cf_creds
+          CF_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.XUGOU_D1_DATABASE_ID }}
+          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
+          RELEASE_READINESS_URL: ${{ secrets.RELEASE_READINESS_URL }}
+          RELEASE_READINESS_TOKEN: ${{ secrets.RELEASE_READINESS_TOKEN }}
         run: |
-          if [ -z "${{ secrets.CF_API_TOKEN }}" ] || [ -z "${{ secrets.CF_ACCOUNT_ID }}" ]; then
-            echo "Cloudflare credentials not found, skipping deployment."
-            echo "has_creds=false" >> $GITHUB_ENV
-          else
-            echo "has_creds=true" >> $GITHUB_ENV
-          fi
+          set -euo pipefail
+          for value in CF_API_TOKEN CF_ACCOUNT_ID D1_DATABASE_ID D1_DATABASE_NAME RELEASE_READINESS_URL RELEASE_READINESS_TOKEN; do
+            test -n "${!value}"
+          done
+      - name: Configure Wrangler
+        env:
+          D1_DATABASE_ID: ${{ secrets.XUGOU_D1_DATABASE_ID }}
+          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
+        run: |
+          set -euo pipefail
+          umask 077
+          pnpm --dir backend wrangler:render-config -- \
+            --template ../wrangler.toml \
+            --output ../.wrangler.production.toml
+      - name: Install browser runtime
+        run: pnpm --dir frontend exec playwright install --with-deps chromium
+      - name: Unified quality gates
+        run: pnpm run test:all
+      - name: Verify reproducible Git input
+        run: test -z "$(git status --porcelain)"
+      - name: Verify archive bucket
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
+        run: pnpm exec wrangler r2 bucket info xugou-raw-sample-archive -c .wrangler.production.toml
 
-      # 第八步：部署到 Cloudflare
-      # 仅在检测到密钥存在时执行
-      - name: Deploy to Cloudflare
-        if: env.has_creds == 'true'
+      # Stage 1: preflight and point-in-time evidence.
+      - name: Stage 1 - D1 preflight
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
+          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 700 .migration-evidence
+          pnpm exec wrangler d1 time-travel info "$D1_DATABASE_NAME" --json -c .wrangler.production.toml > .migration-evidence/pre-bookmark.json
+          pnpm exec wrangler d1 export "$D1_DATABASE_NAME" --remote --output=.migration-evidence/pre.sql -c .wrangler.production.toml
+          KEK_VERSION="$(sed -n 's/^NOTIFICATION_KEK_VERSION = "\([0-9][0-9]*\)"/\1/p' wrangler.toml | head -n 1)"
+          pnpm --dir backend migration:preflight -- --sql-export ../.migration-evidence/pre.sql --allow-empty --notification-kek-version "$KEK_VERSION" > .migration-evidence/preflight.json
+
+      # Stage 2: apply all D1 migrations.
+      - name: Stage 2 - Apply D1 migrations
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
+          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
+        run: |
+          set -euo pipefail
+          umask 077
+          pnpm exec wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c .wrangler.production.toml | tee .migration-evidence/migration-result.txt
+
+      # Stage 3: re-export and prove integrity/conservation before Worker traffic changes.
+      - name: Stage 3 - D1 postflight
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
+          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
+        run: |
+          set -euo pipefail
+          umask 077
+          pnpm exec wrangler d1 time-travel info "$D1_DATABASE_NAME" --json -c .wrangler.production.toml > .migration-evidence/post-bookmark.json
+          pnpm exec wrangler d1 export "$D1_DATABASE_NAME" --remote --output=.migration-evidence/post.sql -c .wrangler.production.toml
+          KEK_VERSION="$(sed -n 's/^NOTIFICATION_KEK_VERSION = "\([0-9][0-9]*\)"/\1/p' wrangler.toml | head -n 1)"
+          pnpm --dir backend migration:preflight -- --sql-export ../.migration-evidence/post.sql --allow-empty --notification-kek-version "$KEK_VERSION" > .migration-evidence/post-preflight.json
+          pnpm --dir backend migration:postflight -- --mode expand --before ../.migration-evidence/preflight.json --after ../.migration-evidence/post-preflight.json --output ../.migration-evidence/postflight.json
+          pnpm --dir backend migration:manifest -- \
+            --preflight ../.migration-evidence/preflight.json \
+            --sql-export ../.migration-evidence/pre.sql \
+            --bookmark ../.migration-evidence/pre-bookmark.json \
+            --migration-result ../.migration-evidence/migration-result.txt \
+            --postflight ../.migration-evidence/postflight.json \
+            --post-sql-export ../.migration-evidence/post.sql \
+            --post-bookmark ../.migration-evidence/post-bookmark.json \
+            --git-sha "${{ github.sha }}" \
+            --output ../.migration-evidence/migration-manifest.json
+
+      # Stage 4: deploy only after postflight has passed.
+      - name: Stage 4 - Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
-          # 传入 API 令牌用于身份验证
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          # 传入 Cloudflare 账户 ID
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          # 明确指定要执行的命令是 'deploy'
-          command: deploy
+          apiToken: ${{ secrets.XUGOU_CF_API_TOKEN }}
+          accountId: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          command: deploy --config .wrangler.production.toml
         env:
-          # wrangler 命令行工具也会自动读取这些标准的环境变量来进行身份验证
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
+
+      # Stage 5: protected runtime readiness is the final release gate.
+      - name: Stage 5 - Protected release readiness
+        env:
+          RELEASE_READINESS_URL: ${{ secrets.RELEASE_READINESS_URL }}
+          RELEASE_READINESS_TOKEN: ${{ secrets.RELEASE_READINESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ready=0
+          # 首次 Expand 发布需要等待 Cron 完成幂等 Backfill；普通发布通常首轮通过。
+          # 每轮都覆盖为最新完整 JSON，超时失败时仍上传最后一次门禁证据。
+          for attempt in $(seq 1 75); do
+            curl --fail-with-body --retry 5 --retry-all-errors \
+              --user-agent "xugou-release-readiness/1" \
+              -H "Authorization: Bearer ${RELEASE_READINESS_TOKEN}" \
+              "${RELEASE_READINESS_URL%/}/api/v2/operations/release-readiness" \
+              > .migration-evidence/release-readiness.json
+            if pnpm --dir backend exec tsx \
+              tooling/operations/verify-release-readiness.ts \
+              --file ../.migration-evidence/release-readiness.json \
+              --mode release \
+              > .migration-evidence/readiness-verification.json; then
+              ready=1
+              break
+            fi
+            if [ "$attempt" -lt 75 ]; then sleep 60; fi
+          done
+          test "$ready" -eq 1
+
+      - name: Upload complete migration and readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-readiness-evidence-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            .migration-evidence/preflight.json
+            .migration-evidence/pre-bookmark.json
+            .migration-evidence/migration-result.txt
+            .migration-evidence/post-preflight.json
+            .migration-evidence/postflight.json
+            .migration-evidence/post-bookmark.json
+            .migration-evidence/migration-manifest.json
+            .migration-evidence/release-readiness.json
+            .migration-evidence/readiness-verification.json

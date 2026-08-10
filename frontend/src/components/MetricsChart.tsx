@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useState,
 } from "react";
-import { Box, Flex } from "@/components/ui/theme-shim";
+import { Box, Flex } from "@/components/ui/layout";
 import {
   Select,
   SelectContent,
@@ -15,7 +15,7 @@ import {
 } from "./ui";
 import { useTranslation } from "react-i18next";
 import { Line } from "react-chartjs-2";
-import { MetricHistory, MetricType } from "../types";
+import { DisplayMetricHistory, MetricType } from "../types";
 import { useTheme } from "../providers/ThemeProvider";
 import {
   CHART_FILL_ALPHA,
@@ -81,13 +81,13 @@ interface DeviceOption {
   label: string;
 }
 
-interface ParsedMetricHistory extends MetricHistory {
+type ParsedMetricHistory = DisplayMetricHistory & {
   parsedDiskMetrics: DiskMetric[];
   parsedNetworkMetrics: NetworkMetric[];
-}
+};
 
 interface MetricsChartProps {
-  history?: MetricHistory[];
+  history?: DisplayMetricHistory[];
   metricType: MetricType;
   height?: number;
   showTimeLabels?: boolean;
@@ -96,8 +96,10 @@ interface MetricsChartProps {
   loadType?: "1" | "5" | "15"; // 负载类型：1分钟、5分钟、15分钟
 }
 
-const parseMetricArray = <T,>(value?: string): T[] => {
+const parseMetricArray = <T,>(value?: string | T[]): T[] => {
   if (!value) return [];
+
+  if (Array.isArray(value)) return value;
 
   try {
     const parsed = JSON.parse(value);

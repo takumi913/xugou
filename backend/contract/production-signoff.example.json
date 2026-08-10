@@ -1,0 +1,137 @@
+{
+  "formatVersion": 1,
+  "environment": "production",
+  "generatedAt": "TIMESTAMP",
+  "gitSha": "GIT_SHA",
+  "workerVersionId": "WORKER_VERSION_ID",
+  "artifacts": {
+    "migrationManifestSha256": "SHA256",
+    "contractBundleSha256": "SHA256",
+    "contractSqlSha256": "SHA256",
+    "preBookmarkSha256": "SHA256",
+    "postBookmarkSha256": "SHA256"
+  },
+  "evidence": [
+    {
+      "key": "d1-backfill",
+      "startedAt": "TIMESTAMP",
+      "endedAt": "TIMESTAMP",
+      "operator": "OPERATOR",
+      "environment": "production",
+      "inputs": [{ "name": "preflight", "sha256": "SHA256" }],
+      "outputs": [{ "name": "postflight", "sha256": "SHA256" }],
+      "result": "passed",
+      "difference": 0,
+      "evidenceLocation": "ENCRYPTED_EVIDENCE_LOCATION",
+      "details": { "conservationDifference": 0, "openAnomalies": 0 }
+    },
+    {
+      "key": "r2-raw-sample",
+      "startedAt": "TIMESTAMP",
+      "endedAt": "TIMESTAMP",
+      "operator": "OPERATOR",
+      "environment": "production",
+      "inputs": [{ "name": "archive-ledger", "sha256": "SHA256" }],
+      "outputs": [{ "name": "sample-report", "sha256": "SHA256" }],
+      "result": "passed",
+      "difference": 0,
+      "evidenceLocation": "ENCRYPTED_EVIDENCE_LOCATION",
+      "details": {
+        "sampledObjects": 1,
+        "headVerified": true,
+        "restoreReadVerified": true,
+        "privateAccessVerified": true
+      }
+    },
+    {
+      "key": "d1-bookmark-restore",
+      "startedAt": "TIMESTAMP",
+      "endedAt": "TIMESTAMP",
+      "operator": "OPERATOR",
+      "environment": "isolated-restore",
+      "inputs": [{ "name": "bookmark", "sha256": "SHA256" }],
+      "outputs": [{ "name": "restore-gate", "sha256": "SHA256" }],
+      "result": "passed",
+      "difference": 0,
+      "evidenceLocation": "ENCRYPTED_EVIDENCE_LOCATION",
+      "details": { "bookmarkRestored": true, "fullGatePassed": true }
+    },
+    {
+      "key": "legacy-quiet-window",
+      "startedAt": "TIMESTAMP",
+      "endedAt": "TIMESTAMP",
+      "operator": "OPERATOR",
+      "environment": "production",
+      "inputs": [{ "name": "compatibility-ledger", "sha256": "SHA256" }],
+      "outputs": [{ "name": "quiet-window-report", "sha256": "SHA256" }],
+      "result": "passed",
+      "difference": 0,
+      "evidenceLocation": "ENCRYPTED_EVIDENCE_LOCATION",
+      "details": {
+        "managementV1Days": 7,
+        "agentV1Days": 60,
+        "latestPathDays": 60,
+        "compatibilityHits": 0
+      }
+    },
+    {
+      "key": "queue-freeze-reconciliation",
+      "startedAt": "TIMESTAMP",
+      "endedAt": "TIMESTAMP",
+      "operator": "OPERATOR",
+      "environment": "production",
+      "inputs": [{ "name": "queue-snapshot", "sha256": "SHA256" }],
+      "outputs": [{ "name": "queue-reconciliation", "sha256": "SHA256" }],
+      "result": "passed",
+      "difference": 0,
+      "evidenceLocation": "ENCRYPTED_EVIDENCE_LOCATION",
+      "details": {
+        "pendingJobs": 0,
+        "retryJobs": 0,
+        "processingJobs": 0,
+        "dlq": 0,
+        "unprocessedInbox": 0,
+        "pendingOutbox": 0,
+        "openFailures": 0
+      }
+    },
+    {
+      "key": "final-package-drill",
+      "startedAt": "TIMESTAMP",
+      "endedAt": "TIMESTAMP",
+      "operator": "OPERATOR",
+      "environment": "production",
+      "inputs": [{ "name": "contract-bundle-and-sql", "sha256": "SHA256" }],
+      "outputs": [{ "name": "drill-report", "sha256": "SHA256" }],
+      "result": "passed",
+      "difference": 0,
+      "evidenceLocation": "ENCRYPTED_EVIDENCE_LOCATION",
+      "details": { "restoreDrillPassed": true, "contractDryRunPassed": true }
+    }
+  ],
+  "assertions": {
+    "postflightReady": true,
+    "conservationZero": true,
+    "r2Verified": true,
+    "restoreGatePassed": true,
+    "quietWindowsSatisfied": true,
+    "queuesDrained": true,
+    "encryptedRetentionConfirmed": true
+  },
+  "approvals": [
+    {
+      "role": "executor",
+      "name": "EXECUTOR",
+      "approvedAt": "TIMESTAMP",
+      "decision": "approved",
+      "record": "APPROVAL_RECORD"
+    },
+    {
+      "role": "independent-reviewer",
+      "name": "REVIEWER",
+      "approvedAt": "TIMESTAMP",
+      "decision": "approved",
+      "record": "APPROVAL_RECORD"
+    }
+  ]
+}

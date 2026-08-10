@@ -1,34 +1,26 @@
-/**
- * 客户端账单到期检测任务（参照 CF-Server-Monitor checkExpiringServers）
- *
- * 每日 UTC 12:00 触发一次：
- *   1. auto_renewal=1 且已到期的客户端，按计费周期把 expire_date 顺延到未来
- *   2. expire_date 距今 ≤7 天（且未过期）的客户端，通过现有通知渠道发送到期提醒
- *
- * 通知触发机制取舍：通知设置模型没有 on_expire 开关，为最小侵入，
- * 复用 agent 资源级/global-agent 全局设置里已配置的渠道列表（只要设置 enabled
- * 即发送，不新增开关列）；渠道未配置时静默跳过。
- */
-import {
-  getAgentNotificationSettingsForUsers,
-  getAgentsWithExpireDate,
-  resolveEffectiveAgentNotificationSetting,
-  updateAgentExpireDates,
-  type NotificationSettingRow,
-} from "../repositories";
-import { sendNotification } from "../services";
+import type { Bindings } from "../models/db";
+import { writeStructuredLog } from "../platform/observability/StructuredLogger";
+import { QueueJobPublisher } from "../platform/queues/QueuePublisher";
+import { legacyAgentModelCoverage } from "../platform/migrations/LegacyAgentModelBackfill";
+import { isContractMode } from "../platform/compatibility/CompatibilityMode";
 
 const EXPIRE_REMINDER_DAYS = 7;
 const RENEW_GUARD_MAX_STEPS = 120;
-
-// 计费周期对应的月数（once 不参与自动续费）
+const EXPIRY_SCAN_BATCH_SIZE = 100;
 const BILLING_CYCLE_MONTHS: Record<string, number> = {
   monthly: 1,
   quarterly: 3,
   yearly: 12,
 };
 
-// 是否到达每日到期检测时刻（UTC 12:00 的那一分钟）
+interface ExpiringAgentRow {
+  id: number;
+  name: string;
+  expire_date: string;
+  billing_cycle: string | null;
+  auto_renewal: number | null;
+}
+
 export function shouldRunDailyExpiryCheck(now: Date = new Date()): boolean {
   return now.getUTCHours() === 12 && now.getUTCMinutes() === 0;
 }
@@ -64,7 +56,6 @@ function toDateString(year: number, month: number, day: number) {
   ].join("-");
 }
 
-// 按计费周期顺延日期（UTC 月份加法，日截断到目标月末），参照 CF-SM addBillingCycleToDate
 export function addBillingCycleToDate(
   dateString: string,
   billingCycle: string | null | undefined
@@ -72,12 +63,14 @@ export function addBillingCycleToDate(
   const parsed = parseDateOnly(dateString);
   const months = BILLING_CYCLE_MONTHS[billingCycle ?? ""];
   if (!parsed || !months) return dateString;
-
   const zeroBasedMonth = parsed.month - 1 + months;
   const year = parsed.year + Math.floor(zeroBasedMonth / 12);
   const month = ((zeroBasedMonth % 12) + 12) % 12 + 1;
-  const day = Math.min(parsed.day, daysInUtcMonth(year, month));
-  return toDateString(year, month, day);
+  return toDateString(
+    year,
+    month,
+    Math.min(parsed.day, daysInUtcMonth(year, month))
+  );
 }
 
 function utcTodayDateString(now: number) {
@@ -89,42 +82,43 @@ function utcTodayDateString(now: number) {
   );
 }
 
-// 从生效的通知设置行里解析渠道列表与冷却时长（设置缺失/解析失败按无渠道处理）
-function parseNotifyChannels(setting: NotificationSettingRow | null) {
-  if (!setting) return { channels: [] as number[], cooldownMinutes: 30 };
-  try {
-    const channels = JSON.parse(setting.channels || "[]") as number[];
-    return {
-      channels: Array.isArray(channels) ? channels : [],
-      cooldownMinutes: setting.cooldown_minutes,
-    };
-  } catch {
-    return { channels: [] as number[], cooldownMinutes: 30 };
-  }
-}
-
-export async function checkExpiringAgents(): Promise<{
-  renewed: number;
-  notified: number;
-}> {
+export async function checkExpiringAgents(
+  env: Bindings,
+  nowMs = Date.now()
+): Promise<{ renewed: number; notified: number }> {
+  const today = utcTodayDateString(nowMs);
+  const contractMode = isContractMode(env);
+  const targetReady =
+    contractMode || (await legacyAgentModelCoverage(env)).read_ready;
+  const publisher = new QueueJobPublisher(env.XUGOU_JOBS);
   let renewed = 0;
   let notified = 0;
+  let cursor = 0;
 
-  try {
-    const now = Date.now();
-    const today = utcTodayDateString(now);
-    const rows = await getAgentsWithExpireDate();
+  for (;;) {
+    const { results: agents } = await env.DB.prepare(
+      targetReady
+        ? `SELECT id, name, expire_date, billing_cycle, auto_renewal
+           FROM agent_nodes
+           WHERE deleted_at_ms IS NULL AND expire_date IS NOT NULL
+             AND TRIM(expire_date) <> '' AND id > ?
+           ORDER BY id LIMIT ?`
+        : `SELECT id, name, expire_date, billing_cycle, auto_renewal
+           FROM agents
+           WHERE deleted_at IS NULL AND expire_date IS NOT NULL
+             AND TRIM(expire_date) <> '' AND id > ?
+           ORDER BY id LIMIT ?`
+    )
+      .bind(cursor, EXPIRY_SCAN_BATCH_SIZE)
+      .all<ExpiringAgentRow>();
+    if (agents.length === 0) break;
+    cursor = agents.at(-1)!.id;
 
-    // 第一遍：计算自动续费顺延结果，逐条 UPDATE 收敛为一次批量执行
-    const renewals: Array<{ id: number; expire_date: string }> = [];
-    const effectiveExpireDates = new Map<number, string>();
-    for (const agent of rows) {
+    for (const agent of agents) {
       const parsed = parseDateOnly(agent.expire_date);
       if (!parsed) continue;
-
+      const originalExpireDate = agent.expire_date;
       let expireDate = toDateString(parsed.year, parsed.month, parsed.day);
-
-      // 自动续费：已到期时按周期顺延到未来（once/未知周期不续费）
       if (
         agent.auto_renewal === 1 &&
         BILLING_CYCLE_MONTHS[agent.billing_cycle ?? ""]
@@ -133,93 +127,88 @@ export async function checkExpiringAgents(): Promise<{
         let next = expireDate;
         while (next <= today && guard < RENEW_GUARD_MAX_STEPS) {
           next = addBillingCycleToDate(next, agent.billing_cycle);
-          guard++;
+          guard += 1;
         }
         if (next !== expireDate && next > today) {
-          renewals.push({ id: agent.id, expire_date: next });
+          const updatedAt = new Date(nowMs).toISOString();
+          const statements = [
+            env.DB.prepare(
+              `UPDATE agent_nodes SET expire_date = ?, updated_at_ms = ?
+               WHERE id = ? AND expire_date = ? AND deleted_at_ms IS NULL`
+            ).bind(next, nowMs, agent.id, originalExpireDate),
+          ];
+          if (!contractMode) {
+            statements.push(
+              env.DB.prepare(
+                `UPDATE agents SET expire_date = ?, updated_at = ?
+                 WHERE id = ? AND expire_date = ? AND deleted_at IS NULL`
+              ).bind(next, updatedAt, agent.id, originalExpireDate)
+            );
+          }
+          const updateResults = await env.DB.batch(statements);
+          if (updateResults[0].meta.changes === 1) renewed += 1;
           expireDate = next;
-          renewed++;
-          console.log(
-            `[Expiry] 客户端 ${agent.name} (ID: ${agent.id}) 自动续费至 ${next}`
-          );
         }
       }
 
-      effectiveExpireDates.set(agent.id, expireDate);
-    }
+      const expireAt = Date.parse(`${expireDate}T00:00:00.000Z`);
+      const daysRemaining = Math.ceil((expireAt - nowMs) / 86_400_000);
+      if (daysRemaining <= 0 || daysRemaining > EXPIRE_REMINDER_DAYS) continue;
 
-    // 批量顺延（并行 UPDATE，幂等），列表缓存失效由 repository 层负责
-    await updateAgentExpireDates(renewals);
-
-    // 第二遍：筛出剩余 1-7 天的到期提醒（已过期/远期不提醒）
-    const reminders: Array<{
-      agent: (typeof rows)[number];
-      expireDate: string;
-      days: number;
-    }> = [];
-    for (const agent of rows) {
-      const expireDate = effectiveExpireDates.get(agent.id);
-      if (!expireDate) continue;
-      const expTime = new Date(`${expireDate}T00:00:00Z`).getTime();
-      const days = Math.ceil((expTime - now) / 86400000);
-      if (days <= 0 || days > EXPIRE_REMINDER_DAYS) continue;
-      reminders.push({ agent, expireDate, days });
-    }
-
-    // 通知设置在循环外一次批量查询，循环内按 userId/agentId 内存匹配
-    const settingRows = await getAgentNotificationSettingsForUsers([
-      ...new Set(reminders.map((reminder) => reminder.agent.created_by)),
-    ]);
-
-    for (const { agent, expireDate, days } of reminders) {
-      try {
-        const { channels, cooldownMinutes } = parseNotifyChannels(
-          resolveEffectiveAgentNotificationSetting(
-            settingRows,
-            agent.id,
-            agent.created_by
-          )
-        );
-        if (channels.length === 0) continue;
-
-        const variables = {
-          name: agent.name,
-          status: `即将到期（剩余 ${days} 天）`,
-          previous_status: "active",
-          time: new Date().toLocaleString("zh-CN", {
-            timeZone: "Asia/Shanghai",
+      const nowIso = new Date(nowMs).toISOString();
+      const eventId = `agent.expiry.reminder:${agent.id}:${today}:${expireDate}`;
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO domain_outbox
+         (event_id, event_type, aggregate_type, aggregate_id, payload_json,
+          status, attempts, available_at, created_at, updated_at)
+         VALUES (?, 'agent.expiry.reminder', 'agent', ?, ?, 'pending', 0, ?, ?, ?)`
+      )
+        .bind(
+          eventId,
+          String(agent.id),
+          JSON.stringify({
+            expire_date: expireDate,
+            days_remaining: daysRemaining,
+            billing_cycle: agent.billing_cycle,
+            auto_renewal: agent.auto_renewal === 1,
+            observed_at: nowIso,
           }),
-          hostname: agent.hostname || "未知",
-          ip_addresses: "-",
-          ip_address: "-",
-          os: agent.os || "未知",
-          error: `客户端将于 ${expireDate} 到期 ⏰`,
-          details: `到期日期: ${expireDate}\n剩余天数: ${days} 天\n计费周期: ${
-            agent.billing_cycle || "未设置"
-          }\n自动续费: ${agent.auto_renewal === 1 ? "已开启" : "未开启"}`,
-        };
-
-        const result = await sendNotification(
-          "agent",
-          agent.id,
-          variables,
-          channels,
-          agent.created_by,
-          cooldownMinutes
-        );
-        if (result.success) {
-          notified++;
-        }
+          nowIso,
+          nowIso,
+          nowIso
+        )
+        .run();
+      const pending = await env.DB.prepare(
+        `SELECT event_id FROM domain_outbox
+         WHERE event_id = ? AND status = 'pending' LIMIT 1`
+      )
+        .bind(eventId)
+        .first<{ event_id: string }>();
+      if (!pending) continue;
+      try {
+        await publisher.publishOutbox(eventId);
+        const publishedAt = new Date().toISOString();
+        await env.DB.prepare(
+          `UPDATE domain_outbox SET status = 'published', attempts = attempts + 1,
+           published_at = ?, last_error = NULL, updated_at = ?
+           WHERE event_id = ? AND status = 'pending'`
+        )
+          .bind(publishedAt, publishedAt, eventId)
+          .run();
+        notified += 1;
       } catch (error) {
-        console.error(
-          `[Expiry] 客户端 ${agent.name} (ID: ${agent.id}) 到期提醒发送失败:`,
-          error
-        );
+        writeStructuredLog(env, {
+          service: "queue",
+          operation: "publish_agent_expiry_outbox",
+          result: "deferred",
+          eventId,
+          entityType: "agent",
+          entityId: agent.id,
+          errorCode: "AGENT_EXPIRY_PUBLISH_DEFERRED",
+          error,
+        });
       }
     }
-  } catch (error) {
-    console.error("[Expiry] 到期检测任务执行失败:", error);
   }
-
   return { renewed, notified };
 }

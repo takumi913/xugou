@@ -49,8 +49,8 @@ const TableStat = ({ percent }: { percent?: number }) =>
 
 export interface AgentViewsSectionProps {
   agents: DashboardAgent[];
-  /** WS 实时样本：agentId -> 最新指标 */
-  liveMetrics: Record<number, Partial<MetricHistory>>;
+  /** 详情页等实时场景可叠加的样本：agentId -> 最新指标 */
+  liveMetrics?: Record<number, Partial<MetricHistory>>;
   /** 分区标题（h2 内容） */
   title: ReactNode;
   /** 标题行右侧、视图切换按钮组之前的附加内容（如 LiveIndicator） */
@@ -76,7 +76,7 @@ export interface AgentViewsSectionProps {
  */
 const AgentViewsSection = ({
   agents,
-  liveMetrics,
+  liveMetrics = {},
   title,
   titleExtra,
   storageKey,
@@ -147,7 +147,7 @@ const AgentViewsSection = ({
           (agent) => regionLabel(agent.region) === effectiveRegionFilter
         );
 
-  // 各视图共用的展示指标：REST 最新指标叠加 WS 实时样本（带时间戳仲裁）
+  // 各视图共用的展示指标：查询投影可按需叠加详情页实时样本。
   const displayMetricFor = (
     agent: DashboardAgent
   ): Partial<MetricHistory> | undefined => {
@@ -188,8 +188,8 @@ const AgentViewsSection = ({
       agentStatusColors,
       agent.status || "unknown"
     );
-    const live = liveMetrics[agent.id];
-    const liveMemory = memoryPercent(live);
+    const displayMetric = displayMetricFor(agent);
+    const displayMemory = memoryPercent(displayMetric);
     const flag = regionFlagEmoji(agent.region);
     const region = regionLabel(agent.region);
     const tagItems = (agent.tags ?? "")
@@ -238,14 +238,17 @@ const AgentViewsSection = ({
             ))}
           </div>
         )}
-        {/* 实时指标条：收到 WS 广播后展示并实时更新 */}
-        {live && (live.cpu_usage !== undefined || liveMemory !== undefined) && (
+        {/* 最近指标条：来自列表查询投影，详情实时场景可覆盖。 */}
+        {displayMetric &&
+          (displayMetric.cpu_usage !== undefined ||
+            displayMemory !== undefined) && (
           <div className="mt-2">
-            {live.cpu_usage !== undefined && live.cpu_usage !== null && (
-              <StatBar label="CPU" percent={live.cpu_usage} />
+            {displayMetric.cpu_usage !== undefined &&
+              displayMetric.cpu_usage !== null && (
+              <StatBar label="CPU" percent={displayMetric.cpu_usage} />
             )}
-            {liveMemory !== undefined && (
-              <StatBar label="RAM" percent={liveMemory} />
+            {displayMemory !== undefined && (
+              <StatBar label="RAM" percent={displayMemory} />
             )}
           </div>
         )}
