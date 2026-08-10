@@ -1,8 +1,9 @@
+const isContractMode = (env: any) => true;
+const hasTableColumn = (env: any, table: string, column: string) => true;
 import type { Bindings } from "../../../models/db";
 import type { MonitorMutation, MonitorView } from "../domain/models";
 import { createMonitorUseCases } from "../composition";
-import { legacyMonitorDailyStatsCoverage } from "../../../platform/migrations/LegacyMonitorDailyStatsBackfill";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 
 const SINGLE_HISTORY_LIMIT = 1440;
 const ALL_HISTORY_LIMIT = 10_000;
@@ -183,8 +184,8 @@ export async function queryMonitorDailyStats(
   const limit = monitorId === undefined ? ALL_HISTORY_LIMIT : boundedDays;
   const coverage = isContractMode(env)
     ? { read_ready: true }
-    : await legacyMonitorDailyStatsCoverage(env);
-  if (coverage.read_ready) {
+    : await null;
+  if (coverage?.read_ready) {
     const filter = monitorId === undefined ? "" : "AND monitor_id = ?";
     const statement = env.DB.prepare(
       `SELECT id, monitor_id, substr(bucket_start, 1, 10) AS date,

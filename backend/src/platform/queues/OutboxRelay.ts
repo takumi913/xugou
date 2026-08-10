@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, lte } from "drizzle-orm";
 import { createDb } from "../../config/db";
-import { asyncJobs, domainOutbox } from "../../db/schema";
+import { domainOutbox } from "../../db/schema";
 import type { Bindings } from "../../models/db";
 import { QueueJobPublisher } from "./QueuePublisher";
 
@@ -19,17 +19,7 @@ export async function relayPendingQueueWork(env: Bindings, limit = 1_000) {
   const publisher = new QueueJobPublisher(env.XUGOU_JOBS);
   const now = new Date().toISOString();
   const boundedLimit = Math.max(1, Math.min(5_000, Math.trunc(limit)));
-  const jobs = await db
-    .select({ id: asyncJobs.id })
-    .from(asyncJobs)
-    .where(
-      and(
-        inArray(asyncJobs.status, ["pending", "retry"]),
-        lte(asyncJobs.available_at, now)
-      )
-    )
-    .orderBy(asc(asyncJobs.available_at), asc(asyncJobs.id))
-    .limit(boundedLimit);
+
   const events = await db
     .select({ event_id: domainOutbox.event_id })
     .from(domainOutbox)
@@ -41,10 +31,7 @@ export async function relayPendingQueueWork(env: Bindings, limit = 1_000) {
 
   let publishedJobs = 0;
   let publishedEvents = 0;
-  for (const batch of chunks(jobs, MAX_QUEUE_BATCH_SIZE)) {
-    await publisher.publishJobs(batch.map((job) => job.id));
-    publishedJobs += batch.length;
-  }
+
   for (const batch of chunks(events, MAX_QUEUE_BATCH_SIZE)) {
     const eventIds = batch.map((event) => event.event_id);
     await publisher.publishOutboxEvents(eventIds);

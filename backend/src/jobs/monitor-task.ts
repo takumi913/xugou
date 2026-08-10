@@ -1,5 +1,5 @@
 import type { Bindings } from "../models/db";
-import { isContractMode } from "../platform/compatibility/CompatibilityMode";
+
 
 interface DailyStatsAggregation {
   monitor_id: number;
@@ -30,7 +30,7 @@ export async function generateDailyMonitorStats(
   const startTime = `${date}T00:00:00.000Z`;
   const endTime = new Date(Date.parse(startTime) + 86_400_000).toISOString();
   const batchSize = boundedMonitorBatchSize(options.monitorBatchSize);
-  const contractMode = isContractMode(env);
+
   const createdAt = now.toISOString();
   let lastMonitorId = 0;
   let processed = 0;
@@ -111,41 +111,7 @@ export async function generateDailyMonitorStats(
         createdAt
       );
     });
-    const compatibilityWrites = contractMode
-      ? []
-      : results.map((row) => {
-          const totalChecks = Number(row.total_checks) || 0;
-          const upChecks = Number(row.up_checks) || 0;
-          return env.DB.prepare(
-            `INSERT INTO monitor_daily_stats
-             (monitor_id, date, total_checks, up_checks, down_checks,
-              avg_response_time, min_response_time, max_response_time,
-              availability, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(monitor_id, date) DO UPDATE SET
-               total_checks = excluded.total_checks,
-               up_checks = excluded.up_checks,
-               down_checks = excluded.down_checks,
-               avg_response_time = excluded.avg_response_time,
-               min_response_time = excluded.min_response_time,
-               max_response_time = excluded.max_response_time,
-               availability = excluded.availability,
-               created_at = excluded.created_at`
-          ).bind(
-            row.monitor_id,
-            date,
-            totalChecks,
-            upChecks,
-            Number(row.down_checks) || 0,
-            Math.round(Number(row.avg_response_time) || 0),
-            Math.round(Number(row.min_response_time) || 0),
-            Math.round(Number(row.max_response_time) || 0),
-            totalChecks > 0 ? (upChecks / totalChecks) * 100 : 0,
-            createdAt
-          );
-        });
-
-    const writes = [...canonicalWrites, ...compatibilityWrites];
+    const writes = [...canonicalWrites];
     for (let offset = 0; offset < writes.length; offset += 50) {
       await env.DB.batch(writes.slice(offset, offset + 50));
     }

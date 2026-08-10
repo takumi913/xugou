@@ -6,7 +6,7 @@ import {
   MASKED_NOTIFICATION_SECRET,
   splitNotificationConfig,
 } from "../security/notification-secret-crypto";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 
 export type ChannelRow = {
   id: number;
@@ -61,12 +61,9 @@ export class D1NotificationChannelStore {
 
   async findRow(id: number) {
     return this.env.DB.prepare(
-      isContractMode(this.env)
-        ? `SELECT id, name, type, '{}' AS config, enabled, deleted_at,
-                  created_at, updated_at
-           FROM notification_channels WHERE id = ? AND deleted_at IS NULL LIMIT 1`
-        : `SELECT id, name, type, config, enabled, deleted_at, created_at, updated_at
-           FROM notification_channels WHERE id = ? AND deleted_at IS NULL LIMIT 1`
+      `SELECT id, name, type, '{}' AS config, enabled, deleted_at,
+              created_at, updated_at
+       FROM notification_channels WHERE id = ? AND deleted_at IS NULL LIMIT 1`
     )
       .bind(id)
       .first<ChannelRow>();
@@ -75,31 +72,18 @@ export class D1NotificationChannelStore {
   async listMasked(limit = 100) {
     const boundedLimit = Math.max(1, Math.min(100, limit));
     const rows = await this.env.DB.prepare(
-      isContractMode(this.env)
-        ? `SELECT channel.id, channel.name, channel.type, '{}' AS config,
-                  channel.enabled, channel.deleted_at, channel.created_at,
-                  channel.updated_at, endpoint.public_config_json,
-                  secret.ciphertext, secret.iv, secret.wrapped_dek,
-                  secret.wrap_iv, secret.key_version
-           FROM notification_channels channel
-           LEFT JOIN notification_endpoints endpoint
-             ON endpoint.channel_id = channel.id
-           LEFT JOIN notification_secrets secret
-             ON secret.channel_id = channel.id
-           WHERE channel.deleted_at IS NULL
-           ORDER BY channel.id ASC LIMIT ?`
-        : `SELECT channel.id, channel.name, channel.type, channel.config,
-                  channel.enabled, channel.deleted_at, channel.created_at,
-                  channel.updated_at, endpoint.public_config_json,
-                  secret.ciphertext, secret.iv, secret.wrapped_dek,
-                  secret.wrap_iv, secret.key_version
-           FROM notification_channels channel
-           LEFT JOIN notification_endpoints endpoint
-             ON endpoint.channel_id = channel.id
-           LEFT JOIN notification_secrets secret
-             ON secret.channel_id = channel.id
-           WHERE channel.deleted_at IS NULL
-           ORDER BY channel.id ASC LIMIT ?`
+      `SELECT channel.id, channel.name, channel.type, '{}' AS config,
+              channel.enabled, channel.deleted_at, channel.created_at,
+              channel.updated_at, endpoint.public_config_json,
+              secret.ciphertext, secret.iv, secret.wrapped_dek,
+              secret.wrap_iv, secret.key_version
+       FROM notification_channels channel
+       LEFT JOIN notification_endpoints endpoint
+         ON endpoint.channel_id = channel.id
+       LEFT JOIN notification_secrets secret
+         ON secret.channel_id = channel.id
+       WHERE channel.deleted_at IS NULL
+       ORDER BY channel.id ASC LIMIT ?`
     )
       .bind(boundedLimit)
       .all<ChannelRow & SecureRow>();
@@ -170,13 +154,9 @@ export class D1NotificationChannelStore {
       ).bind(channelId, JSON.stringify(publicConfig), now, now),
     ];
     statements.push(
-      isContractMode(this.env)
-        ? this.env.DB.prepare(
-            `UPDATE notification_channels SET updated_at = ? WHERE id = ?`
-          ).bind(now, channelId)
-        : this.env.DB.prepare(
-            `UPDATE notification_channels SET config = ?, updated_at = ? WHERE id = ?`
-          ).bind(JSON.stringify(publicConfig), now, channelId)
+      this.env.DB.prepare(
+        `UPDATE notification_channels SET updated_at = ? WHERE id = ?`
+      ).bind(now, channelId)
     );
     if (encrypted) {
       statements.push(
@@ -212,13 +192,7 @@ export class D1NotificationChannelStore {
   async loadFullConfig(row: ChannelRow) {
     const secure = await this.secureRow(row.id);
     if (!secure) {
-      if (isContractMode(this.env)) {
-        throw new Error("通知渠道缺少规范 Endpoint 配置");
-      }
-      // Upgrade old rows on first read and erase plaintext secrets from the legacy column.
-      const legacy = parseObject(row.config);
-      await this.persistSecureConfig(row.id, row.type, legacy);
-      return legacy;
+      throw new Error("通知渠道缺少规范 Endpoint 配置");
     }
     return this.configFromSecureRow(secure);
   }

@@ -38,10 +38,6 @@ const NotificationsConfig = lazy(
   () => import("../pages/notifications/NotificationsConfig")
 );
 
-// 运维页面组件
-const QueueFailures = lazy(
-  () => import("../pages/operations/QueueFailures")
-);
 
 // 主题列表页面组件
 const ThemeList = lazy(() => import("../pages/themes/ThemeList"));
@@ -189,17 +185,7 @@ const protectedRoutes: RouteObject[] = [
       </ProtectedRoute>
     ),
   },
-  // 同一 Worker 队列运维页面
-  {
-    path: "/operations/queue-failures",
-    element: (
-      <ProtectedRoute>
-        <Suspense fallback={<PageLoading />}>
-          <QueueFailures />
-        </Suspense>
-      </ProtectedRoute>
-    ),
-  },
+
   // 主题列表页面
   {
     path: "/themes",

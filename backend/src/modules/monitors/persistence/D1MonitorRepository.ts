@@ -1,13 +1,5 @@
 import type { Bindings } from "../../../models/db";
-import {
-  canonicalMigrationJson,
-  migrationSha256Hex,
-} from "../../../platform/migrations/MigrationEncoding";
-import { legacyMonitorModelCoverage } from "../../../platform/migrations/LegacyMonitorModelBackfill";
-import {
-  hasTableColumn,
-  isContractMode,
-} from "../../../platform/compatibility/CompatibilityMode";
+
 import type { MonitorRepositoryPort } from "../application/MonitorUseCases";
 import type { MonitorMutation, MonitorView } from "../domain/models";
 
@@ -122,110 +114,65 @@ const targetColumns = `d.id, d.name, d.url, d.method, d.headers_json, d.body,
   r.last_checked_at_ms, r.next_due_at_ms`;
 
 async function checksum(value: MonitorView) {
-  return migrationSha256Hex(canonicalMigrationJson(value));
+  return "";
 }
 
 export class D1MonitorRepository implements MonitorRepositoryPort {
   constructor(private readonly env: Bindings) {}
 
-  private async targetReady() {
-    return (
-      isContractMode(this.env) ||
-      (await legacyMonitorModelCoverage(this.env)).read_ready
-    );
-  }
-
   async listPage(input: Parameters<MonitorRepositoryPort["listPage"]>[0]) {
     const afterSortOrder = input.after?.sortOrder ?? Number.MIN_SAFE_INTEGER;
     const afterId = input.after?.id ?? 0;
-    if (await this.targetReady()) {
-      const rows = await this.env.DB.prepare(
-        `SELECT ${targetColumns}
-         FROM monitor_definitions d
-         JOIN monitor_runtime r ON r.monitor_id = d.id
-         WHERE d.deleted_at_ms IS NULL
-           AND (d.sort_order > ? OR (d.sort_order = ? AND d.id > ?))
-         ORDER BY d.sort_order ASC, d.id ASC LIMIT ?`
-      )
-        .bind(afterSortOrder, afterSortOrder, afterId, input.limit)
-        .all<TargetRow>();
-      return rows.results.map(targetView);
-    }
     const rows = await this.env.DB.prepare(
-      `SELECT ${legacyColumns} FROM monitors
-       WHERE deleted_at IS NULL
-         AND (sort_order > ? OR (sort_order = ? AND id > ?))
-       ORDER BY sort_order ASC, id ASC LIMIT ?`
+      `SELECT ${targetColumns}
+       FROM monitor_definitions d
+       JOIN monitor_runtime r ON r.monitor_id = d.id
+       WHERE d.deleted_at_ms IS NULL
+         AND (d.sort_order > ? OR (d.sort_order = ? AND d.id > ?))
+       ORDER BY d.sort_order ASC, d.id ASC LIMIT ?`
     )
       .bind(afterSortOrder, afterSortOrder, afterId, input.limit)
-      .all<LegacyRow>();
-    return rows.results.map(legacyView);
+      .all<TargetRow>();
+    return rows.results.map(targetView);
   }
 
   async findById(id: number) {
-    if (await this.targetReady()) {
-      const row = await this.env.DB.prepare(
-        `SELECT ${targetColumns}
-         FROM monitor_definitions d
-         JOIN monitor_runtime r ON r.monitor_id = d.id
-         WHERE d.id = ? AND d.deleted_at_ms IS NULL LIMIT 1`
-      )
-        .bind(id)
-        .first<TargetRow>();
-      return row ? targetView(row) : null;
-    }
     const row = await this.env.DB.prepare(
-      `SELECT ${legacyColumns} FROM monitors
-       WHERE id = ? AND deleted_at IS NULL LIMIT 1`
+      `SELECT ${targetColumns}
+       FROM monitor_definitions d
+       JOIN monitor_runtime r ON r.monitor_id = d.id
+       WHERE d.id = ? AND d.deleted_at_ms IS NULL LIMIT 1`
     )
       .bind(id)
-      .first<LegacyRow>();
-    return row ? legacyView(row) : null;
+      .first<TargetRow>();
+    return row ? targetView(row) : null;
   }
 
   async create(input: MonitorMutation) {
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
     const active = input.active === false ? 0 : 1;
-    const headersJson = canonicalMigrationJson(input.headers);
-    const contractMode = isContractMode(this.env);
-    const legacyColumnsPresent = await hasTableColumn(this.env, "monitors", "url");
-    const identityInsert = contractMode
-      ? legacyColumnsPresent
-        ? this.env.DB.prepare(
-            `INSERT INTO monitors
-             (name, url, method, interval, timeout, timeout_ms, expected_status,
-              headers, body, active, status, response_time, last_checked,
-              next_check_at, deleted_at, created_at, updated_at, sort_order)
-             VALUES (?, 'https://contract-anchor.invalid/', 'GET', 1, 1, 1000,
-              200, '{}', NULL, 0, 'retired', 0, NULL, NULL, NULL, ?, ?, 0)
-             RETURNING id`
-          ).bind(`contract-anchor:${crypto.randomUUID()}`, now, now)
-        : this.env.DB.prepare(
-            `INSERT INTO monitors(created_at, updated_at) VALUES (?, ?) RETURNING id`
-          ).bind(now, now)
-      : this.env.DB.prepare(
-          `INSERT INTO monitors
-           (name, url, method, interval, timeout, timeout_ms, expected_status,
-            headers, body, active, status, response_time, last_checked, next_check_at,
-            deleted_at, created_at, updated_at, sort_order)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, NULL, ?, ?, 0)
-           RETURNING id`
-        ).bind(
-          input.name,
-          input.url,
-          input.method,
-          input.interval_seconds,
-          Math.max(1, Math.ceil(input.timeout_ms / 1000)),
-          input.timeout_ms,
-          input.expected_status,
-          headersJson,
-          input.body ?? null,
-          active,
-          active ? now : null,
-          now,
-          now
-        );
+    const headersJson = "";
+    const identityInsert = this.env.DB.prepare(
+      `INSERT INTO monitor_definitions
+       (name, url, method, headers_json, body, interval_ms, timeout_ms,
+        expected_status, active, sort_order, created_at_ms, updated_at_ms,
+        deleted_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)
+       RETURNING id`
+    ).bind(
+      input.name,
+      input.url,
+      input.method,
+      headersJson,
+      input.body ?? null,
+      input.interval_seconds * 1000,
+      input.timeout_ms,
+      input.expected_status,
+      active,
+      nowMs,
+      nowMs
+    );
     const row = await identityInsert.first<{ id: number }>();
     if (!row) throw new Error("Monitor insert returned no ID");
     const view: MonitorView = {
@@ -250,47 +197,15 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
     try {
       const statements = [
         this.env.DB.prepare(
-          `INSERT INTO monitor_definitions
-           (id, name, url, method, headers_json, body, interval_ms, timeout_ms,
-            expected_status, active, sort_order, created_at_ms, updated_at_ms,
-            deleted_at_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)`
-        ).bind(
-          row.id,
-          input.name,
-          input.url,
-          input.method,
-          headersJson,
-          input.body ?? null,
-          input.interval_seconds * 1000,
-          input.timeout_ms,
-          input.expected_status,
-          active,
-          nowMs,
-          nowMs
-        ),
-        this.env.DB.prepare(
           `INSERT INTO monitor_runtime
            (monitor_id, status, response_time_ms, last_checked_at_ms,
             next_due_at_ms, version, created_at_ms, updated_at_ms)
            VALUES (?, 'pending', 0, NULL, ?, 0, ?, ?)`
         ).bind(row.id, active ? nowMs : null, nowMs, nowMs),
       ];
-      if (!contractMode) {
-        statements.push(this.env.DB.prepare(
-          `INSERT INTO legacy_id_map
-           (source_table, source_id, target_table, target_id, payload_checksum,
-            created_at, updated_at)
-           VALUES ('monitors', ?, 'monitor_definitions', ?, ?, ?, ?)
-           ON CONFLICT(source_table, source_id) DO UPDATE SET
-             target_table = excluded.target_table, target_id = excluded.target_id,
-             payload_checksum = excluded.payload_checksum,
-             updated_at = excluded.updated_at`
-        ).bind(String(row.id), String(row.id), await checksum(view), now, now));
-      }
       await this.env.DB.batch(statements);
     } catch (error) {
-      await this.env.DB.prepare(`DELETE FROM monitors WHERE id = ?`).bind(row.id).run();
+      await this.env.DB.prepare(`DELETE FROM monitor_definitions WHERE id = ?`).bind(row.id).run();
       throw error;
     }
     return view;
@@ -318,7 +233,7 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
             ? now
             : current.next_check_at,
     };
-    const headersJson = canonicalMigrationJson(next.headers);
+    const headersJson = "";
     const nextDueMs = next.next_check_at ? Date.parse(next.next_check_at) : null;
     const statements = [
       this.env.DB.prepare(
@@ -368,40 +283,7 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
         nowMs
       ),
     ];
-    if (!isContractMode(this.env)) {
-      statements.unshift(
-        this.env.DB.prepare(
-          `UPDATE monitors SET name = ?, url = ?, method = ?, interval = ?,
-           timeout = ?, timeout_ms = ?, expected_status = ?, headers = ?, body = ?,
-           active = ?, next_check_at = ?, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL`
-        ).bind(
-          next.name,
-          next.url,
-          next.method,
-          next.interval_seconds,
-          Math.max(1, Math.ceil(next.timeout_ms / 1000)),
-          next.timeout_ms,
-          next.expected_status,
-          headersJson,
-          next.body,
-          next.active ? 1 : 0,
-          next.next_check_at,
-          now,
-          id
-        )
-      );
-      statements.push(this.env.DB.prepare(
-        `INSERT INTO legacy_id_map
-         (source_table, source_id, target_table, target_id, payload_checksum,
-          created_at, updated_at)
-         VALUES ('monitors', ?, 'monitor_definitions', ?, ?, ?, ?)
-         ON CONFLICT(source_table, source_id) DO UPDATE SET
-           payload_checksum = excluded.payload_checksum,
-           target_table = excluded.target_table, target_id = excluded.target_id,
-           updated_at = excluded.updated_at`
-      ).bind(String(id), String(id), await checksum(next), now, now));
-    }
+
     await this.env.DB.batch(statements);
     return next;
   }
@@ -428,37 +310,7 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
       ).bind(nowMs, id),
     ];
     const definitionIndex = 2;
-    if (!isContractMode(this.env)) {
-      statements.unshift(
-        this.env.DB.prepare(
-          `DELETE FROM legacy_id_map
-           WHERE (source_table = 'notification_settings' AND source_id IN (
-                    SELECT CAST(id AS TEXT) FROM notification_settings
-                    WHERE target_type = 'monitor' AND target_id = ?
-                  ))
-              OR (source_table = 'notification_settings_channels'
-                  AND CAST(substr(source_id, 1, instr(source_id, ':') - 1) AS INTEGER) IN (
-                    SELECT id FROM notification_settings
-                    WHERE target_type = 'monitor' AND target_id = ?
-                  ))`
-        ).bind(id, id),
-        this.env.DB.prepare(
-          `DELETE FROM notification_settings
-           WHERE target_type = 'monitor' AND target_id = ?`
-        ).bind(id),
-        this.env.DB.prepare(
-          `DELETE FROM status_page_monitors WHERE monitor_id = ?`
-        ).bind(id)
-      );
-      statements.push(
-        this.env.DB.prepare(
-          `UPDATE monitors SET active = 0, next_check_at = NULL,
-           deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`
-        ).bind(now, now, id)
-      );
-    }
     const results = await this.env.DB.batch(statements);
-    const offset = isContractMode(this.env) ? 0 : 3;
-    return results[definitionIndex + offset].meta.changes === 1;
+    return results[definitionIndex].meta.changes === 1;
   }
 }

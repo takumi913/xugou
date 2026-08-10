@@ -19,12 +19,7 @@ import {
   RESPONSE_TRACE_HEADER,
   writeStructuredLog,
 } from "./platform/observability/StructuredLogger";
-import { auditLegacyApiHit } from "./platform/compatibility/LegacyApiHitAudit";
 import { isV2ApiRequest, problemResponse } from "./platform/http/problem";
-import {
-  isContractMode,
-  isLegacyApiPath,
-} from "./platform/compatibility/CompatibilityMode";
 
 // 导出同一 Worker Bundle 内按 Agent 分片的 Durable Object。
 export { AgentRoom } from "./durable/AgentRoom";
@@ -49,7 +44,6 @@ app.use("*", async (c, next) => {
   const traceId = createTraceId(c.req.raw.headers);
   try {
     await next();
-    auditLegacyApiHit(c.env, c.executionCtx, c.req.raw, c.res.status);
     c.header(RESPONSE_TRACE_HEADER, traceId);
     writeStructuredLog(c.env, {
       service: "http",
@@ -83,17 +77,7 @@ app.use("*", async (c, next) => {
 });
 app.use("*", middlewares.corsMiddleware);
 app.use("/api/*", middlewares.apiBodyLimitMiddleware);
-app.use("*", async (c, next) => {
-  if (isContractMode(c.env) && isLegacyApiPath(c.req.path)) {
-    return problemResponse(c, {
-      status: 410,
-      code: "LEGACY_API_RETIRED",
-      title: "Legacy API retired",
-      detail: "Use the versioned /api/v2 API.",
-    });
-  }
-  return next();
-});
+
 app.use("*", middlewares.adminSessionMiddleware);
 
 // 公共路由
@@ -103,10 +87,7 @@ app.get("/", (c) => c.json({ message: "XUGOU API 服务正在运行" }));
 app.route("/api/auth", api.auth);
 app.route("/api/profile", api.profile);
 app.route("/api/security", api.security);
-app.route("/api/monitors", api.monitors);
-app.route("/api/agents", api.agents);
-app.route("/api/status", api.status);
-app.route("/api/notifications", api.notifications);
+
 app.route("/api/dashboard", api.dashboard);
 app.route("/api/ws", api.ws);
 app.route("/api/v2/monitors", monitorsV2);

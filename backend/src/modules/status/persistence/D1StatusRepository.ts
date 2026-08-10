@@ -3,12 +3,7 @@ import { writeStructuredLog } from "../../../platform/observability/StructuredLo
 import { QueueJobPublisher } from "../../../platform/queues/QueuePublisher";
 import type { StatusRepositoryPort } from "../application/StatusUseCases";
 import type { StatusPageConfigCommand } from "../domain/models";
-import { legacyMonitorDailyStatsCoverage } from "../../../platform/migrations/LegacyMonitorDailyStatsBackfill";
-import { legacyMonitorModelCoverage } from "../../../platform/migrations/LegacyMonitorModelBackfill";
-import { legacyAgentModelCoverage } from "../../../platform/migrations/LegacyAgentModelBackfill";
-import { legacyAgentCurrentMetricsCoverage } from "../../../platform/migrations/LegacyAgentCurrentMetricsBackfill";
-import { legacyStatusPageCoverage } from "../../../platform/migrations/LegacyStatusPageBackfill";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 import {
   projectPublicDiskMetrics,
   projectPublicNetworkMetrics,
@@ -240,130 +235,47 @@ export class D1StatusRepository implements StatusRepositoryPort {
   private async ensureConfig() {
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
-    if (isContractMode(this.env)) {
-      await this.env.DB.prepare(
-        `INSERT INTO status_pages
-         (id, singleton_key, title, description, logo_url, custom_css, theme,
-          created_at_ms, updated_at_ms)
-         VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(singleton_key) DO NOTHING`
-      )
-        .bind(
-          DEFAULT_CONFIG.title,
-          DEFAULT_CONFIG.description,
-          DEFAULT_CONFIG.logoUrl,
-          DEFAULT_CONFIG.customCss,
-          DEFAULT_CONFIG.theme,
-          nowMs,
-          nowMs
-        )
-        .run();
-      return;
-    }
-    await this.env.DB.batch([
-      this.env.DB.prepare(
-        `INSERT INTO status_page_config
-         (singleton_key, title, description, logo_url, custom_css, theme,
-          created_at, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(singleton_key) DO NOTHING`
-      ).bind(
+    await this.env.DB.prepare(
+      `INSERT INTO status_pages
+       (id, singleton_key, title, description, logo_url, custom_css, theme,
+        created_at_ms, updated_at_ms)
+       VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(singleton_key) DO NOTHING`
+    )
+      .bind(
         DEFAULT_CONFIG.title,
         DEFAULT_CONFIG.description,
         DEFAULT_CONFIG.logoUrl,
         DEFAULT_CONFIG.customCss,
         DEFAULT_CONFIG.theme,
-        now,
-        now
-      ),
-      this.env.DB.prepare(
-        `INSERT INTO status_pages
-         (id, singleton_key, title, description, logo_url, custom_css, theme,
-          created_at_ms, updated_at_ms)
-         SELECT id, 1, title, description, logo_url, custom_css,
-                COALESCE(theme, 'mono'),
-                COALESCE(CAST(strftime('%s', created_at) AS INTEGER) * 1000, ?),
-                COALESCE(CAST(strftime('%s', updated_at) AS INTEGER) * 1000, ?)
-         FROM status_page_config WHERE singleton_key = 1
-         ON CONFLICT(id) DO NOTHING`
-      ).bind(nowMs, nowMs),
-      this.env.DB.prepare(
-        `INSERT INTO legacy_id_map
-         (source_table, source_id, target_table, target_id, payload_checksum,
-          created_at, updated_at)
-         SELECT 'status_page_config', CAST(id AS TEXT), 'status_pages',
-                CAST(id AS TEXT), 'live:ensure', ?, ?
-         FROM status_page_config WHERE singleton_key = 1
-         ON CONFLICT(source_table, source_id) DO NOTHING`
-      ).bind(now, now),
-    ]);
+        nowMs,
+        nowMs
+      )
+      .run();
   }
 
   async getConfig() {
     await this.ensureConfig();
-    const contractMode = isContractMode(this.env);
-    const [monitorModelReady, agentModelReady, statusPageReady] = contractMode
-      ? [true, true, true]
-      : await Promise.all([
-          legacyMonitorModelCoverage(this.env).then((coverage) => coverage.read_ready),
-          legacyAgentModelCoverage(this.env).then((coverage) => coverage.read_ready),
-          legacyStatusPageCoverage(this.env).then((coverage) => coverage.read_ready),
-        ]);
-    const monitorSelectionQuery = monitorModelReady && statusPageReady
-      ? `SELECT m.id, m.name,
-                CASE WHEN component.component_id IS NULL THEN 0 ELSE 1 END AS selected
-         FROM monitor_definitions m
-         LEFT JOIN status_components component
-           ON component.component_id = m.id AND component.component_type = 'monitor'
-          AND component.page_id = (SELECT id FROM status_pages WHERE singleton_key = 1)
-         WHERE m.deleted_at_ms IS NULL
-         ORDER BY selected DESC, m.id ASC LIMIT ?`
-      : monitorModelReady
-      ? `SELECT m.id, m.name,
-                CASE WHEN spm.monitor_id IS NULL THEN 0 ELSE 1 END AS selected
-         FROM monitor_definitions m
-         LEFT JOIN status_page_monitors spm ON spm.monitor_id = m.id
-          AND spm.config_id = (SELECT id FROM status_page_config WHERE singleton_key = 1)
-         WHERE m.deleted_at_ms IS NULL
-         ORDER BY selected DESC, m.id ASC LIMIT ?`
-      : `SELECT m.id, m.name,
-                CASE WHEN spm.monitor_id IS NULL THEN 0 ELSE 1 END AS selected
-         FROM monitors m
-         LEFT JOIN status_page_monitors spm ON spm.monitor_id = m.id
-          AND spm.config_id = (SELECT id FROM status_page_config WHERE singleton_key = 1)
-         WHERE m.deleted_at IS NULL
-         ORDER BY selected DESC, m.id ASC LIMIT ?`;
-    const agentSelectionQuery = agentModelReady && statusPageReady
-      ? `SELECT a.id, a.name,
-                CASE WHEN component.component_id IS NULL THEN 0 ELSE 1 END AS selected
-         FROM agent_nodes a
-         LEFT JOIN status_components component
-           ON component.component_id = a.id AND component.component_type = 'agent'
-          AND component.page_id = (SELECT id FROM status_pages WHERE singleton_key = 1)
-         WHERE a.deleted_at_ms IS NULL
-         ORDER BY selected DESC, a.id ASC LIMIT ?`
-      : agentModelReady
-      ? `SELECT a.id, a.name,
-                CASE WHEN spa.agent_id IS NULL THEN 0 ELSE 1 END AS selected
-         FROM agent_nodes a
-         LEFT JOIN status_page_agents spa ON spa.agent_id = a.id
-          AND spa.config_id = (SELECT id FROM status_page_config WHERE singleton_key = 1)
-         WHERE a.deleted_at_ms IS NULL
-         ORDER BY selected DESC, a.id ASC LIMIT ?`
-      : `SELECT a.id, a.name,
-                CASE WHEN spa.agent_id IS NULL THEN 0 ELSE 1 END AS selected
-         FROM agents a
-         LEFT JOIN status_page_agents spa ON spa.agent_id = a.id
-          AND spa.config_id = (SELECT id FROM status_page_config WHERE singleton_key = 1)
-         WHERE a.deleted_at IS NULL
-         ORDER BY selected DESC, a.id ASC LIMIT ?`;
+    const monitorSelectionQuery = `SELECT m.id, m.name,
+              CASE WHEN component.component_id IS NULL THEN 0 ELSE 1 END AS selected
+       FROM monitor_definitions m
+       LEFT JOIN status_components component
+         ON component.component_id = m.id AND component.component_type = 'monitor'
+        AND component.page_id = (SELECT id FROM status_pages WHERE singleton_key = 1)
+       WHERE m.deleted_at_ms IS NULL
+       ORDER BY selected DESC, m.id ASC LIMIT ?`;
+    const agentSelectionQuery = `SELECT a.id, a.name,
+              CASE WHEN component.component_id IS NULL THEN 0 ELSE 1 END AS selected
+       FROM agent_nodes a
+       LEFT JOIN status_components component
+         ON component.component_id = a.id AND component.component_type = 'agent'
+        AND component.page_id = (SELECT id FROM status_pages WHERE singleton_key = 1)
+       WHERE a.deleted_at_ms IS NULL
+       ORDER BY selected DESC, a.id ASC LIMIT ?`;
     const [config, monitors, agents] = await Promise.all([
       this.env.DB.prepare(
-        statusPageReady
-          ? `SELECT id, title, description, logo_url, custom_css, theme
-             FROM status_pages WHERE singleton_key = 1 LIMIT 1`
-          : `SELECT id, title, description, logo_url, custom_css, theme
-             FROM status_page_config WHERE singleton_key = 1 LIMIT 1`
+        `SELECT id, title, description, logo_url, custom_css, theme
+         FROM status_pages WHERE singleton_key = 1 LIMIT 1`
       ).first<ConfigRow>(),
       this.env.DB.prepare(monitorSelectionQuery)
         .bind(MAX_STATUS_CONFIG_CANDIDATES + 1)
@@ -392,16 +304,11 @@ export class D1StatusRepository implements StatusRepositoryPort {
 
   async saveConfig(input: StatusPageConfigCommand) {
     await this.ensureConfig();
-    const contractMode = isContractMode(this.env);
     const monitorIds = uniquePositiveIds(input.monitors);
     const agentIds = uniquePositiveIds(input.agents);
     const [monitorCount, agentCount] = await Promise.all([
-      contractMode
-        ? this.countIds("monitor_definitions", monitorIds, "deleted_at_ms IS NULL")
-        : this.countIds("monitors", monitorIds, "deleted_at IS NULL"),
-      contractMode
-        ? this.countIds("agent_nodes", agentIds, "deleted_at_ms IS NULL")
-        : this.countIds("agents", agentIds, "deleted_at IS NULL"),
+      this.countIds("monitor_definitions", monitorIds, "deleted_at_ms IS NULL"),
+      this.countIds("agent_nodes", agentIds, "deleted_at_ms IS NULL")
     ]);
     if (monitorCount !== monitorIds.length || agentCount !== agentIds.length) {
       const error = new Error("状态页配置包含不存在的资源");
@@ -413,111 +320,18 @@ export class D1StatusRepository implements StatusRepositoryPort {
     const now = new Date(nowMs).toISOString();
     const eventId = `status.rebuild:${crypto.randomUUID()}`;
     const payload = JSON.stringify({ reason: "config.updated", requested_at: now });
-    if (contractMode) {
-      await this.env.DB.batch([
-        this.env.DB.prepare(
-          `UPDATE status_pages SET title = ?, description = ?, logo_url = ?,
-           custom_css = ?, theme = ?, updated_at_ms = ? WHERE singleton_key = 1`
-        ).bind(
-          input.title,
-          input.description,
-          input.logoUrl,
-          input.customCss,
-          input.theme,
-          nowMs
-        ),
-        this.env.DB.prepare(
-          `DELETE FROM status_components
-           WHERE page_id = (SELECT id FROM status_pages WHERE singleton_key = 1)`
-        ),
-        this.env.DB.prepare(
-          `INSERT INTO status_components
-           (page_id, component_type, component_id, sort_order,
-            created_at_ms, updated_at_ms)
-           SELECT (SELECT id FROM status_pages WHERE singleton_key = 1),
-                  'monitor', CAST(value AS INTEGER), CAST(key AS INTEGER), ?, ?
-           FROM json_each(?)`
-        ).bind(nowMs, nowMs, JSON.stringify(monitorIds)),
-        this.env.DB.prepare(
-          `INSERT INTO status_components
-           (page_id, component_type, component_id, sort_order,
-            created_at_ms, updated_at_ms)
-           SELECT (SELECT id FROM status_pages WHERE singleton_key = 1),
-                  'agent', CAST(value AS INTEGER), CAST(key AS INTEGER), ?, ?
-           FROM json_each(?)`
-        ).bind(nowMs, nowMs, JSON.stringify(agentIds)),
-        this.env.DB.prepare(
-          `INSERT INTO domain_outbox
-           (event_id, event_type, aggregate_type, aggregate_id, payload_json, status,
-            attempts, available_at, created_at, updated_at)
-           VALUES (?, 'status.rebuild.requested', 'status_page', '1', ?, 'pending', 0, ?, ?, ?)`
-        ).bind(eventId, payload, now, now, now),
-      ]);
-    } else {
-      await this.env.DB.batch([
+    await this.env.DB.batch([
       this.env.DB.prepare(
-        `INSERT INTO status_page_config
-         (singleton_key, title, description, logo_url, custom_css, theme, created_at, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(singleton_key) DO NOTHING`
+        `UPDATE status_pages SET title = ?, description = ?, logo_url = ?,
+         custom_css = ?, theme = ?, updated_at_ms = ? WHERE singleton_key = 1`
       ).bind(
         input.title,
         input.description,
         input.logoUrl,
         input.customCss,
         input.theme,
-        now,
-        now
-      ),
-      this.env.DB.prepare(
-        `UPDATE status_page_config SET title = ?, description = ?, logo_url = ?,
-         custom_css = ?, theme = ?, updated_at = ? WHERE singleton_key = 1`
-      ).bind(
-        input.title,
-        input.description,
-        input.logoUrl,
-        input.customCss,
-        input.theme,
-        now
-      ),
-      this.env.DB.prepare(
-        `INSERT INTO status_pages
-         (id, singleton_key, title, description, logo_url, custom_css, theme,
-          created_at_ms, updated_at_ms)
-         SELECT id, 1, ?, ?, ?, ?, ?,
-                COALESCE(CAST(strftime('%s', created_at) AS INTEGER) * 1000, ?), ?
-         FROM status_page_config WHERE singleton_key = 1
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title,
-          description = excluded.description, logo_url = excluded.logo_url,
-          custom_css = excluded.custom_css, theme = excluded.theme,
-          updated_at_ms = excluded.updated_at_ms`
-      ).bind(
-        input.title,
-        input.description,
-        input.logoUrl,
-        input.customCss,
-        input.theme,
-        nowMs,
         nowMs
       ),
-      this.env.DB.prepare(
-        `DELETE FROM status_page_monitors
-         WHERE config_id = (SELECT id FROM status_page_config WHERE singleton_key = 1)`
-      ),
-      this.env.DB.prepare(
-        `INSERT INTO status_page_monitors(config_id, monitor_id)
-         SELECT (SELECT id FROM status_page_config WHERE singleton_key = 1), CAST(value AS INTEGER)
-         FROM json_each(?)`
-      ).bind(JSON.stringify(monitorIds)),
-      this.env.DB.prepare(
-        `DELETE FROM status_page_agents
-         WHERE config_id = (SELECT id FROM status_page_config WHERE singleton_key = 1)`
-      ),
-      this.env.DB.prepare(
-        `INSERT INTO status_page_agents(config_id, agent_id)
-         SELECT (SELECT id FROM status_page_config WHERE singleton_key = 1), CAST(value AS INTEGER)
-         FROM json_each(?)`
-      ).bind(JSON.stringify(agentIds)),
       this.env.DB.prepare(
         `DELETE FROM status_components
          WHERE page_id = (SELECT id FROM status_pages WHERE singleton_key = 1)`
@@ -539,46 +353,12 @@ export class D1StatusRepository implements StatusRepositoryPort {
          FROM json_each(?)`
       ).bind(nowMs, nowMs, JSON.stringify(agentIds)),
       this.env.DB.prepare(
-        `DELETE FROM legacy_id_map
-         WHERE source_table IN ('status_page_monitors', 'status_page_agents')`
-      ),
-      this.env.DB.prepare(
-        `INSERT INTO legacy_id_map
-         (source_table, source_id, target_table, target_id, payload_checksum,
-          created_at, updated_at)
-         SELECT 'status_page_config', CAST(id AS TEXT), 'status_pages',
-                CAST(id AS TEXT), 'live:config', ?, ?
-         FROM status_page_config WHERE singleton_key = 1
-         ON CONFLICT(source_table, source_id) DO UPDATE SET
-          target_table = excluded.target_table, target_id = excluded.target_id,
-          payload_checksum = excluded.payload_checksum, updated_at = excluded.updated_at`
-      ).bind(now, now),
-      this.env.DB.prepare(
-        `INSERT INTO legacy_id_map
-         (source_table, source_id, target_table, target_id, payload_checksum,
-          created_at, updated_at)
-         SELECT 'status_page_monitors', CAST(config_id AS TEXT) || ':' ||
-                CAST(monitor_id AS TEXT), 'status_components',
-                CAST(config_id AS TEXT) || ':monitor:' || CAST(monitor_id AS TEXT),
-                'live:component', ?, ? FROM status_page_monitors`
-      ).bind(now, now),
-      this.env.DB.prepare(
-        `INSERT INTO legacy_id_map
-         (source_table, source_id, target_table, target_id, payload_checksum,
-          created_at, updated_at)
-         SELECT 'status_page_agents', CAST(config_id AS TEXT) || ':' ||
-                CAST(agent_id AS TEXT), 'status_components',
-                CAST(config_id AS TEXT) || ':agent:' || CAST(agent_id AS TEXT),
-                'live:component', ?, ? FROM status_page_agents`
-      ).bind(now, now),
-      this.env.DB.prepare(
         `INSERT INTO domain_outbox
          (event_id, event_type, aggregate_type, aggregate_id, payload_json, status,
           attempts, available_at, created_at, updated_at)
          VALUES (?, 'status.rebuild.requested', 'status_page', '1', ?, 'pending', 0, ?, ?, ?)`
       ).bind(eventId, payload, now, now, now),
-      ]);
-    }
+    ]);
 
     try {
       await this.publisher.publishOutbox(eventId);
@@ -657,16 +437,9 @@ export class D1StatusRepository implements StatusRepositoryPort {
 
   async buildPublicData() {
     await this.ensureConfig();
-    const contractMode = isContractMode(this.env);
-    const statusPageCoverage = contractMode
-      ? { read_ready: true }
-      : await legacyStatusPageCoverage(this.env);
     const config = await this.env.DB.prepare(
-      statusPageCoverage.read_ready
-        ? `SELECT id, title, description, logo_url, custom_css, theme
-           FROM status_pages WHERE singleton_key = 1 LIMIT 1`
-        : `SELECT id, title, description, logo_url, custom_css, theme
-           FROM status_page_config WHERE singleton_key = 1 LIMIT 1`
+      `SELECT id, title, description, logo_url, custom_css, theme
+       FROM status_pages WHERE singleton_key = 1 LIMIT 1`
     ).first<ConfigRow>();
     if (!config) return { ...DEFAULT_CONFIG, monitors: [], agents: [] };
 
@@ -676,40 +449,15 @@ export class D1StatusRepository implements StatusRepositoryPort {
     )
       .toISOString()
       .slice(0, 10);
-    const selectedMonitorSql = statusPageCoverage.read_ready
-      ? `SELECT component_id FROM status_components
+    const selectedMonitorSql = `SELECT component_id FROM status_components
          WHERE page_id = ? AND component_type = 'monitor'
          ORDER BY sort_order ASC, component_id ASC
-         LIMIT ${MAX_PUBLIC_COMPONENTS_PER_TYPE}`
-      : `SELECT monitor_id FROM status_page_monitors WHERE config_id = ?
-         ORDER BY monitor_id ASC LIMIT ${MAX_PUBLIC_COMPONENTS_PER_TYPE}`;
-    const selectedAgentSql = statusPageCoverage.read_ready
-      ? `SELECT component_id FROM status_components
+         LIMIT ${MAX_PUBLIC_COMPONENTS_PER_TYPE}`;
+    const selectedAgentSql = `SELECT component_id FROM status_components
          WHERE page_id = ? AND component_type = 'agent'
          ORDER BY sort_order ASC, component_id ASC
-         LIMIT ${MAX_PUBLIC_COMPONENTS_PER_TYPE}`
-      : `SELECT agent_id FROM status_page_agents WHERE config_id = ?
-         ORDER BY agent_id ASC LIMIT ${MAX_PUBLIC_COMPONENTS_PER_TYPE}`;
-    const [
-      dailyCoverage,
-      monitorModelCoverage,
-      agentModelCoverage,
-      currentMetricsCoverage,
-    ] = contractMode
-      ? [
-          { read_ready: true },
-          { read_ready: true },
-          { read_ready: true },
-          { read_ready: true },
-        ]
-      : await Promise.all([
-          legacyMonitorDailyStatsCoverage(this.env),
-          legacyMonitorModelCoverage(this.env),
-          legacyAgentModelCoverage(this.env),
-          legacyAgentCurrentMetricsCoverage(this.env),
-        ]);
-    const dailyStatsQuery = dailyCoverage.read_ready
-      ? `SELECT monitor_id, substr(bucket_start, 1, 10) AS date,
+         LIMIT ${MAX_PUBLIC_COMPONENTS_PER_TYPE}`;
+    const dailyStatsQuery = `SELECT monitor_id, substr(bucket_start, 1, 10) AS date,
                 total_checks, up_checks, down_checks,
                 response_time_avg AS avg_response_time,
                 response_time_min AS min_response_time,
@@ -722,15 +470,8 @@ export class D1StatusRepository implements StatusRepositoryPort {
          WHERE bucket_size_seconds = 86400
            AND monitor_id IN (${selectedMonitorSql})
            AND bucket_start >= ?
-         ORDER BY bucket_start ASC`
-      : `SELECT monitor_id, date, total_checks, up_checks, down_checks,
-                avg_response_time, min_response_time, max_response_time,
-                availability, created_at
-         FROM monitor_daily_stats WHERE monitor_id IN (${selectedMonitorSql})
-           AND date >= ?
-         ORDER BY date ASC`;
-    const publicMonitorQuery = monitorModelCoverage.read_ready
-      ? `SELECT d.id, d.name, r.status,
+         ORDER BY bucket_start ASC`;
+    const publicMonitorQuery = `SELECT d.id, d.name, r.status,
                 r.response_time_ms AS response_time,
                 CASE WHEN r.last_checked_at_ms IS NULL THEN NULL
                      ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
@@ -743,13 +484,8 @@ export class D1StatusRepository implements StatusRepositoryPort {
          FROM monitor_definitions d
          JOIN monitor_runtime r ON r.monitor_id = d.id
          WHERE d.deleted_at_ms IS NULL AND d.id IN (${selectedMonitorSql})
-         ORDER BY d.id ASC`
-      : `SELECT id, name, status, response_time, last_checked, created_at, updated_at
-         FROM monitors
-         WHERE deleted_at IS NULL AND id IN (${selectedMonitorSql})
-         ORDER BY id ASC`;
-    const publicAgentQuery = agentModelCoverage.read_ready
-      ? `SELECT n.id, n.name, r.status, r.hostname, r.os,
+         ORDER BY d.id ASC`;
+    const publicAgentQuery = `SELECT n.id, n.name, r.status, r.hostname, r.os,
                 r.agent_version AS version, r.region,
                 strftime('%Y-%m-%dT%H:%M:%fZ',
                          n.created_at_ms / 1000.0, 'unixepoch') AS created_at,
@@ -759,13 +495,7 @@ export class D1StatusRepository implements StatusRepositoryPort {
          FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
          WHERE n.id IN (${selectedAgentSql}) AND n.deleted_at_ms IS NULL
            AND n.is_hidden <> 1
-         ORDER BY n.id ASC`
-      : `SELECT id, name, status, hostname, os, version, region, created_at, updated_at,
-                traffic_limit_gb, traffic_reset_day, traffic_calc_type
-         FROM agents
-         WHERE id IN (${selectedAgentSql}) AND deleted_at IS NULL
-           AND COALESCE(is_hidden, 0) <> 1
-         ORDER BY id ASC`;
+         ORDER BY n.id ASC`;
     const [monitorResult, dailyResult, rollupResult, historyResult, agentResult, metricResult] =
       await Promise.all([
         this.env.DB.prepare(publicMonitorQuery)
@@ -782,22 +512,17 @@ export class D1StatusRepository implements StatusRepositoryPort {
            ORDER BY bucket_start ASC`
         ).bind(config.id, since).all<Record<string, unknown>>(),
         this.env.DB.prepare(
-          contractMode
-            ? `SELECT job_id AS id, monitor_id, status, checked_at AS timestamp,
+            `SELECT job_id AS id, monitor_id, status, checked_at AS timestamp,
                       response_time_ms AS response_time, status_code, error
                FROM monitor_check_samples
                WHERE monitor_id IN (${selectedMonitorSql}) AND checked_at >= ?
                ORDER BY checked_at ASC LIMIT 10000`
-            : `SELECT id, monitor_id, status, timestamp, response_time, status_code, error
-               FROM monitor_status_history_24h
-               WHERE monitor_id IN (${selectedMonitorSql}) AND timestamp >= ?
-               ORDER BY timestamp ASC LIMIT 10000`
         ).bind(config.id, since).all<Record<string, unknown>>(),
         this.env.DB.prepare(publicAgentQuery)
           .bind(config.id)
           .all<Record<string, unknown>>(),
         this.env.DB.prepare(
-          currentMetricsCoverage.read_ready
+          true
             ? `SELECT agent_id,
                       CASE WHEN collected_at_ms IS NULL THEN NULL
                            ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
@@ -889,7 +614,6 @@ export class D1StatusRepository implements StatusRepositoryPort {
     const selected = uniquePositiveIds(agentIds).slice(0, MAX_PUBLIC_COMPONENTS_PER_TYPE);
     if (selected.length === 0) return [];
     const selectedJson = JSON.stringify(selected);
-    const contractMode = isContractMode(this.env);
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const rollups = await this.env.DB.prepare(
       `SELECT id, agent_id, bucket_start, cpu_avg, cpu_max, memory_avg, memory_max,
@@ -917,73 +641,41 @@ export class D1StatusRepository implements StatusRepositoryPort {
     }
 
     const fallbackByAgent = new Map<number, PublicAgentMetric[]>();
-    if (contractMode) {
-      const samples = await this.env.DB.prepare(
-        `SELECT report_id, sample_index, agent_id, metrics_json
-         FROM (
-           SELECT sample.*,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY agent_id
-                    ORDER BY collected_at DESC, report_id DESC, sample_index DESC
-                  ) AS row_number
-           FROM agent_report_samples sample
-           WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
-             AND collected_at >= ?
-         ) WHERE row_number <= ?
-         ORDER BY agent_id ASC, collected_at ASC, report_id ASC, sample_index ASC`
-      )
-        .bind(selectedJson, since, MAX_PUBLIC_METRIC_POINTS)
-        .all<{
-          report_id: string;
-          sample_index: number;
-          agent_id: number;
-          metrics_json: string;
-        }>();
-      for (const row of samples.results) {
-        try {
-          const metric = toReportSampleMetric(row, (field) =>
-            this.projectionWarning(row.agent_id, "report_sample", field)
-          );
-          fallbackByAgent.set(row.agent_id, [
-            ...(fallbackByAgent.get(row.agent_id) ?? []),
-            metric,
-          ]);
-        } catch (error) {
-          if (error instanceof Error && error.message === "PUBLIC_METRIC_SENSITIVE_KEY") {
-            throw error;
-          }
-          this.projectionWarning(row.agent_id, "report_sample", "disk_metrics");
-        }
-      }
-    } else {
-      const history = await this.env.DB.prepare(
-        `SELECT id, agent_id, timestamp, cpu_usage, cpu_cores, cpu_model,
-                memory_total, memory_used, memory_free, memory_usage_rate,
-                load_1, load_5, load_15, disk_metrics, network_metrics,
-                swap_total, swap_used, process_count, tcp_connections, udp_connections,
-                ipv4_reachable, ipv6_reachable, network_rx_speed, network_tx_speed
-         FROM (
-           SELECT history.*,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY agent_id ORDER BY timestamp DESC, id DESC
-                  ) AS row_number
-           FROM agent_metrics_history history
-           WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
-             AND timestamp >= ?
-         ) WHERE row_number <= ?
-         ORDER BY agent_id ASC, timestamp ASC, id ASC`
-      )
-        .bind(selectedJson, since, MAX_PUBLIC_METRIC_POINTS)
-        .all<Record<string, unknown>>();
-      for (const row of history.results) {
-        const agentId = Number(row.agent_id);
-        const metric = toHistoryMetric(row, (field) =>
-          this.projectionWarning(agentId, "legacy_history", field)
+    const samples = await this.env.DB.prepare(
+      `SELECT report_id, sample_index, agent_id, metrics_json
+       FROM (
+         SELECT sample.*,
+                ROW_NUMBER() OVER (
+                  PARTITION BY agent_id
+                  ORDER BY collected_at DESC, report_id DESC, sample_index DESC
+                ) AS row_number
+         FROM agent_report_samples sample
+         WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+           AND collected_at >= ?
+       ) WHERE row_number <= ?
+       ORDER BY agent_id ASC, collected_at ASC, report_id ASC, sample_index ASC`
+    )
+      .bind(selectedJson, since, MAX_PUBLIC_METRIC_POINTS)
+      .all<{
+        report_id: string;
+        sample_index: number;
+        agent_id: number;
+        metrics_json: string;
+      }>();
+    for (const row of samples.results) {
+      try {
+        const metric = toReportSampleMetric(row, (field) =>
+          this.projectionWarning(row.agent_id, "report_sample", field)
         );
-        fallbackByAgent.set(agentId, [
-          ...(fallbackByAgent.get(agentId) ?? []),
+        fallbackByAgent.set(row.agent_id, [
+          ...(fallbackByAgent.get(row.agent_id) ?? []),
           metric,
         ]);
+      } catch (error) {
+        if (error instanceof Error && error.message === "PUBLIC_METRIC_SENSITIVE_KEY") {
+          throw error;
+        }
+        this.projectionWarning(row.agent_id, "report_sample", "disk_metrics");
       }
     }
 

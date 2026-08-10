@@ -211,7 +211,7 @@ monitors.post("/:id/check", async (c) => {
   return c.json({
     success: true,
     message: "监控检查已进入队列",
-    result: { job_id: scheduled.jobId, status: "pending" },
+    result: { status: "pending" },
   });
 });
 

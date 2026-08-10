@@ -7,7 +7,6 @@ import { parsePublicStatusSnapshot } from "../domain/public-contract";
 import { D1StatusRepository } from "../persistence/D1StatusRepository";
 import { sha256Hex } from "../../../utils/crypto";
 import { getEnvNumber } from "../../../utils/env";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
 
 export class StatusPublicationConsumer implements OutboxConsumer {
   readonly consumerName = "status.publication.v1";
@@ -142,27 +141,6 @@ export class StatusPublicationConsumer implements OutboxConsumer {
          active_publication_id = excluded.active_publication_id,
          updated_at = excluded.updated_at`
     ).bind(publicationId, nowIso);
-    if (isContractMode(this.env)) {
-      await publicationState.run();
-      return;
-    }
-    await this.env.DB.batch([
-      publicationState,
-      this.env.DB.prepare(
-          `INSERT INTO public_status_snapshots
-           (id, snapshot_json, etag, generated_at, expires_at, dirty_at,
-            refresh_after, refreshing, last_error)
-           VALUES (1, ?, ?, ?, ?, NULL, NULL, 0, NULL)
-           ON CONFLICT(id) DO UPDATE SET
-             snapshot_json = excluded.snapshot_json, etag = excluded.etag,
-             generated_at = excluded.generated_at, expires_at = excluded.expires_at,
-             dirty_at = NULL, refresh_after = NULL, refreshing = 0, last_error = NULL`
-        ).bind(
-          payloadJson,
-          etag,
-          generatedAt,
-          new Date(now.getTime() + ttlSeconds * 1000).toISOString()
-        ),
-    ]);
+    await publicationState.run();
   }
 }

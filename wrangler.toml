@@ -33,8 +33,7 @@ FREE_MODE = "true"
 # 前端默认与 API 同源。确需独立管理域名时使用逗号分隔的完整 Origin；
 # 凭据化 CORS 忽略 `*`，避免把 HttpOnly 管理会话暴露给任意站点。
 # ALLOWED_ORIGINS = "https://console.example.com"
-# expand：兼容回填、v1 路由和旧读/双写仍可用；contract：只运行 v2/规范模型。
-DATA_COMPATIBILITY_MODE = "expand"
+
 AGENT_ENROLLMENT_TTL_MINUTES = "30"
 NOTIFICATION_KEK_VERSION = "1"
 NOTIFICATION_KEK_ROTATION_ENABLED = "false"

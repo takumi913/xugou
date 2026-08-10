@@ -6,7 +6,7 @@ import {
   shouldRunDailyExpiryCheck,
 } from "./expiry-task";
 import { getEnvNumber } from "../utils/env";
-import { backfillLegacyAgentCredentials } from "../modules/agents/persistence/D1AgentCredentialStore";
+
 import {
   backfillNotificationSecrets,
   rotateNotificationSecretKek,
@@ -18,22 +18,13 @@ import {
 } from "../platform/security/SecurityStore";
 import type { Bindings } from "../models/db";
 import { writeStructuredLog } from "../platform/observability/StructuredLogger";
-import { backfillLegacyAgentHistory } from "../platform/migrations/LegacyAgentHistoryBackfill";
-import { backfillLegacyAgentModel } from "../platform/migrations/LegacyAgentModelBackfill";
-import { backfillLegacyAgentCurrentMetrics } from "../platform/migrations/LegacyAgentCurrentMetricsBackfill";
-import { backfillLegacyStatusPage } from "../platform/migrations/LegacyStatusPageBackfill";
-import { backfillLegacyNotificationRules } from "../platform/migrations/LegacyNotificationRulesBackfill";
-import { backfillLegacyNotificationTemplates } from "../platform/migrations/LegacyNotificationTemplatesBackfill";
-import { backfillLegacyMonitorHistory } from "../platform/migrations/LegacyMonitorHistoryBackfill";
-import { backfillLegacyMonitorDailyStats } from "../platform/migrations/LegacyMonitorDailyStatsBackfill";
-import { backfillLegacyMonitorModel } from "../platform/migrations/LegacyMonitorModelBackfill";
-import { backfillLegacyNotificationHistory } from "../platform/migrations/LegacyNotificationHistoryBackfill";
+
 import {
   archiveRawSamples,
   cleanupVerifiedRawSamples,
   shouldRunRawSampleArchive,
 } from "../platform/archive/RawSampleArchive";
-import { isContractMode } from "../platform/compatibility/CompatibilityMode";
+
 
 const DEFAULT_AGENT_ROLLUP_RETENTION_DAYS = 30;
 const DEFAULT_MONITOR_ROLLUP_RETENTION_DAYS = 90;
@@ -47,308 +38,6 @@ const DEFAULT_NOTIFICATION_EVENT_RETENTION_DAYS = 90;
 const DEFAULT_API_COMPATIBILITY_HIT_RETENTION_DAYS = 400;
 const SECURITY_RATE_LIMIT_RETENTION_DAYS = 7;
 
-// Exported for the isolated SQL-Export rehearsal harness. The production
-// scheduler invokes the same function below, keeping rehearsal and runtime on
-// one backfill implementation.
-export async function runLegacyBackfills(env: Bindings) {
-  // 每次 Cron 小批量回填旧 Agent 明文 Token；同一 Worker 内执行，迁移期间旧配置保持有效。
-  try {
-    const agentModelBackfill = await backfillLegacyAgentModel(env);
-    if (agentModelBackfill.migrated > 0 || agentModelBackfill.anomalies > 0) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_agent_model_backfill",
-        result: agentModelBackfill.remaining ? "deferred" : "success",
-        fields: agentModelBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_agent_model_backfill",
-      result: "failure",
-      errorCode: "LEGACY_AGENT_MODEL_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const metricsBackfill = await backfillLegacyAgentCurrentMetrics(env);
-    if (
-      metricsBackfill.migrated > 0 ||
-      Number("reconciled" in metricsBackfill ? metricsBackfill.reconciled : 0) > 0 ||
-      metricsBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_agent_current_metrics_backfill",
-        result: metricsBackfill.remaining ? "deferred" : "success",
-        fields: metricsBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_agent_current_metrics_backfill",
-      result: "failure",
-      errorCode: "LEGACY_AGENT_CURRENT_METRICS_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const statusPageBackfill = await backfillLegacyStatusPage(env);
-    if (
-      statusPageBackfill.migrated > 0 ||
-      Number(
-        "reconciled" in statusPageBackfill
-          ? statusPageBackfill.reconciled
-          : 0
-      ) > 0 ||
-      statusPageBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_status_page_backfill",
-        result: statusPageBackfill.remaining ? "deferred" : "success",
-        fields: statusPageBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_status_page_backfill",
-      result: "failure",
-      errorCode: "LEGACY_STATUS_PAGE_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const notificationRulesBackfill = await backfillLegacyNotificationRules(env);
-    if (
-      notificationRulesBackfill.migrated > 0 ||
-      Number(
-        "reconciled" in notificationRulesBackfill
-          ? notificationRulesBackfill.reconciled
-          : 0
-      ) > 0 ||
-      notificationRulesBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_notification_rules_backfill",
-        result: notificationRulesBackfill.remaining ? "deferred" : "success",
-        fields: notificationRulesBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_notification_rules_backfill",
-      result: "failure",
-      errorCode: "LEGACY_NOTIFICATION_RULES_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const notificationTemplatesBackfill =
-      await backfillLegacyNotificationTemplates(env);
-    if (
-      notificationTemplatesBackfill.migrated > 0 ||
-      Number(
-        "reconciled" in notificationTemplatesBackfill
-          ? notificationTemplatesBackfill.reconciled
-          : 0
-      ) > 0 ||
-      notificationTemplatesBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_notification_templates_backfill",
-        result: notificationTemplatesBackfill.remaining
-          ? "deferred"
-          : "success",
-        fields: notificationTemplatesBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_notification_templates_backfill",
-      result: "failure",
-      errorCode: "LEGACY_NOTIFICATION_TEMPLATES_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const credentialBackfill = await backfillLegacyAgentCredentials(env, 25);
-    if (credentialBackfill.migrated > 0) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "agent_credential_backfill",
-        result: credentialBackfill.remaining ? "deferred" : "success",
-        fields: credentialBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "agent_credential_backfill",
-      result: "failure",
-      errorCode: "AGENT_CREDENTIAL_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const monitorModelBackfill = await backfillLegacyMonitorModel(env);
-    if (
-      monitorModelBackfill.migrated > 0 ||
-      Number(
-        "reconciled" in monitorModelBackfill
-          ? monitorModelBackfill.reconciled
-          : 0
-      ) > 0 ||
-      monitorModelBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_monitor_model_backfill",
-        result: monitorModelBackfill.remaining ? "deferred" : "success",
-        fields: monitorModelBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_monitor_model_backfill",
-      result: "failure",
-      errorCode: "LEGACY_MONITOR_MODEL_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const monitorHistoryBackfill = await backfillLegacyMonitorHistory(env);
-    if (
-      monitorHistoryBackfill.migrated > 0 ||
-      monitorHistoryBackfill.deduplicated > 0 ||
-      monitorHistoryBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_monitor_history_backfill",
-        result: monitorHistoryBackfill.remaining ? "deferred" : "success",
-        fields: monitorHistoryBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_monitor_history_backfill",
-      result: "failure",
-      errorCode: "LEGACY_MONITOR_HISTORY_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const monitorDailyBackfill = await backfillLegacyMonitorDailyStats(env);
-    if (
-      monitorDailyBackfill.migrated > 0 ||
-      monitorDailyBackfill.deduplicated > 0 ||
-      monitorDailyBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_monitor_daily_stats_backfill",
-        result: monitorDailyBackfill.remaining ? "deferred" : "success",
-        fields: monitorDailyBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_monitor_daily_stats_backfill",
-      result: "failure",
-      errorCode: "LEGACY_MONITOR_DAILY_STATS_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const historyBackfill = await backfillLegacyAgentHistory(env);
-    if (
-      historyBackfill.migrated > 0 ||
-      historyBackfill.deduplicated > 0 ||
-      historyBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_agent_history_backfill",
-        result: historyBackfill.remaining ? "deferred" : "success",
-        fields: historyBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_agent_history_backfill",
-      result: "failure",
-      errorCode: "LEGACY_AGENT_HISTORY_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const notificationBackfill = await backfillNotificationSecrets(env, 10);
-    if (notificationBackfill.migrated > 0) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "notification_secret_backfill",
-        result: notificationBackfill.remaining ? "deferred" : "success",
-        fields: notificationBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "notification_secret_backfill",
-      result: "failure",
-      errorCode: "NOTIFICATION_SECRET_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-  try {
-    const notificationHistoryBackfill =
-      await backfillLegacyNotificationHistory(env);
-    if (
-      notificationHistoryBackfill.migrated > 0 ||
-      notificationHistoryBackfill.deduplicated > 0 ||
-      notificationHistoryBackfill.anomalies > 0
-    ) {
-      writeStructuredLog(env, {
-        service: "migration",
-        operation: "legacy_notification_history_backfill",
-        result: notificationHistoryBackfill.remaining ? "deferred" : "success",
-        fields: notificationHistoryBackfill,
-      });
-    }
-  } catch (error) {
-    writeStructuredLog(env, {
-      service: "migration",
-      operation: "legacy_notification_history_backfill",
-      result: "failure",
-      errorCode: "LEGACY_NOTIFICATION_HISTORY_BACKFILL_FAILED",
-      error,
-    });
-  }
-
-}
 
 // 统一的定时任务处理函数
 export const runScheduledTasks = async (
@@ -359,8 +48,6 @@ export const runScheduledTasks = async (
   try {
     const now = new Date();
 
-    // Contract Worker 不再读取任何 Legacy 源表；回填与追赶只在 Expand 阶段运行。
-    if (!isContractMode(env)) await runLegacyBackfills(env);
 
     try {
       const notificationRotation = await rotateNotificationSecretKek(env, 10);
@@ -559,9 +246,6 @@ export async function cleanupOldRecords(env: Bindings) {
     env.DB.prepare(`DELETE FROM processed_events WHERE processed_at < ?`).bind(
       processedEventCutoff
     ),
-    env.DB.prepare(
-      `DELETE FROM queue_failures WHERE updated_at < ? AND status <> 'open'`
-    ).bind(queueFailureCutoff),
     env.DB.prepare(
       `DELETE FROM notification_events WHERE updated_at < ? AND status = 'completed'`
     ).bind(notificationEventCutoff),

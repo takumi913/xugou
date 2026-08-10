@@ -60,28 +60,13 @@ export class OutboxDispatcher {
     if (supported.length === 0) {
       const now = new Date().toISOString();
       const errorCode = "UNSUPPORTED_OUTBOX_EVENT_TYPE";
-      await this.env.DB.batch([
-        this.env.DB.prepare(
-          `UPDATE domain_outbox
-           SET status = 'failed', attempts = attempts + 1, last_error = ?, updated_at = ?
-           WHERE event_id = ?`
-        ).bind(`${errorCode}:${event.event_type}`.slice(0, 2048), now, event.event_id),
-        this.env.DB.prepare(
-          `INSERT OR IGNORE INTO queue_failures
-           (failure_id, queue_name, message_id, message_json, source_kind,
-            source_id, delivery_attempts, last_error, status, replay_count,
-            created_at, updated_at)
-           VALUES (?, 'xugou-jobs', ?, ?, 'outbox', ?, 1, ?, 'open', 0, ?, ?)`
-        ).bind(
-          `unsupported-outbox:${event.event_id}`,
-          event.event_id,
-          JSON.stringify({ version: 1, kind: "outbox", event_id: event.event_id }),
-          event.event_id,
-          errorCode,
-          now,
-          now
-        ),
-      ]);
+      await this.env.DB.prepare(
+        `UPDATE domain_outbox
+         SET status = 'failed', attempts = attempts + 1, last_error = ?, updated_at = ?
+         WHERE event_id = ?`
+      )
+        .bind(`${errorCode}:${event.event_type}`.slice(0, 2048), now, event.event_id)
+        .run();
       const error = new Error(`Unsupported outbox event type: ${event.event_type}`);
       error.name = "PermanentOutboxEventError";
       throw error;

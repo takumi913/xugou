@@ -1,0 +1,10 @@
+--- backend/scripts/queue-processing.test.ts
++++ backend/scripts/queue-processing.test.ts
+@@ -87,2 +87,7 @@
+   );
++  CREATE TABLE migration_anomalies (
++    id INTEGER PRIMARY KEY AUTOINCREMENT, migration_key TEXT NOT NULL,
++    source_table TEXT NOT NULL, source_pk TEXT NOT NULL, error_code TEXT NOT NULL,
++    raw_value_json TEXT NOT NULL, status TEXT NOT NULL
++  );
+   CREATE TABLE domain_outbox (

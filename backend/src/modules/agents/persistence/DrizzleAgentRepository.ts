@@ -1,17 +1,11 @@
 import { and, asc, eq, gt, isNull, notExists, or } from "drizzle-orm";
 import type { AppDatabase } from "../../../config/db";
 import type { Bindings } from "../../../models/db";
-import {
-  canonicalMigrationJson,
-  migrationSha256Hex,
-} from "../../../platform/migrations/MigrationEncoding";
-import { legacyAgentModelCoverage } from "../../../platform/migrations/LegacyAgentModelBackfill";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 import {
   agentCredentials,
   agentReports,
   agents,
-  asyncJobs,
 } from "../../../db/schema";
 import type { AgentRepositoryPort } from "../application/AgentUseCases";
 import type {
@@ -195,66 +189,30 @@ export class DrizzleAgentRepository implements AgentRepositoryPort {
     private readonly db: AppDatabase
   ) {}
 
-  private async targetReady() {
-    return (
-      isContractMode(this.env) ||
-      (await legacyAgentModelCoverage(this.env)).read_ready
-    );
-  }
-
   async listPage(input: Parameters<AgentRepositoryPort["listPage"]>[0]) {
     const afterSortOrder = input.after?.sortOrder ?? Number.MIN_SAFE_INTEGER;
     const afterId = input.after?.id ?? 0;
-    if (await this.targetReady()) {
-      const rows = await this.env.DB.prepare(
-        `SELECT ${targetColumns}
-         FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
-         WHERE n.deleted_at_ms IS NULL
-           AND (n.sort_order > ? OR (n.sort_order = ? AND n.id > ?))
-         ORDER BY n.sort_order ASC, n.id ASC LIMIT ?`
-      )
-        .bind(afterSortOrder, afterSortOrder, afterId, input.limit)
-        .all<TargetAgentRow>();
-      return rows.results.map(targetView);
-    }
-    const conditions = [isNull(agents.deleted_at)];
-    if (input.after !== undefined) {
-      conditions.push(
-        or(
-          gt(agents.sort_order, input.after.sortOrder),
-          and(
-            eq(agents.sort_order, input.after.sortOrder),
-            gt(agents.id, input.after.id)
-          )
-        )!
-      );
-    }
-    const rows = await this.db
-      .select()
-      .from(agents)
-      .where(and(...conditions))
-      .orderBy(asc(agents.sort_order), asc(agents.id))
-      .limit(input.limit);
-    return rows.map(toView);
+    const rows = await this.env.DB.prepare(
+      `SELECT ${targetColumns}
+       FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
+       WHERE n.deleted_at_ms IS NULL
+         AND (n.sort_order > ? OR (n.sort_order = ? AND n.id > ?))
+       ORDER BY n.sort_order ASC, n.id ASC LIMIT ?`
+    )
+      .bind(afterSortOrder, afterSortOrder, afterId, input.limit)
+      .all<TargetAgentRow>();
+    return rows.results.map(targetView);
   }
 
   async findById(id: number) {
-    if (await this.targetReady()) {
-      const row = await this.env.DB.prepare(
-        `SELECT ${targetColumns}
-         FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
-         WHERE n.id = ? AND n.deleted_at_ms IS NULL LIMIT 1`
-      )
-        .bind(id)
-        .first<TargetAgentRow>();
-      return row ? targetView(row) : null;
-    }
-    const rows = await this.db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.id, id), isNull(agents.deleted_at)))
-      .limit(1);
-    return rows[0] ? toView(rows[0]) : null;
+    const row = await this.env.DB.prepare(
+      `SELECT ${targetColumns}
+       FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
+       WHERE n.id = ? AND n.deleted_at_ms IS NULL LIMIT 1`
+    )
+      .bind(id)
+      .first<TargetAgentRow>();
+    return row ? targetView(row) : null;
   }
 
   async update(id: number, input: AgentMutation) {
@@ -298,8 +256,8 @@ export class DrizzleAgentRepository implements AgentRepositoryPort {
       auto_update: input.auto_update ?? current.auto_update,
       updated_at: now,
     };
-    const ipJson = canonicalMigrationJson(next.ip_addresses);
-    const tagsJson = canonicalMigrationJson(next.tags);
+    const ipJson = "";
+    const tagsJson = "";
     const statements = [
       this.env.DB.prepare(
         `INSERT INTO agent_nodes
@@ -372,56 +330,7 @@ export class DrizzleAgentRepository implements AgentRepositoryPort {
         nowMs
       ),
     ];
-    if (!isContractMode(this.env)) {
-      statements.unshift(
-        this.env.DB.prepare(
-          `UPDATE agents SET name = ?, hostname = ?, ip_addresses = ?, os = ?,
-           version = ?, status = ?, collect_interval = ?, report_interval = ?,
-           group_name = ?, tags = ?, auto_update = ?, is_hidden = ?, price = ?,
-           currency = ?, billing_cycle = ?, expire_date = ?, auto_renewal = ?,
-           traffic_limit_gb = ?, traffic_reset_day = ?, traffic_calc_type = ?,
-           updated_at = ? WHERE id = ? AND deleted_at IS NULL`
-        ).bind(
-          next.name,
-          next.hostname,
-          ipJson,
-          next.os,
-          next.version,
-          next.status,
-          next.collect_interval_seconds,
-          next.report_interval_seconds,
-          next.group_name,
-          next.tags.join(","),
-          next.auto_update ? 1 : 0,
-          next.is_hidden ? 1 : 0,
-          next.price,
-          next.currency,
-          next.billing_cycle,
-          next.expire_date,
-          next.auto_renewal ? 1 : 0,
-          next.traffic_limit_gb,
-          next.traffic_reset_day,
-          next.traffic_calc_type,
-          now,
-          id
-        )
-      );
-      statements.push(this.env.DB.prepare(
-        `INSERT INTO legacy_id_map
-         (source_table, source_id, target_table, target_id, payload_checksum,
-          created_at, updated_at)
-         VALUES ('agents', ?, 'agent_nodes', ?, ?, ?, ?)
-         ON CONFLICT(source_table, source_id) DO UPDATE SET
-          target_table = excluded.target_table, target_id = excluded.target_id,
-          payload_checksum = excluded.payload_checksum, updated_at = excluded.updated_at`
-      ).bind(
-        String(id),
-        String(id),
-        await migrationSha256Hex(canonicalMigrationJson(next)),
-        now,
-        now
-      ));
-    }
+
     await this.env.DB.batch(statements);
     return next;
   }
@@ -453,39 +362,8 @@ export class DrizzleAgentRepository implements AgentRepositoryPort {
       ).bind(nowMs, nowMs, id),
     ];
     const nodeIndex = 3;
-    if (!isContractMode(this.env)) {
-      statements.unshift(
-        this.env.DB.prepare(
-          `DELETE FROM status_page_agents WHERE agent_id = ?`
-        ).bind(id),
-        this.env.DB.prepare(
-          `DELETE FROM legacy_id_map
-           WHERE (source_table = 'notification_settings' AND source_id IN (
-                    SELECT CAST(id AS TEXT) FROM notification_settings
-                    WHERE target_type = 'agent' AND target_id = ?
-                  ))
-              OR (source_table = 'notification_settings_channels'
-                  AND CAST(substr(source_id, 1, instr(source_id, ':') - 1) AS INTEGER) IN (
-                    SELECT id FROM notification_settings
-                    WHERE target_type = 'agent' AND target_id = ?
-                  ))`
-        ).bind(id, id),
-        this.env.DB.prepare(
-          `DELETE FROM notification_settings
-           WHERE target_type = 'agent' AND target_id = ?`
-        ).bind(id)
-      );
-      statements.push(
-        this.env.DB.prepare(
-          `UPDATE agents SET status = 'inactive', token = ?, deleted_at = ?,
-           next_offline_at = NULL, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL`
-        ).bind(`deleted:${id}:${crypto.randomUUID()}`, now, now, id)
-      );
-    }
     const result = await this.env.DB.batch(statements);
-    const offset = isContractMode(this.env) ? 0 : 3;
-    return result[nodeIndex + offset].meta.changes === 1;
+    return result[nodeIndex].meta.changes === 1;
   }
 
   async authenticateCredential(input: {
@@ -510,168 +388,41 @@ export class DrizzleAgentRepository implements AgentRepositoryPort {
         .update(agentCredentials)
         .set({ last_used_at: input.now, updated_at: input.now })
         .where(eq(agentCredentials.id, credentials[0].id));
-    } else if (!isContractMode(this.env)) {
-      // Expand 兼容：只有完全缺少 Credential 行的旧 Agent 才读取一次旧明文列。
-      const legacy = await this.db
-        .select({ id: agents.id })
-        .from(agents)
-        .where(
-          and(
-            eq(agents.token, input.token),
-            isNull(agents.deleted_at),
-            notExists(
-              this.db
-                .select({ id: agentCredentials.id })
-                .from(agentCredentials)
-                .where(eq(agentCredentials.agent_id, agents.id))
-            )
-          )
-        )
-        .limit(1);
-      agentId = legacy[0]?.id;
-      if (agentId !== undefined) {
-        await this.db
-          .insert(agentCredentials)
-          .values({
-            agent_id: agentId,
-            token_digest: input.digest,
-            token_hint: tokenHint(input.token),
-            last_used_at: input.now,
-            revoked_at: null,
-            created_at: input.now,
-            updated_at: input.now,
-          })
-          .onConflictDoNothing();
-      }
     }
-
     if (agentId === undefined) return null;
-    if (isContractMode(this.env)) {
-      const row = await this.env.DB.prepare(
-        `SELECT n.id, n.name, r.status, n.collect_interval_ms,
-                n.report_interval_ms, n.auto_update
-         FROM agent_nodes n
-         JOIN agent_runtime r ON r.agent_id = n.id
-         WHERE n.id = ? AND n.deleted_at_ms IS NULL LIMIT 1`
-      )
-        .bind(agentId)
-        .first<{
-          id: number;
-          name: string;
-          status: string;
-          collect_interval_ms: number;
-          report_interval_ms: number;
-          auto_update: number;
-        }>();
-      return row
-        ? {
-            id: row.id,
-            name: row.name,
-            status: row.status,
-            collect_interval_seconds: Math.max(
-              1,
-              Math.floor(row.collect_interval_ms / 1000)
-            ),
-            report_interval_seconds: Math.max(
-              1,
-              Math.floor(row.report_interval_ms / 1000)
-            ),
-            auto_update: row.auto_update === 1,
-          }
-        : null;
-    }
-    const rows = await this.db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.id, agentId), isNull(agents.deleted_at)))
-      .limit(1);
-    return rows[0] ? toAuthenticated(rows[0]) : null;
+    const row = await this.env.DB.prepare(
+      `SELECT n.id, n.name, r.status, n.collect_interval_ms,
+              n.report_interval_ms, n.auto_update
+       FROM agent_nodes n
+       JOIN agent_runtime r ON r.agent_id = n.id
+       WHERE n.id = ? AND n.deleted_at_ms IS NULL LIMIT 1`
+    )
+      .bind(agentId)
+      .first<{
+        id: number;
+        name: string;
+        status: string;
+        collect_interval_ms: number;
+        report_interval_ms: number;
+        auto_update: number;
+      }>();
+    return row
+      ? {
+          id: row.id,
+          name: row.name,
+          status: row.status,
+          collect_interval_seconds: Math.max(
+            1,
+            Math.floor(row.collect_interval_ms / 1000)
+          ),
+          report_interval_seconds: Math.max(
+            1,
+            Math.floor(row.report_interval_ms / 1000)
+          ),
+          auto_update: row.auto_update === 1,
+        }
+      : null;
   }
 
-  async createReportJob(input: {
-    agentId: number;
-    report: AgentReportCommand;
-    payloadDigest: string;
-    receivedAt: string;
-  }) {
-    const existing = await this.db
-      .select({
-        agent_id: agentReports.agent_id,
-        payload_digest: agentReports.payload_digest,
-      })
-      .from(agentReports)
-      .where(eq(agentReports.report_id, input.report.report_id))
-      .limit(1);
-    const jobId = `agent-report:${input.report.report_id}`;
-    if (existing[0]) {
-      return {
-        disposition:
-          existing[0].agent_id === input.agentId &&
-          existing[0].payload_digest === input.payloadDigest
-            ? ("duplicate" as const)
-            : ("conflict" as const),
-        jobId,
-      };
-    }
 
-    await this.db.batch([
-      this.db
-        .insert(agentReports)
-        .values({
-          report_id: input.report.report_id,
-          agent_id: input.agentId,
-          payload_digest: input.payloadDigest,
-          payload_json: JSON.stringify(input.report),
-          sample_count: input.report.samples.length,
-          status: "pending",
-          received_at: input.receivedAt,
-          processed_at: null,
-          last_error: null,
-          created_at: input.receivedAt,
-          updated_at: input.receivedAt,
-        })
-        .onConflictDoNothing(),
-      this.db
-        .insert(asyncJobs)
-        .values({
-          id: jobId,
-          kind: "agent.report.process",
-          dedup_key: jobId,
-          aggregate_type: "agent_report",
-          aggregate_id: input.report.report_id,
-          payload_json: JSON.stringify({ report_id: input.report.report_id }),
-          status: "pending",
-          attempts: 0,
-          max_attempts: 8,
-          available_at: input.receivedAt,
-          created_at: input.receivedAt,
-          updated_at: input.receivedAt,
-        })
-        .onConflictDoNothing(),
-    ]);
-
-    const persisted = await this.db
-      .select({
-        agent_id: agentReports.agent_id,
-        payload_digest: agentReports.payload_digest,
-      })
-      .from(agentReports)
-      .where(eq(agentReports.report_id, input.report.report_id))
-      .limit(1);
-    return {
-      disposition:
-        persisted[0]?.agent_id === input.agentId &&
-        persisted[0]?.payload_digest === input.payloadDigest
-          ? ("created" as const)
-          : ("conflict" as const),
-      jobId,
-    };
-  }
-
-  async markJobPublished(jobId: string, publishedAt: string) {
-    await this.db
-      .update(asyncJobs)
-      .set({ updated_at: publishedAt })
-      .where(and(eq(asyncJobs.id, jobId), eq(asyncJobs.status, "pending")));
-  }
 }

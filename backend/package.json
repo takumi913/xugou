@@ -20,10 +20,6 @@
     "migration:manifest": "tsx tooling/migrations/manifest.ts",
     "operations:verify-readiness": "tsx tooling/operations/verify-release-readiness.ts",
     "wrangler:render-config": "tsx tooling/wrangler/render-production-config.ts",
-    "contract:prepare": "tsx tooling/contract/prepare-release.ts",
-    "contract:render": "tsx tooling/contract/render-migration.ts",
-    "contract:authorize": "tsx tooling/contract/authorize-release.ts",
-    "test:contract-release": "tsx scripts/contract-release.test.ts && tsx scripts/contract-authorization.test.ts",
     "lint": "eslint src tooling scripts test-runtime vitest.config.ts --max-warnings 0",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.tooling.json"
   },

@@ -1,10 +1,9 @@
-import type { JobPublisherPort } from "../../modules/agents/application/AgentUseCases";
 import {
   QUEUE_MESSAGE_VERSION,
   type XugouQueueMessage,
 } from "./messages";
 
-export class QueueJobPublisher implements JobPublisherPort {
+export class QueueJobPublisher {
   constructor(
     private readonly queue: Cloudflare.Env["XUGOU_JOBS"]
   ) {}

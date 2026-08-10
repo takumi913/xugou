@@ -244,7 +244,7 @@ monitorsV2.post("/:id/check", async (c) => {
       title: "Monitor not found",
     });
   }
-  return c.json({ data: { job_id: scheduled.jobId, status: "pending" as const } }, 202);
+  return c.json({ data: { status: "pending" } }, 202);
 });
 
 export { monitorsV2 };

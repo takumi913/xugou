@@ -1,11 +1,11 @@
 import { createDb } from "../../config/db";
 import type { Bindings } from "../../models/db";
-import { QueueJobPublisher } from "../../platform/queues/QueuePublisher";
 import { ApplicationProblem } from "../../shared/errors/ApplicationProblem";
 import { hmacSha256Hex, sha256Hex } from "../../utils/crypto";
 import { shouldTriggerAgentUpdate } from "../../utils/agentConfig";
 import { AgentUseCases } from "./application/AgentUseCases";
 import { DrizzleAgentRepository } from "./persistence/DrizzleAgentRepository";
+import { AgentReportSyncProcessor } from "./queue/AgentReportSyncProcessor";
 
 const MIN_AGENT_TOKEN_PEPPER_LENGTH = 32;
 
@@ -31,7 +31,7 @@ export function createAgentUseCases(env: Bindings) {
         return sha256Hex(JSON.stringify(report));
       },
     },
-    new QueueJobPublisher(env.XUGOU_JOBS),
+    new AgentReportSyncProcessor(env),
     {
       shouldUpdate({ autoUpdate, currentVersion }) {
         return shouldTriggerAgentUpdate(

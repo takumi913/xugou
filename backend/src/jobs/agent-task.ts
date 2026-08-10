@@ -2,8 +2,7 @@ import type { Bindings } from "../models/db";
 import { writeStructuredLog } from "../platform/observability/StructuredLogger";
 import { QueueJobPublisher } from "../platform/queues/QueuePublisher";
 import { getEnvNumber } from "../utils/env";
-import { legacyAgentModelCoverage } from "../platform/migrations/LegacyAgentModelBackfill";
-import { isContractMode } from "../platform/compatibility/CompatibilityMode";
+
 
 const DEFAULT_AGENT_OFFLINE_BATCH_SIZE = 50;
 
@@ -27,39 +26,26 @@ export async function checkAgentsStatus(env: Bindings) {
   );
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
-  const contractMode = isContractMode(env);
-  const targetReady =
-    contractMode || (await legacyAgentModelCoverage(env)).read_ready;
   const { results } = await env.DB.prepare(
-    targetReady
-      ? `SELECT node.id, runtime.updated_at_ms, runtime.last_seen_at_ms,
-                runtime.next_offline_at_ms
-         FROM agent_nodes node
-         JOIN agent_runtime runtime ON runtime.agent_id = node.id
-         WHERE runtime.status = 'active' AND node.deleted_at_ms IS NULL
-           AND runtime.next_offline_at_ms <= ?
-         ORDER BY runtime.next_offline_at_ms ASC LIMIT ?`
-      : `SELECT id, updated_at, last_seen_at, next_offline_at
-         FROM agents
-         WHERE status = 'active' AND deleted_at IS NULL AND next_offline_at <= ?
-         ORDER BY next_offline_at ASC LIMIT ?`
+    `SELECT node.id, runtime.updated_at_ms, runtime.last_seen_at_ms,
+              runtime.next_offline_at_ms
+       FROM agent_nodes node
+       JOIN agent_runtime runtime ON runtime.agent_id = node.id
+       WHERE runtime.status = 'active' AND node.deleted_at_ms IS NULL
+         AND runtime.next_offline_at_ms <= ?
+       ORDER BY runtime.next_offline_at_ms ASC LIMIT ?`
   )
-    .bind(targetReady ? nowMs : now, batchSize)
+    .bind(nowMs, batchSize)
     .all<AgentResult>();
   const publisher = new QueueJobPublisher(env.XUGOU_JOBS);
 
   for (const agent of results) {
-    const deadline = targetReady
-      ? String(agent.next_offline_at_ms ?? nowMs)
-      : agent.next_offline_at ?? now;
-    const lastSeenAt = targetReady
-      ? new Date(agent.last_seen_at_ms ?? agent.updated_at_ms ?? nowMs).toISOString()
-      : agent.last_seen_at ?? agent.updated_at ?? now;
+    const deadline = String(agent.next_offline_at_ms ?? nowMs);
+    const lastSeenAt = new Date(agent.last_seen_at_ms ?? agent.updated_at_ms ?? nowMs).toISOString();
     const eventId = `agent.status.changed:${agent.id}:offline:${deadline}`;
     const statements = [
       env.DB.prepare(
-        contractMode
-          ? `INSERT OR IGNORE INTO domain_outbox
+        `INSERT OR IGNORE INTO domain_outbox
          (event_id, event_type, aggregate_type, aggregate_id, payload_json,
           status, attempts, available_at, created_at, updated_at)
          SELECT ?, 'agent.status.changed', 'agent', CAST(runtime.agent_id AS TEXT), ?,
@@ -68,14 +54,6 @@ export async function checkAgentsStatus(env: Bindings) {
          JOIN agent_nodes node ON node.id = runtime.agent_id
          WHERE runtime.agent_id = ? AND runtime.status = 'active'
            AND node.deleted_at_ms IS NULL AND runtime.next_offline_at_ms <= ?`
-          : `INSERT OR IGNORE INTO domain_outbox
-         (event_id, event_type, aggregate_type, aggregate_id, payload_json,
-          status, attempts, available_at, created_at, updated_at)
-         SELECT ?, 'agent.status.changed', 'agent', CAST(id AS TEXT), ?,
-                'pending', 0, ?, ?, ?
-         FROM agents
-         WHERE id = ? AND status = 'active' AND deleted_at IS NULL
-           AND next_offline_at <= ?`
       ).bind(
         eventId,
         JSON.stringify({
@@ -89,7 +67,7 @@ export async function checkAgentsStatus(env: Bindings) {
         now,
         now,
         agent.id,
-        contractMode ? nowMs : now
+        nowMs
       ),
       env.DB.prepare(
         `UPDATE agent_runtime SET status = 'inactive',
@@ -98,16 +76,6 @@ export async function checkAgentsStatus(env: Bindings) {
          WHERE agent_id = ? AND status = 'active' AND next_offline_at_ms <= ?`
       ).bind(nowMs, nowMs, agent.id, nowMs),
     ];
-    if (!contractMode) {
-      statements.push(
-        env.DB.prepare(
-          `UPDATE agents SET status = 'inactive',
-           last_state_changed_at = ?, next_offline_at = NULL
-           WHERE id = ? AND status = 'active' AND deleted_at IS NULL
-             AND next_offline_at <= ?`
-        ).bind(now, agent.id, now)
-      );
-    }
     await env.DB.batch(statements);
     const pending = await env.DB.prepare(
       `SELECT event_id FROM domain_outbox

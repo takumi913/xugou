@@ -21,16 +21,6 @@ export interface AgentRepositoryPort {
     digest: string;
     now: string;
   }): Promise<AuthenticatedAgent | null>;
-  createReportJob(input: {
-    agentId: number;
-    report: AgentReportCommand;
-    payloadDigest: string;
-    receivedAt: string;
-  }): Promise<{
-    disposition: "created" | "duplicate" | "conflict";
-    jobId: string;
-  }>;
-  markJobPublished(jobId: string, publishedAt: string): Promise<void>;
 }
 
 export interface AgentCredentialDigestPort {
@@ -41,8 +31,8 @@ export interface ReportDigestPort {
   digest(report: AgentReportCommand): Promise<string>;
 }
 
-export interface JobPublisherPort {
-  publishJob(jobId: string): Promise<void>;
+export interface SyncReportProcessorPort {
+  process(agentId: number, report: AgentReportCommand): Promise<{ outcome: string }>;
 }
 
 export interface AgentUpdatePolicyPort {
@@ -57,7 +47,7 @@ export class AgentUseCases {
     private readonly repository: AgentRepositoryPort,
     private readonly credentialDigest: AgentCredentialDigestPort,
     private readonly reportDigest: ReportDigestPort,
-    private readonly jobPublisher: JobPublisherPort,
+    private readonly syncReportProcessor: SyncReportProcessorPort,
     private readonly updatePolicy: AgentUpdatePolicyPort
   ) {}
 
@@ -149,35 +139,20 @@ export class AgentUseCases {
       );
     }
 
-    const accepted = await this.repository.createReportJob({
-      agentId: agent.id,
-      report,
-      payloadDigest: await this.reportDigest.digest(report),
-      receivedAt,
-    });
-    if (accepted.disposition === "conflict") {
-      throw new ApplicationProblem(
-        409,
-        "REPORT_ID_REUSED",
-        "Report id was already used with different content"
-      );
-    }
-
     try {
-      await this.jobPublisher.publishJob(accepted.jobId);
-      await this.repository.markJobPublished(accepted.jobId, receivedAt);
+      await this.syncReportProcessor.process(agent.id, report);
     } catch (error) {
       throw new ApplicationProblem(
-        503,
-        "REPORT_QUEUE_UNAVAILABLE",
-        "Report is durable and awaiting queue delivery"
+        500,
+        "REPORT_PROCESSING_FAILED",
+        "Failed to process agent report: " + (error instanceof Error ? error.message : String(error))
       );
     }
 
     return {
       report_id: report.report_id,
       accepted: true,
-      duplicate: accepted.disposition === "duplicate",
+      duplicate: false,
       config: {
         collect_interval_seconds: agent.collect_interval_seconds,
         report_interval_seconds: agent.report_interval_seconds,

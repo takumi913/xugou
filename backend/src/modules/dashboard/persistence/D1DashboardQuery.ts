@@ -1,9 +1,6 @@
 import type { Bindings } from "../../../models/db";
 import type { Metrics } from "../../../models/agent";
-import { legacyMonitorModelCoverage } from "../../../platform/migrations/LegacyMonitorModelBackfill";
-import { legacyAgentModelCoverage } from "../../../platform/migrations/LegacyAgentModelBackfill";
-import { legacyAgentCurrentMetricsCoverage } from "../../../platform/migrations/LegacyAgentCurrentMetricsBackfill";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 import type { DashboardQueryPort } from "../application/DashboardUseCases";
 import type {
   DashboardProjection,
@@ -60,18 +57,7 @@ function parseJsonObject(value: unknown) {
 }
 
 export async function queryDashboard(env: Bindings): Promise<DashboardProjection> {
-  const contractMode = isContractMode(env);
-  const [monitorModelReady, agentModelReady, currentMetricsReady] = contractMode
-    ? [true, true, true]
-    : await Promise.all([
-        legacyMonitorModelCoverage(env).then((coverage) => coverage.read_ready),
-        legacyAgentModelCoverage(env).then((coverage) => coverage.read_ready),
-        legacyAgentCurrentMetricsCoverage(env).then(
-          (coverage) => coverage.read_ready
-        ),
-      ]);
-  const latestMetricsJoin = currentMetricsReady
-    ? `LEFT JOIN (
+  const latestMetricsJoin = `LEFT JOIN (
          SELECT agent_id, metrics_json,
                 CASE WHEN collected_at_ms IS NULL THEN NULL
                      ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
@@ -80,13 +66,9 @@ export async function queryDashboard(env: Bindings): Promise<DashboardProjection
                 strftime('%Y-%m-%dT%H:%M:%fZ',
                          reported_at_ms / 1000.0, 'unixepoch') AS reported_at
          FROM agent_current_metrics
-       ) lm`
-    : `LEFT JOIN agent_latest_metrics lm`;
-  const summaryMetricsJoin = currentMetricsReady
-    ? "LEFT JOIN agent_current_metrics lm ON lm.agent_id = n.id"
-    : "LEFT JOIN agent_latest_metrics lm ON lm.agent_id = n.id";
-  const monitorQuery = monitorModelReady
-    ? `SELECT d.id, d.name, d.url, d.method,
+       ) lm`;
+  const summaryMetricsJoin = "LEFT JOIN agent_current_metrics lm ON lm.agent_id = n.id";
+  const monitorQuery = `SELECT d.id, d.name, d.url, d.method,
               CAST(d.interval_ms / 1000 AS INTEGER) AS interval,
               CAST((d.timeout_ms + 999) / 1000 AS INTEGER) AS timeout,
               d.timeout_ms, d.expected_status, d.headers_json AS headers,
@@ -107,13 +89,8 @@ export async function queryDashboard(env: Bindings): Promise<DashboardProjection
        FROM monitor_definitions d
        JOIN monitor_runtime r ON r.monitor_id = d.id
        WHERE d.deleted_at_ms IS NULL ORDER BY d.sort_order ASC, d.id ASC
-       LIMIT ?`
-    : `SELECT * FROM monitors
-       WHERE deleted_at IS NULL ORDER BY sort_order ASC, id ASC
        LIMIT ?`;
-  const agentQuery =
-      agentModelReady
-        ? `SELECT n.id, n.name, r.status, r.hostname,
+  const agentQuery = `SELECT n.id, n.name, r.status, r.hostname,
                   r.ip_addresses_json AS ip_addresses, r.os,
                   r.agent_version AS version,
                   CAST(r.keepalive_seconds AS TEXT) AS keepalive,
@@ -149,16 +126,8 @@ export async function queryDashboard(env: Bindings): Promise<DashboardProjection
            ${latestMetricsJoin} ON lm.agent_id = n.id
            WHERE n.deleted_at_ms IS NULL
            ORDER BY n.sort_order ASC, n.id ASC
-           LIMIT ?`
-        : `SELECT a.*, lm.metrics_json, lm.collected_at AS metrics_collected_at,
-                  lm.reported_at AS metrics_reported_at
-           FROM agents a
-           ${latestMetricsJoin} ON lm.agent_id = a.id
-           WHERE a.deleted_at IS NULL
-           ORDER BY a.sort_order ASC, a.id ASC
            LIMIT ?`;
-  const monitorSummaryQuery = monitorModelReady
-    ? `SELECT COUNT(*) AS monitors_total,
+  const monitorSummaryQuery = `SELECT COUNT(*) AS monitors_total,
               COALESCE(SUM(CASE WHEN r.status = 'up' THEN 1 ELSE 0 END), 0)
                 AS monitors_up,
               COALESCE(SUM(CASE WHEN r.status = 'down' THEN 1 ELSE 0 END), 0)
@@ -169,19 +138,8 @@ export async function queryDashboard(env: Bindings): Promise<DashboardProjection
                 AS monitors_avg_response_time_ms
        FROM monitor_definitions d
        JOIN monitor_runtime r ON r.monitor_id = d.id
-       WHERE d.deleted_at_ms IS NULL`
-    : `SELECT COUNT(*) AS monitors_total,
-              COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0)
-                AS monitors_up,
-              COALESCE(SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END), 0)
-                AS monitors_down,
-              COALESCE(SUM(CASE WHEN status NOT IN ('up', 'down') THEN 1 ELSE 0 END), 0)
-                AS monitors_pending,
-              ROUND(AVG(CASE WHEN status = 'up' THEN response_time END))
-                AS monitors_avg_response_time_ms
-       FROM monitors WHERE deleted_at IS NULL`;
-  const agentSummaryQuery = agentModelReady
-    ? `SELECT COUNT(*) AS agents_total,
+       WHERE d.deleted_at_ms IS NULL`;
+  const agentSummaryQuery = `SELECT COUNT(*) AS agents_total,
               COALESCE(SUM(CASE WHEN r.status = 'active' THEN 1 ELSE 0 END), 0)
                 AS agents_online,
               COALESCE(SUM(CASE WHEN r.status <> 'active' THEN 1 ELSE 0 END), 0)
@@ -200,28 +158,7 @@ export async function queryDashboard(env: Bindings): Promise<DashboardProjection
        FROM agent_nodes n
        JOIN agent_runtime r ON r.agent_id = n.id
        ${summaryMetricsJoin}
-       WHERE n.deleted_at_ms IS NULL`
-    : `SELECT COUNT(*) AS agents_total,
-              COALESCE(SUM(CASE WHEN a.status = 'active' THEN 1 ELSE 0 END), 0)
-                AS agents_online,
-              COALESCE(SUM(CASE WHEN a.status <> 'active' THEN 1 ELSE 0 END), 0)
-                AS agents_offline,
-              SUM(CASE WHEN a.status = 'active' AND lm.agent_id IS NOT NULL THEN
-                    CASE a.traffic_calc_type
-                      WHEN 'rx' THEN COALESCE(lm.month_rx, 0)
-                      WHEN 'tx' THEN COALESCE(lm.month_tx, 0)
-                      ELSE COALESCE(lm.month_rx, 0) + COALESCE(lm.month_tx, 0)
-                    END
-                  END) AS total_traffic_bytes,
-              SUM(CASE WHEN a.status = 'active' THEN lm.network_rx_speed END)
-                AS network_rx_speed_bps,
-              SUM(CASE WHEN a.status = 'active' THEN lm.network_tx_speed END)
-                AS network_tx_speed_bps
-       FROM agents a
-       ${currentMetricsReady
-         ? "LEFT JOIN agent_current_metrics lm ON lm.agent_id = a.id"
-         : "LEFT JOIN agent_latest_metrics lm ON lm.agent_id = a.id"}
-       WHERE a.deleted_at IS NULL`;
+       WHERE n.deleted_at_ms IS NULL`;
   // D1 batch 保证四个读取在同一事务中顺序执行；LIMIT + 1 只用于判定截断。
   const [monitorsResult, agentsResult, monitorSummaryResult, agentSummaryResult] =
     await env.DB.batch([

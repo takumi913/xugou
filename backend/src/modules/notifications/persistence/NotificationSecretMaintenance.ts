@@ -5,10 +5,6 @@ import {
   rewrapNotificationSecretPayload,
 } from "../security/notification-secret-crypto";
 import { D1NotificationChannelStore, type ChannelRow } from "./D1NotificationChannelStore";
-import {
-  recordMigrationAnomaly,
-  recordMigrationBatch,
-} from "../../../platform/migrations/MigrationLedger";
 
 export async function backfillNotificationSecrets(env: Bindings, limit = 10) {
   if (!env.NOTIFICATION_KEK) {
@@ -48,28 +44,10 @@ export async function backfillNotificationSecrets(env: Bindings, limit = 10) {
       migrated += 1;
     } catch (error) {
       anomalies += 1;
-      await recordMigrationAnomaly(env, {
-        migrationKey,
-        sourceTable: "notification_channels",
-        sourcePk: channel.id,
-        errorCode: "NOTIFICATION_SECRET_BACKFILL_FAILED",
-        rawValue: {
-          channel_id: channel.id,
-          channel_name: channel.name,
-          channel_type: channel.type,
-        },
-      });
+      null;
     }
   }
-  await recordMigrationBatch(env, {
-    migrationKey,
-    phase: "backfill",
-    lastPk: result.results.at(-1)?.id ?? null,
-    rowsRead: result.results.length,
-    rowsWritten: migrated,
-    anomalyRows: anomalies,
-    remaining: result.results.length === limit,
-  });
+  null;
   return {
     migrated,
     anomalies,

@@ -1,8 +1,7 @@
 import type { Bindings } from "../models/db";
 import { writeStructuredLog } from "../platform/observability/StructuredLogger";
 import { QueueJobPublisher } from "../platform/queues/QueuePublisher";
-import { legacyAgentModelCoverage } from "../platform/migrations/LegacyAgentModelBackfill";
-import { isContractMode } from "../platform/compatibility/CompatibilityMode";
+
 
 const EXPIRE_REMINDER_DAYS = 7;
 const RENEW_GUARD_MAX_STEPS = 120;
@@ -87,9 +86,6 @@ export async function checkExpiringAgents(
   nowMs = Date.now()
 ): Promise<{ renewed: number; notified: number }> {
   const today = utcTodayDateString(nowMs);
-  const contractMode = isContractMode(env);
-  const targetReady =
-    contractMode || (await legacyAgentModelCoverage(env)).read_ready;
   const publisher = new QueueJobPublisher(env.XUGOU_JOBS);
   let renewed = 0;
   let notified = 0;
@@ -97,17 +93,11 @@ export async function checkExpiringAgents(
 
   for (;;) {
     const { results: agents } = await env.DB.prepare(
-      targetReady
-        ? `SELECT id, name, expire_date, billing_cycle, auto_renewal
-           FROM agent_nodes
-           WHERE deleted_at_ms IS NULL AND expire_date IS NOT NULL
-             AND TRIM(expire_date) <> '' AND id > ?
-           ORDER BY id LIMIT ?`
-        : `SELECT id, name, expire_date, billing_cycle, auto_renewal
-           FROM agents
-           WHERE deleted_at IS NULL AND expire_date IS NOT NULL
-             AND TRIM(expire_date) <> '' AND id > ?
-           ORDER BY id LIMIT ?`
+      `SELECT id, name, expire_date, billing_cycle, auto_renewal
+         FROM agent_nodes
+         WHERE deleted_at_ms IS NULL AND expire_date IS NOT NULL
+           AND TRIM(expire_date) <> '' AND id > ?
+         ORDER BY id LIMIT ?`
     )
       .bind(cursor, EXPIRY_SCAN_BATCH_SIZE)
       .all<ExpiringAgentRow>();
@@ -130,21 +120,12 @@ export async function checkExpiringAgents(
           guard += 1;
         }
         if (next !== expireDate && next > today) {
-          const updatedAt = new Date(nowMs).toISOString();
           const statements = [
             env.DB.prepare(
               `UPDATE agent_nodes SET expire_date = ?, updated_at_ms = ?
                WHERE id = ? AND expire_date = ? AND deleted_at_ms IS NULL`
             ).bind(next, nowMs, agent.id, originalExpireDate),
           ];
-          if (!contractMode) {
-            statements.push(
-              env.DB.prepare(
-                `UPDATE agents SET expire_date = ?, updated_at = ?
-                 WHERE id = ? AND expire_date = ? AND deleted_at IS NULL`
-              ).bind(next, updatedAt, agent.id, originalExpireDate)
-            );
-          }
           const updateResults = await env.DB.batch(statements);
           if (updateResults[0].meta.changes === 1) renewed += 1;
           expireDate = next;

@@ -25,7 +25,6 @@ import {
   ColorWheelIcon,
   HamburgerMenuIcon,
   DownloadIcon,
-  ExclamationTriangleIcon,
 } from "@radix-ui/react-icons";
 import { Moon, Sun, SunMoon } from "lucide-react";
 import { useAuth } from "../providers/AuthProvider";
@@ -157,16 +156,7 @@ const Navbar = () => {
                             </Text>
                           </Flex>
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => navigate("/operations/queue-failures")}
-                        >
-                          <Flex gap="2" align="center">
-                            <ExclamationTriangleIcon width="14" height="14" />
-                            <Text className="pl-2" size="2">
-                              {t("navbar.operations")}
-                            </Text>
-                          </Flex>
-                        </DropdownMenuItem>
+
                         <DropdownMenuItem onClick={() => navigate("/themes")}>
                           <Flex gap="2" align="center">
                             <ColorWheelIcon width="14" height="14" />
@@ -301,19 +291,6 @@ const Navbar = () => {
                       </Button>
                     </Link>
 
-                    <Link
-                      to="/operations/queue-failures"
-                      className={`nav-link ${
-                        isActive("/operations") ? "active" : ""
-                      }`}
-                    >
-                      <Button variant="ghost">
-                        <ExclamationTriangleIcon width="14" height="14" />
-                        <Text ml="1" size="2">
-                          {t("navbar.operations")}
-                        </Text>
-                      </Button>
-                    </Link>
 
                     <Button onClick={promptPWAInstall} variant="ghost">
                       <Flex gap="1" align="center">

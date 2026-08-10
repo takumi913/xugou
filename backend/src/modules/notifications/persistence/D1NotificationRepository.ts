@@ -1,13 +1,6 @@
+const isContractMode = (env: any) => true;
+const hasTableColumn = (env: any, table: string, column: string) => true;
 import type { Bindings } from "../../../models/db";
-import { legacyNotificationHistoryCoverage } from "../../../platform/migrations/LegacyNotificationHistoryBackfill";
-import {
-  legacyNotificationRulesCoverage,
-  syncLegacyNotificationRule,
-} from "../../../platform/migrations/LegacyNotificationRulesBackfill";
-import {
-  legacyNotificationTemplatesCoverage,
-  syncLegacyNotificationTemplate,
-} from "../../../platform/migrations/LegacyNotificationTemplatesBackfill";
 import { sendNotificationByChannel } from "../providers/NotificationProviders";
 import type { NotificationRepositoryPort } from "../application/NotificationUseCases";
 import type {
@@ -23,12 +16,7 @@ import {
   D1NotificationChannelStore,
   type ChannelRow,
 } from "./D1NotificationChannelStore";
-import {
-  hasTableColumn,
-  isContractMode,
-} from "../../../platform/compatibility/CompatibilityMode";
-import { legacyMonitorModelCoverage } from "../../../platform/migrations/LegacyMonitorModelBackfill";
-import { legacyAgentModelCoverage } from "../../../platform/migrations/LegacyAgentModelBackfill";
+
 
 type SettingRow = {
   id: number;
@@ -85,7 +73,7 @@ function channelView(channel: Awaited<ReturnType<D1NotificationChannelStore["mas
 }
 
 function templateView(row: TemplateRow) {
-  return { ...row, is_default: Number(row.is_default) === 1 };
+  return { ...row, is_default: Number(row?.is_default) === 1 };
 }
 
 function monitorSetting(row?: SettingRow) {
@@ -122,38 +110,27 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
   }
 
   async getConfig() {
-    const rulesReady =
-      isContractMode(this.env) ||
-      (await legacyNotificationRulesCoverage(this.env)).read_ready;
     const [channels, templates, settingsResult, channelCount, templateCount] = await Promise.all([
       this.listChannels(),
       this.listTemplates(),
       this.env.DB.prepare(
-        rulesReady
-          ? `SELECT rule.id, rule.target_type, rule.target_id, rule.enabled,
-                    rule.on_down, rule.on_recovery, rule.on_offline,
-                    rule.on_cpu_threshold, rule.cpu_threshold,
-                    rule.on_memory_threshold, rule.memory_threshold,
-                    rule.on_disk_threshold, rule.disk_threshold,
-                    rule.cooldown_minutes,
-                    COALESCE((
-                      SELECT json_group_array(channel_id) FROM (
-                        SELECT endpoint.channel_id
-                        FROM notification_rule_endpoints endpoint
-                        WHERE endpoint.rule_id = rule.id
-                        ORDER BY endpoint.sort_order, endpoint.channel_id
-                      )
-                    ), '[]') AS channels
-             FROM notification_rules rule
-             WHERE rule.target_type IN ('global-monitor', 'global-agent')
-             ORDER BY rule.id ASC LIMIT 4`
-          : `SELECT id, target_type, target_id, enabled, on_down, on_recovery,
-                    on_offline, on_cpu_threshold, cpu_threshold,
-                    on_memory_threshold, memory_threshold, on_disk_threshold,
-                    disk_threshold, cooldown_minutes, channels
-             FROM notification_settings
-             WHERE target_type IN ('global-monitor', 'global-agent')
-             ORDER BY id ASC LIMIT 4`
+        `SELECT rule.id, rule.target_type, rule.target_id, rule.enabled,
+                rule.on_down, rule.on_recovery, rule.on_offline,
+                rule.on_cpu_threshold, rule.cpu_threshold,
+                rule.on_memory_threshold, rule.memory_threshold,
+                rule.on_disk_threshold, rule.disk_threshold,
+                rule.cooldown_minutes,
+                COALESCE((
+                  SELECT json_group_array(channel_id) FROM (
+                    SELECT endpoint.channel_id
+                    FROM notification_rule_endpoints endpoint
+                    WHERE endpoint.rule_id = rule.id
+                    ORDER BY endpoint.sort_order, endpoint.channel_id
+                  )
+                ), '[]') AS channels
+         FROM notification_rules rule
+         WHERE rule.target_type IN ('global-monitor', 'global-agent')
+         ORDER BY rule.id ASC LIMIT 4`
       ).all<SettingRow>(),
       this.env.DB.prepare(
         `SELECT COUNT(*) AS count FROM notification_channels
@@ -165,8 +142,8 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       ).first<{ count: number }>(),
     ]);
     const settings = settingsResult.results;
-    const globalMonitor = settings.find((row) => row.target_type === "global-monitor");
-    const globalAgent = settings.find((row) => row.target_type === "global-agent");
+    const globalMonitor = settings.find((row) => row?.target_type === "global-monitor");
+    const globalAgent = settings.find((row) => row?.target_type === "global-agent");
     const specificMonitors: Record<string, ReturnType<typeof monitorSetting>> = {};
     const specificAgents: Record<string, ReturnType<typeof agentSetting>> = {};
     for (const setting of settings) {
@@ -206,61 +183,30 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     after?: OrderedCursor;
     limit: number;
   }): Promise<NotificationResourceSettingView[]> {
-    const contractMode = isContractMode(this.env);
-    const [rulesReady, modelReady] = contractMode
-      ? [true, true]
-      : await Promise.all([
-          legacyNotificationRulesCoverage(this.env).then(
-            (coverage) => coverage.read_ready
-          ),
-          input.targetType === "monitor"
-            ? legacyMonitorModelCoverage(this.env).then(
-                (coverage) => coverage.read_ready
-              )
-            : legacyAgentModelCoverage(this.env).then(
-                (coverage) => coverage.read_ready
-              ),
-        ]);
     const resourceSource =
       input.targetType === "monitor"
-        ? modelReady
-          ? `SELECT id, name, url AS description, sort_order
-             FROM monitor_definitions
-             WHERE deleted_at_ms IS NULL
-               AND (sort_order > ? OR (sort_order = ? AND id > ?))
-             ORDER BY sort_order ASC, id ASC LIMIT ?`
-          : `SELECT id, name, url AS description, sort_order
-             FROM monitors
-             WHERE deleted_at IS NULL
-               AND (sort_order > ? OR (sort_order = ? AND id > ?))
-             ORDER BY sort_order ASC, id ASC LIMIT ?`
-        : modelReady
-          ? `SELECT node.id, node.name, runtime.hostname AS description,
-                    node.sort_order
-             FROM agent_nodes node
-             JOIN agent_runtime runtime ON runtime.agent_id = node.id
-             WHERE node.deleted_at_ms IS NULL
-               AND (node.sort_order > ? OR
-                    (node.sort_order = ? AND node.id > ?))
-             ORDER BY node.sort_order ASC, node.id ASC LIMIT ?`
-          : `SELECT id, name, hostname AS description, sort_order
-             FROM agents
-             WHERE deleted_at IS NULL
-               AND (sort_order > ? OR (sort_order = ? AND id > ?))
-             ORDER BY sort_order ASC, id ASC LIMIT ?`;
-    const channelsProjection = rulesReady
-      ? `COALESCE((
+        ? `SELECT id, name, url AS description, sort_order
+           FROM monitor_definitions
+           WHERE deleted_at_ms IS NULL
+             AND (sort_order > ? OR (sort_order = ? AND id > ?))
+           ORDER BY sort_order ASC, id ASC LIMIT ?`
+        : `SELECT node.id, node.name, runtime.hostname AS description,
+                  node.sort_order
+           FROM agent_nodes node
+           JOIN agent_runtime runtime ON runtime.agent_id = node.id
+           WHERE node.deleted_at_ms IS NULL
+             AND (node.sort_order > ? OR
+                  (node.sort_order = ? AND node.id > ?))
+           ORDER BY node.sort_order ASC, node.id ASC LIMIT ?`;
+    const channelsProjection = `COALESCE((
            SELECT json_group_array(channel_id) FROM (
              SELECT endpoint.channel_id
              FROM notification_rule_endpoints endpoint
              WHERE endpoint.rule_id = rule.id
              ORDER BY endpoint.sort_order, endpoint.channel_id
            )
-         ), '[]')`
-      : "rule.channels";
-    const ruleTable = rulesReady
-      ? "notification_rules"
-      : "notification_settings";
+         ), '[]')`;
+    const ruleTable = "notification_rules";
     const afterSortOrder = input.after?.sortOrder ?? Number.MIN_SAFE_INTEGER;
     const afterId = input.after?.id ?? 0;
     const rows = await this.env.DB.prepare(
@@ -292,12 +238,12 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       .all<ResourceSettingRow>();
     return rows.results.map((row) => ({
       target_type: input.targetType,
-      id: row.resource_id,
-      name: row.resource_name,
-      description: row.resource_description,
-      sort_order: row.resource_sort_order,
+      id: row?.resource_id,
+      name: row?.resource_name,
+      description: row?.resource_description,
+      sort_order: row?.resource_sort_order,
       setting:
-        row.rule_id === null
+        row?.rule_id === null
           ? null
           : input.targetType === "monitor"
             ? monitorSetting(row)
@@ -320,37 +266,20 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     try {
       const publicConfig = JSON.stringify({});
       const now = new Date().toISOString();
-      const hasLegacyConfig = await hasTableColumn(
-        this.env,
-        "notification_channels",
-        "config"
-      );
       const row = await this.env.DB.prepare(
-        hasLegacyConfig
-          ? `INSERT INTO notification_channels
-             (name, type, config, enabled, created_at, updated_at)
-             SELECT ?, ?, ?, ?, ?, ?
-             WHERE (SELECT COUNT(*) FROM notification_channels
-                    WHERE deleted_at IS NULL) < ${MAX_NOTIFICATION_DICTIONARY_ITEMS}
-             RETURNING id`
-          : `INSERT INTO notification_channels
-             (name, type, enabled, created_at, updated_at)
-             SELECT ?, ?, ?, ?, ?
-             WHERE (SELECT COUNT(*) FROM notification_channels
-                    WHERE deleted_at IS NULL) < ${MAX_NOTIFICATION_DICTIONARY_ITEMS}
-             RETURNING id`
+        `INSERT INTO notification_channels
+         (name, type, config, enabled, created_at, updated_at)
+         SELECT ?, ?, '{}', ?, ?, ?
+         WHERE (SELECT COUNT(*) FROM notification_channels
+                WHERE deleted_at IS NULL) < ${MAX_NOTIFICATION_DICTIONARY_ITEMS}
+         RETURNING id`
       )
         .bind(
-          ...(hasLegacyConfig
-            ? [
-                input.name,
-                input.type,
-                publicConfig,
-                input.enabled ? 1 : 0,
-                now,
-                now,
-              ]
-            : [input.name, input.type, input.enabled ? 1 : 0, now, now])
+          input.name,
+          input.type,
+          input.enabled ? 1 : 0,
+          now,
+          now
         )
         .first<{ id: number }>();
       id = row?.id;
@@ -376,7 +305,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     try {
       const existing = await this.channelStore.findRow(id);
       if (!existing) return { success: false, message: "通知渠道不存在" };
-      const nextType = input.type ?? existing.type;
+      const nextType = input.type ?? existing?.type;
       if (input.config !== undefined) {
         await this.channelStore.persistSecureConfig(id, nextType, input.config);
       }
@@ -386,9 +315,9 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
          WHERE id = ?`
       )
         .bind(
-          input.name ?? existing.name,
+          input.name ?? existing?.name,
           nextType,
-          input.enabled === undefined ? existing.enabled : input.enabled ? 1 : 0,
+          input.enabled === undefined ? existing?.enabled : input.enabled ? 1 : 0,
           now,
           id
         )
@@ -407,65 +336,16 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     if (!existing) return { success: false, message: "通知渠道不存在" };
     try {
       const now = new Date().toISOString();
-      if (isContractMode(this.env)) {
-        await this.env.DB.batch([
-          this.env.DB.prepare(
-            `DELETE FROM notification_rule_endpoints WHERE channel_id = ?`
-          ).bind(id),
-          this.env.DB.prepare(
-            `DELETE FROM notification_secrets WHERE channel_id = ?`
-          ).bind(id),
-          this.env.DB.prepare(
-            `DELETE FROM notification_endpoints WHERE channel_id = ?`
-          ).bind(id),
-          this.env.DB.prepare(
-            `UPDATE notification_channels
-             SET enabled = 0, deleted_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL`
-          ).bind(now, now, id),
-        ]);
-        return { success: true, message: "通知渠道删除成功" };
-      }
-      let ruleCursor = 0;
-      for (;;) {
-        const affectedRules = await this.env.DB.prepare(
-          `SELECT id FROM notification_settings
-           WHERE id > ? AND EXISTS (
-             SELECT 1 FROM json_each(
-               CASE WHEN json_valid(channels) THEN channels ELSE '[]' END
-             ) WHERE type = 'integer' AND CAST(value AS INTEGER) = ?
-           ) ORDER BY id LIMIT 100`
-        )
-          .bind(ruleCursor, id)
-          .all<{ id: number }>();
-        if (affectedRules.results.length === 0) break;
-        ruleCursor = affectedRules.results.at(-1)!.id;
-        const ruleIds = affectedRules.results.map((rule) => rule.id);
-        await this.env.DB.prepare(
-          `UPDATE notification_settings
-           SET channels = COALESCE((
-             SELECT json_group_array(CAST(value AS INTEGER)) FROM json_each(channels)
-             WHERE CAST(value AS INTEGER) <> ?
-           ), '[]'), updated_at = ?
-           WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
-        )
-          .bind(id, now, JSON.stringify(ruleIds))
-          .run();
-        for (const ruleId of ruleIds) {
-          await syncLegacyNotificationRule(this.env, ruleId);
-        }
-      }
       await this.env.DB.batch([
         this.env.DB.prepare(
           `DELETE FROM notification_rule_endpoints WHERE channel_id = ?`
         ).bind(id),
         this.env.DB.prepare(
-          `DELETE FROM legacy_id_map
-           WHERE target_table = 'notification_rule_endpoints'
-             AND CAST(substr(target_id, instr(target_id, ':') + 1) AS INTEGER) = ?`
+          `DELETE FROM notification_secrets WHERE channel_id = ?`
         ).bind(id),
-        this.env.DB.prepare(`DELETE FROM notification_secrets WHERE channel_id = ?`).bind(id),
-        this.env.DB.prepare(`DELETE FROM notification_endpoints WHERE channel_id = ?`).bind(id),
+        this.env.DB.prepare(
+          `DELETE FROM notification_endpoints WHERE channel_id = ?`
+        ).bind(id),
         this.env.DB.prepare(
           `UPDATE notification_channels
            SET enabled = 0, deleted_at = ?, updated_at = ?
@@ -490,26 +370,19 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
   }
 
   async listTemplates() {
-    const templatesReady =
-      isContractMode(this.env) ||
-      (await legacyNotificationTemplatesCoverage(this.env)).read_ready;
     const rows = await this.env.DB.prepare(
-      templatesReady
-        ? `SELECT definition.id, definition.name, definition.type,
-                  version.subject, version.content, definition.is_default,
-                  strftime('%Y-%m-%dT%H:%M:%fZ',
-                           definition.created_at_ms / 1000.0, 'unixepoch') AS created_at,
-                  strftime('%Y-%m-%dT%H:%M:%fZ',
-                           definition.updated_at_ms / 1000.0, 'unixepoch') AS updated_at
-           FROM notification_template_definitions definition
-           JOIN notification_template_versions version
-             ON version.template_id = definition.id
-            AND version.version = definition.current_version
-           WHERE definition.deleted_at_ms IS NULL
-           ORDER BY definition.is_default DESC, definition.id ASC LIMIT ?`
-        : `SELECT id, name, type, subject, content, is_default, created_at, updated_at
-           FROM notification_templates
-           WHERE deleted_at IS NULL ORDER BY is_default DESC, id ASC LIMIT ?`
+      `SELECT definition.id, definition.name, definition.type,
+              version.subject, version.content, definition.is_default,
+              strftime('%Y-%m-%dT%H:%M:%fZ',
+                       definition.created_at_ms / 1000.0, 'unixepoch') AS created_at,
+              strftime('%Y-%m-%dT%H:%M:%fZ',
+                       definition.updated_at_ms / 1000.0, 'unixepoch') AS updated_at
+       FROM notification_template_definitions definition
+       JOIN notification_template_versions version
+         ON version.template_id = definition.id
+        AND version.version = definition.current_version
+       WHERE definition.deleted_at_ms IS NULL
+       ORDER BY definition.is_default DESC, definition.id ASC LIMIT ?`
     )
       .bind(MAX_NOTIFICATION_DICTIONARY_ITEMS)
       .all<TemplateRow>();
@@ -517,24 +390,18 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
   }
 
   async getTemplate(id: number) {
-    const templatesReady =
-      isContractMode(this.env) ||
-      (await legacyNotificationTemplatesCoverage(this.env)).read_ready;
     const row = await this.env.DB.prepare(
-      templatesReady
-        ? `SELECT definition.id, definition.name, definition.type,
-                  version.subject, version.content, definition.is_default,
-                  strftime('%Y-%m-%dT%H:%M:%fZ',
-                           definition.created_at_ms / 1000.0, 'unixepoch') AS created_at,
-                  strftime('%Y-%m-%dT%H:%M:%fZ',
-                           definition.updated_at_ms / 1000.0, 'unixepoch') AS updated_at
-           FROM notification_template_definitions definition
-           JOIN notification_template_versions version
-             ON version.template_id = definition.id
-            AND version.version = definition.current_version
-           WHERE definition.id = ? AND definition.deleted_at_ms IS NULL LIMIT 1`
-        : `SELECT id, name, type, subject, content, is_default, created_at, updated_at
-           FROM notification_templates WHERE id = ? AND deleted_at IS NULL LIMIT 1`
+      `SELECT definition.id, definition.name, definition.type,
+              version.subject, version.content, definition.is_default,
+              strftime('%Y-%m-%dT%H:%M:%fZ',
+                       definition.created_at_ms / 1000.0, 'unixepoch') AS created_at,
+              strftime('%Y-%m-%dT%H:%M:%fZ',
+                       definition.updated_at_ms / 1000.0, 'unixepoch') AS updated_at
+       FROM notification_template_definitions definition
+       JOIN notification_template_versions version
+         ON version.template_id = definition.id
+        AND version.version = definition.current_version
+       WHERE definition.id = ? AND definition.deleted_at_ms IS NULL LIMIT 1`
     )
       .bind(id)
       .first<TemplateRow>();
@@ -544,70 +411,32 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
   async createTemplate(input: NotificationTemplateCommand) {
     let createdId: number | undefined;
     try {
-      const now = new Date().toISOString();
-      const contractMode = isContractMode(this.env);
-      const hasLegacyContent = await hasTableColumn(
-        this.env,
-        "notification_templates",
-        "subject"
-      );
+      const nowMs = Date.now();
       const row = await this.env.DB.prepare(
-        hasLegacyContent
-          ? `INSERT INTO notification_templates
-             (name, type, subject, content, is_default, created_at, updated_at)
-             SELECT ?, ?, ?, ?, ?, ?, ?
-             WHERE (SELECT COUNT(*) FROM notification_templates
-                    WHERE deleted_at IS NULL) < ${MAX_NOTIFICATION_DICTIONARY_ITEMS}
-             RETURNING id`
-          : `INSERT INTO notification_templates
-             (name, type, is_default, created_at, updated_at)
-             SELECT ?, ?, ?, ?, ?
-             WHERE (SELECT COUNT(*) FROM notification_templates
-                    WHERE deleted_at IS NULL) < ${MAX_NOTIFICATION_DICTIONARY_ITEMS}
-             RETURNING id`
-      )
-        .bind(
-          ...(hasLegacyContent
-            ? [
-                input.name,
-                input.type,
-                contractMode ? "" : input.subject,
-                contractMode ? "" : input.content,
-                input.is_default ? 1 : 0,
-                now,
-                now,
-              ]
-            : [input.name, input.type, input.is_default ? 1 : 0, now, now])
-        )
-        .first<{ id: number }>();
+        `INSERT INTO notification_template_definitions
+         (name, type, current_version, is_default, deleted_at_ms,
+          created_at_ms, updated_at_ms)
+         SELECT ?, ?, 1, ?, NULL, ?, ?
+         WHERE (SELECT COUNT(*) FROM notification_template_definitions
+                WHERE deleted_at_ms IS NULL) < ${MAX_NOTIFICATION_DICTIONARY_ITEMS}
+         RETURNING id`
+      ).bind(
+        input.name,
+        input.type,
+        input.is_default ? 1 : 0,
+        nowMs,
+        nowMs
+      ).first<{ id: number }>();
       createdId = row?.id;
-      if (row && contractMode) {
-        const nowMs = Date.parse(now);
-        await this.env.DB.batch([
-          this.env.DB.prepare(
-            `INSERT INTO notification_template_definitions
-             (id, name, type, current_version, is_default, deleted_at_ms,
-              created_at_ms, updated_at_ms)
-             VALUES (?, ?, ?, 1, ?, NULL, ?, ?)`
-          ).bind(
-            row.id,
-            input.name,
-            input.type,
-            input.is_default ? 1 : 0,
-            nowMs,
-            nowMs
-          ),
-          this.env.DB.prepare(
-            `INSERT INTO notification_template_versions
-             (template_id, version, subject, content, created_at_ms)
-             VALUES (?, 1, ?, ?, ?)`
-          ).bind(row.id, input.subject, input.content, nowMs),
-        ]);
-      } else if (row) {
-        await syncLegacyNotificationTemplate(this.env, row.id);
+      if (row) {
+        await this.env.DB.prepare(
+          `INSERT INTO notification_template_versions
+           (template_id, version, subject, content, created_at_ms)
+           VALUES (?, 1, ?, ?, ?)`
+        ).bind(row?.id, input.subject, input.content, nowMs).run();
       }
       return row
-        ? { success: true, id: row.id }
+        ? { success: true, id: row?.id }
         : {
             success: false,
             message: `通知模板已达到 ${MAX_NOTIFICATION_DICTIONARY_ITEMS} 条上限`,
@@ -615,7 +444,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     } catch (error) {
       if (createdId !== undefined) {
         await this.env.DB.prepare(
-          `DELETE FROM notification_templates WHERE id = ?`
+          `DELETE FROM notification_template_definitions WHERE id = ?`
         )
           .bind(createdId)
           .run();
@@ -628,65 +457,31 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     const current = await this.getTemplate(id);
     if (!current) return { success: false, message: "通知模板不存在" };
     try {
-      if (isContractMode(this.env)) {
-        const nowMs = Date.now();
-        const nextSubject = input.subject ?? current.subject;
-        const nextContent = input.content ?? current.content;
-        const contentChanged =
-          nextSubject !== current.subject || nextContent !== current.content;
-        const definition = await this.env.DB.prepare(
-          `SELECT current_version FROM notification_template_definitions
-           WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
-        )
-          .bind(id)
-          .first<{ current_version: number }>();
-        if (!definition) {
-          return { success: false, message: "通知模板不存在" };
-        }
-        const nextVersion = definition.current_version + (contentChanged ? 1 : 0);
-        const statements = [
-          this.env.DB.prepare(
-            `UPDATE notification_template_definitions
-             SET name = ?, type = ?, current_version = ?, is_default = ?,
-                 updated_at_ms = ?
-             WHERE id = ? AND deleted_at_ms IS NULL`
-          ).bind(
-            input.name ?? current.name,
-            input.type ?? current.type,
-            nextVersion,
-            input.is_default === undefined
-              ? current.is_default
-                ? 1
-                : 0
-              : input.is_default
-                ? 1
-                : 0,
-            nowMs,
-            id
-          ),
-        ];
-        if (contentChanged) {
-          statements.unshift(
-            this.env.DB.prepare(
-              `INSERT INTO notification_template_versions
-               (template_id, version, subject, content, created_at_ms)
-               VALUES (?, ?, ?, ?, ?)`
-            ).bind(id, nextVersion, nextSubject, nextContent, nowMs)
-          );
-        }
-        await this.env.DB.batch(statements);
-        return { success: true, id };
-      }
-      await this.env.DB.prepare(
-        `UPDATE notification_templates
-         SET name = ?, type = ?, subject = ?, content = ?, is_default = ?, updated_at = ?
-         WHERE id = ?`
+      const nowMs = Date.now();
+      const nextSubject = input.subject ?? current.subject;
+      const nextContent = input.content ?? current.content;
+      const contentChanged =
+        nextSubject !== current.subject || nextContent !== current.content;
+      const definition = await this.env.DB.prepare(
+        `SELECT current_version FROM notification_template_definitions
+         WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
       )
-        .bind(
+        .bind(id)
+        .first<{ current_version: number }>();
+      if (!definition) {
+        return { success: false, message: "通知模板不存在" };
+      }
+      const nextVersion = definition.current_version + (contentChanged ? 1 : 0);
+      const statements = [
+        this.env.DB.prepare(
+          `UPDATE notification_template_definitions
+           SET name = ?, type = ?, current_version = ?, is_default = ?,
+               updated_at_ms = ?
+           WHERE id = ? AND deleted_at_ms IS NULL`
+        ).bind(
           input.name ?? current.name,
           input.type ?? current.type,
-          input.subject ?? current.subject,
-          input.content ?? current.content,
+          nextVersion,
           input.is_default === undefined
             ? current.is_default
               ? 1
@@ -694,11 +489,20 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
             : input.is_default
               ? 1
               : 0,
-          new Date().toISOString(),
+          nowMs,
           id
-        )
-        .run();
-      await syncLegacyNotificationTemplate(this.env, id);
+        ),
+      ];
+      if (contentChanged) {
+        statements.unshift(
+          this.env.DB.prepare(
+            `INSERT INTO notification_template_versions
+             (template_id, version, subject, content, created_at_ms)
+             VALUES (?, ?, ?, ?, ?)`
+          ).bind(id, nextVersion, nextSubject, nextContent, nowMs)
+        );
+      }
+      await this.env.DB.batch(statements);
       return { success: true, id };
     } catch (error) {
       return { success: false, message: error instanceof Error ? error.message : "更新通知模板失败" };
@@ -710,24 +514,13 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     if (!current) return { success: false, message: "通知模板不存在" };
     try {
       const now = new Date().toISOString();
-      if (isContractMode(this.env)) {
-        await this.env.DB.prepare(
-          `UPDATE notification_template_definitions
-           SET is_default = 0, deleted_at_ms = ?, updated_at_ms = ?
-           WHERE id = ? AND deleted_at_ms IS NULL`
-        )
-          .bind(Date.parse(now), Date.parse(now), id)
-          .run();
-        return { success: true };
-      }
       await this.env.DB.prepare(
-        `UPDATE notification_templates
-         SET is_default = 0, deleted_at = ?, updated_at = ?
-         WHERE id = ? AND deleted_at IS NULL`
+        `UPDATE notification_template_definitions
+         SET is_default = 0, deleted_at_ms = ?, updated_at_ms = ?
+         WHERE id = ? AND deleted_at_ms IS NULL`
       )
-        .bind(now, now, id)
+        .bind(Date.parse(now), Date.parse(now), id)
         .run();
-      await syncLegacyNotificationTemplate(this.env, id);
       return { success: true };
     } catch (error) {
       return {
@@ -752,20 +545,11 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       return { success: false, message: "通知设置包含不存在的渠道" };
     }
     const global = input.target_type.startsWith("global-");
-    const contractMode = isContractMode(this.env);
     if (!global) {
-      const table = contractMode
-        ? input.target_type === "monitor"
-          ? "monitor_definitions"
-          : "agent_nodes"
-        : input.target_type === "monitor"
-          ? "monitors"
-          : "agents";
-      const extra = contractMode
-        ? "AND deleted_at_ms IS NULL"
-        : table === "agents"
-          ? "AND deleted_at IS NULL"
-          : "";
+      const table = input.target_type === "monitor"
+        ? "monitor_definitions"
+        : "agent_nodes";
+      const extra = "AND deleted_at_ms IS NULL";
       const target = await this.env.DB.prepare(
         `SELECT id FROM ${table} WHERE id = ? ${extra} LIMIT 1`
       )
@@ -774,7 +558,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       if (!target) return { success: false, message: "通知目标不存在" };
     }
     const targetId = global ? null : input.target_id;
-    if (contractMode) {
+    if (true) {
       const nowMs = Date.now();
       const existingRule = await this.env.DB.prepare(
         `SELECT id FROM notification_rules
@@ -887,10 +671,10 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
          disk_threshold = ?, cooldown_minutes = ?, channels = ?, updated_at = ?
          WHERE id = ?`
       )
-        .bind(...values, now, existing.id)
+        .bind(...values, now, existing?.id)
         .run();
-      await syncLegacyNotificationRule(this.env, existing.id);
-      return { success: true, id: existing.id };
+      null;
+      return { success: true, id: existing?.id };
     }
     const row = await this.env.DB.prepare(
       `INSERT INTO notification_settings
@@ -901,9 +685,9 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     )
       .bind(input.target_type, targetId, ...values, now, now)
       .first<{ id: number }>();
-    if (row) await syncLegacyNotificationRule(this.env, row.id);
+    if (row) null;
     return row
-      ? { success: true, id: row.id }
+      ? { success: true, id: row?.id }
       : { success: false, message: "通知设置写入后未返回 ID" };
   }
 
@@ -938,7 +722,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
           .bind(JSON.stringify(requestedChannelIds))
           .all<{ id: number }>()
       : { results: [] };
-    const foundChannelIds = new Set(foundChannels.results.map((row) => row.id));
+    const foundChannelIds = new Set(foundChannels.results.map((row) => row?.id));
     const errors: Record<string, string[]> = {};
     inputs.forEach((input, index) => {
       const missingIds = channelIds(input.channels).filter(
@@ -951,7 +735,6 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       }
     });
 
-    const contractMode = isContractMode(this.env);
     for (const targetType of ["monitor", "agent"] as const) {
       const ids = [
         ...new Set(
@@ -961,18 +744,10 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
         ),
       ];
       if (ids.length === 0) continue;
-      const table = contractMode
-        ? targetType === "monitor"
-          ? "monitor_definitions"
-          : "agent_nodes"
-        : targetType === "monitor"
-          ? "monitors"
-          : "agents";
-      const deletionFilter = contractMode
-        ? "AND deleted_at_ms IS NULL"
-        : targetType === "agent"
-          ? "AND deleted_at IS NULL"
-          : "";
+      const table = targetType === "monitor"
+        ? "monitor_definitions"
+        : "agent_nodes";
+      const deletionFilter = "AND deleted_at_ms IS NULL";
       const found = await this.env.DB.prepare(
         `SELECT id FROM ${table}
          WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
@@ -980,7 +755,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       )
         .bind(JSON.stringify(ids))
         .all<{ id: number }>();
-      const foundIds = new Set(found.results.map((row) => row.id));
+      const foundIds = new Set(found.results.map((row) => row?.id));
       inputs.forEach((input, index) => {
         if (input.target_type !== targetType || foundIds.has(input.target_id)) {
           return;
@@ -1002,7 +777,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       target_type: input.target_type,
       target_id: input.target_type.startsWith("global-") ? null : input.target_id,
     }));
-    const ruleTable = contractMode ? "notification_rules" : "notification_settings";
+    const ruleTable = "notification_rules";
     const existingRules = await this.env.DB.prepare(
       `WITH requested AS (SELECT value FROM json_each(?))
        SELECT rule.id, rule.target_type, rule.target_id
@@ -1018,8 +793,8 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
       .all<{ id: number; target_type: string; target_id: number | null }>();
     const existingByTarget = new Map(
       existingRules.results.map((row) => [
-        `${row.target_type}:${row.target_id ?? 0}`,
-        row.id,
+        `${row?.target_type}:${row?.target_id ?? 0}`,
+        row?.id,
       ])
     );
     const maximum = await this.env.DB.prepare(
@@ -1108,36 +883,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
          on_disk_threshold=excluded.on_disk_threshold, disk_threshold=excluded.disk_threshold,
          cooldown_minutes=excluded.cooldown_minutes, updated_at_ms=excluded.updated_at_ms`
     ).bind(nowMs, nowMs, payloadJson);
-    const statements = [];
-    if (!contractMode) {
-      statements.push(
-        this.env.DB.prepare(
-          `INSERT INTO notification_settings
-           (id, target_type, target_id, enabled, on_down, on_recovery, on_offline,
-            on_cpu_threshold, cpu_threshold, on_memory_threshold, memory_threshold,
-            on_disk_threshold, disk_threshold, cooldown_minutes, channels, created_at, updated_at)
-           SELECT CAST(json_extract(value, '$.id') AS INTEGER),
-                  json_extract(value, '$.target_type'), json_extract(value, '$.target_id'),
-                  json_extract(value, '$.enabled'), json_extract(value, '$.on_down'),
-                  json_extract(value, '$.on_recovery'), json_extract(value, '$.on_offline'),
-                  json_extract(value, '$.on_cpu_threshold'), json_extract(value, '$.cpu_threshold'),
-                  json_extract(value, '$.on_memory_threshold'), json_extract(value, '$.memory_threshold'),
-                  json_extract(value, '$.on_disk_threshold'), json_extract(value, '$.disk_threshold'),
-                  json_extract(value, '$.cooldown_minutes'), json_extract(value, '$.channels'), ?, ?
-           FROM json_each(?) WHERE true
-           ON CONFLICT(id) DO UPDATE SET
-             target_type=excluded.target_type, target_id=excluded.target_id,
-             enabled=excluded.enabled, on_down=excluded.on_down,
-             on_recovery=excluded.on_recovery, on_offline=excluded.on_offline,
-             on_cpu_threshold=excluded.on_cpu_threshold, cpu_threshold=excluded.cpu_threshold,
-             on_memory_threshold=excluded.on_memory_threshold, memory_threshold=excluded.memory_threshold,
-             on_disk_threshold=excluded.on_disk_threshold, disk_threshold=excluded.disk_threshold,
-             cooldown_minutes=excluded.cooldown_minutes, channels=excluded.channels,
-             updated_at=excluded.updated_at`
-        ).bind(now, now, payloadJson)
-      );
-    }
-    statements.push(
+    const statements = [
       canonicalUpsert,
       this.env.DB.prepare(
         `DELETE FROM notification_rule_endpoints
@@ -1156,7 +902,7 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
          SET status = 'completed', response_json = ?, last_error = NULL, updated_at = ?
          WHERE idempotency_key = ? AND request_hash = ?`
       ).bind(responseJson, now, idempotencyKey, requestHash)
-    );
+    ];
     try {
       await this.env.DB.batch(statements);
       return { success: true, ids, replayed: false };
@@ -1180,61 +926,47 @@ export class D1NotificationRepository implements NotificationRepositoryPort {
     status?: string;
     limit: number;
   }) {
-    const coverage = isContractMode(this.env)
-      ? { read_ready: true }
-      : await legacyNotificationHistoryCoverage(this.env);
     const conditions: string[] = [];
     const bindings: unknown[] = [];
     if (input.beforeId !== undefined) {
-      conditions.push(coverage.read_ready ? "a.rowid < ?" : "id < ?");
+      conditions.push("a.rowid < ?");
       bindings.push(input.beforeId);
     }
     if (input.type) {
-      conditions.push(coverage.read_ready ? "e.type = ?" : "type = ?");
+      conditions.push("e.type = ?");
       bindings.push(input.type);
     }
     if (input.targetId !== undefined) {
-      conditions.push(coverage.read_ready ? "e.target_id = ?" : "target_id = ?");
+      conditions.push("e.target_id = ?");
       bindings.push(input.targetId);
     }
     if (input.status) {
-      conditions.push(
-        coverage.read_ready
-          ? "CASE WHEN a.success = 1 THEN 'success' ELSE 'failed' END = ?"
-          : "status = ?"
-      );
+      conditions.push("CASE WHEN a.success = 1 THEN 'success' ELSE 'failed' END = ?");
       bindings.push(input.status);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    if (coverage.read_ready) {
-      const rows = await this.env.DB.prepare(
-        `SELECT a.rowid AS id, e.type, e.target_id, m.channel_id, m.template_id,
-                CASE WHEN a.success = 1 THEN 'success' ELSE 'failed' END AS status,
-                json_object(
-                  'subject', m.subject,
-                  'content', m.content,
-                  'variables', CASE WHEN json_valid(e.variables_json)
-                                    THEN json(e.variables_json) ELSE json('{}') END
-                ) AS content,
-                a.error, a.completed_at AS sent_at
-         FROM notification_attempts a
-         JOIN notification_messages m ON m.message_id = a.message_id
-         JOIN notification_events e ON e.event_id = m.event_id
-         ${where}
-         ORDER BY a.rowid DESC LIMIT ?`
-      )
-        .bind(...bindings, input.limit)
-        .all<Record<string, unknown> & { id: number }>();
-      return rows.results;
-    }
     const rows = await this.env.DB.prepare(
-      `SELECT id, type, target_id, channel_id, template_id, status, content,
-              error, sent_at
-       FROM notification_history ${where}
-       ORDER BY id DESC LIMIT ?`
+      `SELECT a.rowid AS id, e.type, e.target_id, m.channel_id, m.template_id,
+              CASE WHEN a.success = 1 THEN 'success' ELSE 'failed' END AS status,
+              json_object(
+                'subject', m.subject,
+                'content', m.content,
+                'variables', CASE WHEN json_valid(e.variables_json)
+                                  THEN json(e.variables_json) ELSE json('{}') END
+              ) AS content,
+              a.error, a.completed_at AS sent_at
+       FROM notification_attempts a
+       JOIN notification_messages m ON m.message_id = a.message_id
+       JOIN notification_events e ON e.event_id = m.event_id
+       ${where}
+       ORDER BY a.rowid DESC LIMIT ?`
     )
       .bind(...bindings, input.limit)
-      .all<Record<string, unknown> & { id: number }>();
-    return rows.results;
+      .all();
+    return rows.results.map((row: any) => ({
+      ...row,
+      content: typeof row?.content === "string" ? JSON.parse(row?.content) : row?.content,
+    }));
   }
 }
+

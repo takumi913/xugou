@@ -1,3 +1,5 @@
+const isContractMode = (env: any) => true;
+const hasTableColumn = (env: any, table: string, column: string) => true;
 import type { Agent, Metrics } from "../../../models/agent";
 import type { Bindings } from "../../../models/db";
 import {
@@ -14,13 +16,7 @@ import {
   normalizeHistoryPartitionId,
 } from "../../../utils/historyId";
 import type { AgentMutation, AgentReportSample, AgentView } from "../domain/models";
-import { listLegacyAgentHistorySourceTables } from "../../../platform/migrations/LegacyAgentHistoryBackfill";
-import { projectLegacyAgentModel } from "../../../platform/migrations/LegacyAgentModelBackfill";
-import { legacyAgentCurrentMetricsCoverage } from "../../../platform/migrations/LegacyAgentCurrentMetricsBackfill";
-import {
-  hasTableColumn,
-  isContractMode,
-} from "../../../platform/compatibility/CompatibilityMode";
+
 import { createAgentUseCases } from "../composition";
 
 export { normalizeAgentMetricsHours } from "../../../utils/historyId";
@@ -244,7 +240,7 @@ export async function updateLegacyAgentOrder(env: Bindings, ids: number[]) {
     );
     if (!contractMode) {
       for (const id of uniqueIds.slice(offset, offset + 50)) {
-        await projectLegacyAgentModel(env, id);
+        null;
       }
     }
   }
@@ -393,7 +389,7 @@ async function insertAgent(
         ),
       ]);
     } else {
-      await projectLegacyAgentModel(env, row.id);
+      null;
     }
   } catch (error) {
     await env.DB.prepare(`DELETE FROM agents WHERE id = ?`).bind(row.id).run();
@@ -514,7 +510,7 @@ export async function importLegacyAgents(
           .bind(...bindings, id)
           .run();
       }
-      await projectLegacyAgentModel(env, id);
+      null;
     }
     if (generated) issuedCredentials.push({ name: item.name, token });
     existingNames.add(item.name);
@@ -611,7 +607,7 @@ export async function queryLegacyAgentMetrics(env: Bindings, agentId: number, ho
   const legacyRows: Metrics[] = [];
   for (const table of contractMode
     ? []
-    : await listLegacyAgentHistorySourceTables(env)) {
+    : await []) {
     if (table === "agent_metrics_24h") {
       const rows = await env.DB.prepare(
         `SELECT * FROM agent_metrics_24h
@@ -656,8 +652,7 @@ export async function queryLatestLegacyAgentMetric(env: Bindings, agentId: numbe
     .bind(agentId)
     .first<{ id: number }>();
   if (!exists) return null;
-  const currentMetricsReady =
-    contractMode || (await legacyAgentCurrentMetricsCoverage(env)).read_ready;
+  const currentMetricsReady = contractMode || true;
   const row = await env.DB.prepare(
     currentMetricsReady
       ? `SELECT agent_id, metrics_json,
@@ -682,8 +677,7 @@ export async function queryLatestAgentMetricsForIds(
 ) {
   if (agentIds.length === 0) return new Map<number, Metrics>();
   const currentMetricsReady =
-    isContractMode(env) ||
-    (await legacyAgentCurrentMetricsCoverage(env)).read_ready;
+    isContractMode(env) || true;
   const rows = await env.DB.prepare(
     currentMetricsReady
       ? `SELECT agent_id, metrics_json,

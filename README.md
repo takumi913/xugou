@@ -8,18 +8,6 @@ XUGOU 是一个基于 CloudFlare 的轻量化系统监控平台，提供系统�
 
 </div>
 
-## 📅 开发计划
-
-目前已实现的主要功能：
-
-- ✅ 系统监控 - 客户端资源监控与数据上报
-- ✅ HTTP 监控 - API 接口健康检测
-- ✅ 数据可视化 - 实时数据展示与历史趋势
-- ✅ WebSocket 实时监控 - 指标秒级推送到仪表盘，无需刷新页面
-- ✅ 状态页面 - 可定制的服务状态页面，支持隐藏指定客户端
-- ✅ 告警通知 - 异常事件多渠道通知（Resend 邮件、Telegram、飞书、企业微信、钉钉、Bark、Server 酱、WxPusher、Gotify 共 9 种）
-- ✅ 账单与到期提醒 - 记录服务器账单周期与到期时间，提前提醒续费
-- ✅ 单实例管理 - 单一管理员账号统一管理全部监控资源
 
 ## ✨ 核心特性
 
@@ -73,7 +61,7 @@ XUGOU 采用现代化的系统架构，包含以下组件：
 - **Backend**: 基于 Hono 开发的后端服务，支持部署在 Cloudflare Workers 上
 - **Frontend**: 基于 React + TypeScript 的现代化前端界面
 
-当前文档入口见 [文档索引](./docs/README.md)，未完成项见 [剩余问题与修复方案（2026-08）](./docs/剩余问题与修复方案-2026-08.md)。
+当前文档入口见 [文档索引](./docs/README.md)。
 
 ## 🚀 快速开始
 
@@ -83,13 +71,6 @@ XUGOU 采用现代化的系统架构，包含以下组件：
 
 [部署指南](./docs/部署指南.md)
 
-### 质量门禁
-
-[质量门禁](./docs/质量门禁.md)
-
-### 运维与回滚
-
-[单 Worker 运维与回滚手册](./docs/单Worker运维与回滚手册.md)
 
 ## ⭐ 支持一下作者
 
@@ -116,6 +97,3 @@ XUGOU 采用现代化的系统架构，包含以下组件：
 
 本项目采用 MIT 协议开源，详见 [LICENSE](./LICENSE) 文件。
 
-## 🔥 Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=zaunist/xugou&type=Date)](https://www.star-history.com/#zaunist/xugou&Date)

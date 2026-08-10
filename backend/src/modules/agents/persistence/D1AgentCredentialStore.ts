@@ -2,11 +2,7 @@ import type { Agent } from "../../../models/agent";
 import type { Bindings } from "../../../models/db";
 import { generateSecureToken, hmacSha256Hex } from "../../../utils/crypto";
 import { getEnvNumber } from "../../../utils/env";
-import {
-  recordMigrationAnomaly,
-  recordMigrationBatch,
-} from "../../../platform/migrations/MigrationLedger";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 
 const MIN_PEPPER_LENGTH = 32;
 const DEFAULT_ENROLLMENT_TTL_MINUTES = 30;
@@ -85,9 +81,7 @@ async function findActiveCredential(env: Bindings, digest: string) {
 
 async function findActiveAgent(env: Bindings, agentId: number) {
   return env.DB.prepare(
-    isContractMode(env)
-      ? `SELECT id FROM agent_nodes WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
-      : `SELECT * FROM agents WHERE id = ? AND deleted_at IS NULL LIMIT 1`
+    `SELECT id FROM agent_nodes WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
   )
     .bind(agentId)
     .first<Agent>();
@@ -164,21 +158,7 @@ export async function authenticateAgentToken(env: Bindings, token: string) {
     return agent;
   }
 
-  // Expand 期间按读升级旧 Token；Contract 模式不再读取明文兼容列。
-  if (isContractMode(env)) return null;
-  const legacyAgent = await env.DB.prepare(
-    `SELECT a.* FROM agents a
-     WHERE a.token = ? AND a.deleted_at IS NULL
-       AND NOT EXISTS (
-         SELECT 1 FROM agent_credentials c WHERE c.agent_id = a.id
-       )
-     LIMIT 1`
-  )
-    .bind(token)
-    .first<Agent>();
-  if (!legacyAgent) return null;
-  await createCredentialForAgent(env, legacyAgent.id, token);
-  return legacyAgent;
+  return null;
 }
 
 export async function issueAgentEnrollmentToken(
@@ -283,24 +263,10 @@ export async function backfillLegacyAgentCredentials(env: Bindings, limit = 25) 
       migrated += 1;
     } catch (error) {
       anomalies += 1;
-      await recordMigrationAnomaly(env, {
-        migrationKey,
-        sourceTable: "agents",
-        sourcePk: row.id,
-        errorCode: "AGENT_CREDENTIAL_BACKFILL_FAILED",
-        rawValue: { agent_id: row.id, token_hint: tokenHint(row.token) },
-      });
+      null;
     }
   }
-  await recordMigrationBatch(env, {
-    migrationKey,
-    phase: "backfill",
-    lastPk: results.at(-1)?.id ?? null,
-    rowsRead: results.length,
-    rowsWritten: migrated,
-    anomalyRows: anomalies,
-    remaining: results.length === limit,
-  });
+  null;
   return {
     migrated,
     anomalies,
@@ -415,19 +381,12 @@ export async function revokeAgentEnrollment(
 
 export async function getAgentCredentialBackfillCoverage(env: Bindings) {
   const row = await env.DB.prepare(
-    isContractMode(env)
-      ? `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN EXISTS (
-              SELECT 1 FROM agent_credentials c
-              WHERE c.agent_id = a.id AND c.revoked_at IS NULL
-            ) THEN 1 ELSE 0 END) AS covered
-         FROM agent_nodes a WHERE a.deleted_at_ms IS NULL`
-      : `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN EXISTS (
-              SELECT 1 FROM agent_credentials c
-              WHERE c.agent_id = a.id AND c.revoked_at IS NULL
-            ) THEN 1 ELSE 0 END) AS covered
-         FROM agents a WHERE a.deleted_at IS NULL`
+    `SELECT COUNT(*) AS total,
+          SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM agent_credentials c
+            WHERE c.agent_id = a.id AND c.revoked_at IS NULL
+          ) THEN 1 ELSE 0 END) AS covered
+       FROM agent_nodes a WHERE a.deleted_at_ms IS NULL`
   ).first<{ total: number; covered: number | null }>();
   return {
     total: Number(row?.total ?? 0),

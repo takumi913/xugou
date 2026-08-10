@@ -4,10 +4,7 @@ import type {
   StoredOutboxEvent,
 } from "../../../platform/queues/outbox";
 import { sendRenderedNotification as sendThroughProvider } from "../persistence/NotificationProviderAdapter";
-import { legacyAgentModelCoverage } from "../../../platform/migrations/LegacyAgentModelBackfill";
-import { legacyNotificationRulesCoverage } from "../../../platform/migrations/LegacyNotificationRulesBackfill";
-import { legacyNotificationTemplatesCoverage } from "../../../platform/migrations/LegacyNotificationTemplatesBackfill";
-import { isContractMode } from "../../../platform/compatibility/CompatibilityMode";
+
 
 interface MonitorCheckedPayload {
   changed?: boolean;
@@ -120,11 +117,7 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
     targetId: number,
     globalType: "global-monitor" | "global-agent"
   ) {
-    const rulesReady =
-      isContractMode(this.env) ||
-      (await legacyNotificationRulesCoverage(this.env)).read_ready;
-    const select = rulesReady
-      ? `SELECT rule.*,
+    const select = `SELECT rule.*,
                 COALESCE((
                   SELECT json_group_array(channel_id) FROM (
                     SELECT endpoint.channel_id
@@ -133,8 +126,7 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
                     ORDER BY endpoint.sort_order, endpoint.channel_id
                   )
                 ), '[]') AS channels
-         FROM notification_rules rule`
-      : `SELECT * FROM notification_settings`;
+         FROM notification_rules rule`;
     const specific = await this.env.DB.prepare(
       `${select}
        WHERE target_type = ? AND target_id = ? AND enabled = 1
@@ -155,21 +147,14 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
   }
 
   private async findTemplate(type: "monitor" | "agent") {
-    const templatesReady =
-      isContractMode(this.env) ||
-      (await legacyNotificationTemplatesCoverage(this.env)).read_ready;
     return this.env.DB.prepare(
-      templatesReady
-        ? `SELECT definition.id, version.subject, version.content
-           FROM notification_template_definitions definition
-           JOIN notification_template_versions version
-             ON version.template_id = definition.id
-            AND version.version = definition.current_version
-           WHERE definition.type = ? AND definition.deleted_at_ms IS NULL
-           ORDER BY definition.is_default DESC, definition.id ASC LIMIT 1`
-        : `SELECT id, subject, content FROM notification_templates
-           WHERE type = ? AND deleted_at IS NULL
-           ORDER BY is_default DESC, id ASC LIMIT 1`
+      `SELECT definition.id, version.subject, version.content
+       FROM notification_template_definitions definition
+       JOIN notification_template_versions version
+         ON version.template_id = definition.id
+        AND version.version = definition.current_version
+       WHERE definition.type = ? AND definition.deleted_at_ms IS NULL
+       ORDER BY definition.is_default DESC, definition.id ASC LIMIT 1`
     )
       .bind(type)
       .first<{ id: number; subject: string; content: string }>();
@@ -183,12 +168,9 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
     const monitorId = Number(event.aggregate_id);
     if (!Number.isSafeInteger(monitorId) || monitorId <= 0) return null;
     const monitor = await this.env.DB.prepare(
-      isContractMode(this.env)
-        ? `SELECT id, name, url, expected_status
-           FROM monitor_definitions
-           WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
-        : `SELECT id, name, url, expected_status
-           FROM monitors WHERE id = ? LIMIT 1`
+      `SELECT id, name, url, expected_status
+       FROM monitor_definitions
+       WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
     )
       .bind(monitorId)
       .first<{ id: number; name: string; url: string; expected_status: number }>();
@@ -246,23 +228,17 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
     const payload = JSON.parse(event.payload_json) as AgentEventPayload;
     const agentId = Number(event.aggregate_id);
     if (!Number.isSafeInteger(agentId) || agentId <= 0) return null;
-    const agentModelReady =
-      isContractMode(this.env) ||
-      (await legacyAgentModelCoverage(this.env)).read_ready;
     const agent = await this.env.DB.prepare(
-      agentModelReady
-        ? `SELECT n.id, n.name, r.hostname,
-                  r.ip_addresses_json AS ip_addresses, r.os,
-                  CASE WHEN r.last_seen_at_ms IS NULL THEN NULL
-                       ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
-                                     r.last_seen_at_ms / 1000.0, 'unixepoch') END
-                    AS last_seen_at,
-                  strftime('%Y-%m-%dT%H:%M:%fZ',
-                           r.updated_at_ms / 1000.0, 'unixepoch') AS updated_at
-           FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
-           WHERE n.id = ? AND n.deleted_at_ms IS NULL LIMIT 1`
-        : `SELECT id, name, hostname, ip_addresses, os, last_seen_at, updated_at
-           FROM agents WHERE id = ? AND deleted_at IS NULL LIMIT 1`
+      `SELECT n.id, n.name, r.hostname,
+              r.ip_addresses_json AS ip_addresses, r.os,
+              CASE WHEN r.last_seen_at_ms IS NULL THEN NULL
+                   ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
+                                 r.last_seen_at_ms / 1000.0, 'unixepoch') END
+                AS last_seen_at,
+              strftime('%Y-%m-%dT%H:%M:%fZ',
+                       r.updated_at_ms / 1000.0, 'unixepoch') AS updated_at
+       FROM agent_nodes n JOIN agent_runtime r ON r.agent_id = n.id
+       WHERE n.id = ? AND n.deleted_at_ms IS NULL LIMIT 1`
     )
       .bind(agentId)
       .first<{
@@ -558,24 +534,6 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
           message.event_id
         ),
       ];
-      if (!isContractMode(this.env)) {
-        statements.push(this.env.DB.prepare(
-          `INSERT INTO notification_history
-           (type, target_id, channel_id, template_id, status, content, error, sent_at)
-           SELECT e.type, e.target_id, ?, ?, 'success', ?, NULL, ?
-           FROM notification_events e WHERE e.event_id = ?`
-        ).bind(
-          message.channel_id,
-          message.template_id,
-          JSON.stringify({
-            subject: message.subject,
-            content: message.content,
-            variables,
-          }),
-          completedAt,
-          message.event_id
-        ));
-      }
       await this.env.DB.batch(statements);
       return;
     }
@@ -613,21 +571,6 @@ export class NotificationOutboxConsumer implements OutboxConsumer {
         leaseToken
       ),
     ];
-    if (!isContractMode(this.env)) {
-      failureStatements.push(this.env.DB.prepare(
-        `INSERT INTO notification_history
-         (type, target_id, channel_id, template_id, status, content, error, sent_at)
-         SELECT e.type, e.target_id, ?, ?, 'failed', ?, ?, ?
-         FROM notification_events e WHERE e.event_id = ?`
-      ).bind(
-        message.channel_id,
-        message.template_id,
-        JSON.stringify({ subject: message.subject, content: message.content, variables }),
-        result.error ?? "Provider rejected notification",
-        completedAt,
-        message.event_id
-      ));
-    }
     await this.env.DB.batch(failureStatements);
     throw new Error(result.error ?? "Notification delivery failed");
   }

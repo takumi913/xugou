@@ -725,41 +725,6 @@ export const rawSampleArchiveMembers = sqliteTable(
   })
 );
 
-// 同一 Worker 的通用异步作业账本。dedup_key 负责消除 Cron 重叠和 HTTP 重投。
-export const asyncJobs = sqliteTable(
-  "async_jobs",
-  {
-    id: text("id").primaryKey(),
-    kind: text("kind").notNull(),
-    dedup_key: text("dedup_key").notNull(),
-    aggregate_type: text("aggregate_type").notNull(),
-    aggregate_id: text("aggregate_id").notNull(),
-    payload_json: text("payload_json").notNull().default("{}"),
-    status: text("status").notNull().default("pending"),
-    attempts: int("attempts").notNull().default(0),
-    max_attempts: int("max_attempts").notNull().default(8),
-    available_at: text("available_at").notNull(),
-    lease_token: text("lease_token"),
-    lease_expires_at: text("lease_expires_at"),
-    last_error: text("last_error"),
-    completed_at: text("completed_at"),
-    created_at: text("created_at").notNull(),
-    updated_at: text("updated_at").notNull(),
-  },
-  (table) => ({
-    dedupUniqueIdx: uniqueIndex("async_jobs_dedup_key_unique_idx").on(
-      table.dedup_key
-    ),
-    dueIdx: index("async_jobs_status_available_at_idx").on(
-      table.status,
-      table.available_at
-    ),
-    aggregateIdx: index("async_jobs_aggregate_idx").on(
-      table.aggregate_type,
-      table.aggregate_id
-    ),
-  })
-);
 
 // 领域副作用先与业务写入同一 D1 batch，再由 Queue 投递并按 event_id 消费。
 export const domainOutbox = sqliteTable(
@@ -1379,36 +1344,6 @@ export const statusMetricPublications = sqliteTable(
   })
 );
 
-// 平台 DLQ 消息进入同一 Worker 后先落账本，管理端可重放或终止。
-export const queueFailures = sqliteTable(
-  "queue_failures",
-  {
-    failure_id: text("failure_id").primaryKey(),
-    queue_name: text("queue_name").notNull(),
-    message_id: text("message_id").notNull(),
-    message_json: text("message_json").notNull(),
-    source_kind: text("source_kind"),
-    source_id: text("source_id"),
-    delivery_attempts: int("delivery_attempts").notNull(),
-    last_error: text("last_error"),
-    status: text("status").notNull().default("open"),
-    replay_count: int("replay_count").notNull().default(0),
-    replayed_at: text("replayed_at"),
-    terminated_at: text("terminated_at"),
-    created_at: text("created_at").notNull(),
-    updated_at: text("updated_at").notNull(),
-  },
-  (table) => ({
-    queueMessageUniqueIdx: uniqueIndex("queue_failures_queue_message_unique_idx").on(
-      table.queue_name,
-      table.message_id
-    ),
-    statusUpdatedIdx: index("queue_failures_status_updated_at_idx").on(
-      table.status,
-      table.updated_at
-    ),
-  })
-);
 
 // 可恢复 Backfill 的持久化游标与守恒计数；每个 migration_key 只有一个活动状态。
 export const migrationCheckpoints = sqliteTable(
@@ -1521,40 +1456,6 @@ export const legacyIdMap = sqliteTable(
   })
 );
 
-// 独立 Contract 发布前固化的证据包。记录只追加，清理旧表后 Readiness 仍可
-// 展示清理前的守恒、静默窗口、Bookmark/Export 摘要与发布版本。
-export const contractReleaseEvidence = sqliteTable(
-  "contract_release_evidence",
-  {
-    id: text("id").primaryKey(),
-    bundle_sha256: text("bundle_sha256").notNull(),
-    release_version: text("release_version").notNull(),
-    git_sha: text("git_sha").notNull(),
-    bundle_json: text("bundle_json").notNull(),
-    prepared_at: text("prepared_at").notNull(),
-    created_at: text("created_at").notNull(),
-    updated_at: text("updated_at").notNull(),
-  },
-  (table) => ({
-    bundleUniqueIdx: uniqueIndex("contract_release_evidence_bundle_sha_unique_idx").on(
-      table.bundle_sha256
-    ),
-    preparedIdx: index("contract_release_evidence_prepared_at_idx").on(
-      table.prepared_at
-    ),
-  })
-);
-
-// 单例指针只指向已在同一 Contract 事务中激活的不可变证据记录。
-export const contractReleaseState = sqliteTable("contract_release_state", {
-  singleton_key: int("singleton_key").primaryKey().default(1),
-  active_evidence_id: text("active_evidence_id")
-    .notNull()
-    .references(() => contractReleaseEvidence.id, { onDelete: "restrict" }),
-  phase: text("phase").notNull(),
-  activated_at: text("activated_at").notNull(),
-  updated_at: text("updated_at").notNull(),
-});
 
 // 仅用于数据库迁移版本等实例级元数据。
 export const settings = sqliteTable("settings", {

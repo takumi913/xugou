@@ -9,9 +9,8 @@ import {
   listSecurityAuditEventsPage,
   writeSecurityAuditEvent,
 } from "../../../platform/security/SecurityStore";
-import { createQueueFailureUseCases } from "../composition";
-import { D1MigrationLedgerQuery } from "../persistence/D1MigrationLedgerQuery";
-import { D1ReleaseReadinessQuery } from "../persistence/D1ReleaseReadinessQuery";
+
+
 import { getAgentCredentialBackfillCoverage } from "../../agents/persistence/D1AgentCredentialStore";
 import { getNotificationSecretMigrationCoverage } from "../../notifications/persistence/NotificationSecretMaintenance";
 
@@ -24,30 +23,7 @@ const listSchema = z
   })
   .strict();
 const idSchema = z.string().min(1).max(512);
-const anomalyListSchema = z
-  .object({
-    cursor: z.coerce
-      .number()
-      .int()
-      .positive()
-      .max(Number.MAX_SAFE_INTEGER)
-      .optional(),
-    migration_key: z.string().trim().min(1).max(128).optional(),
-    status: z
-      .enum(["open", "retry_requested", "resolved", "ignored"])
-      .optional(),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
-const anomalyActionSchema = z
-  .object({
-    action: z.enum(["retry", "ignore"]),
-    note: z.string().trim().max(1000).nullable().optional(),
-  })
-  .strict();
-const compatibilityQuerySchema = z
-  .object({ days: z.coerce.number().int().min(1).max(365).default(30) })
-  .strict();
+
 const securityAuditListSchema = z
   .object({
     cursor: z.string().min(1).max(512).optional(),
@@ -77,31 +53,8 @@ async function handle<T>(
   }
 }
 
-operationsV2.get("/queue-failures", async (c) => {
-  const parsed = listSchema.safeParse(c.req.query());
-  if (!parsed.success) return validation(c);
-  const result = await handle(c, () => createQueueFailureUseCases(c.env).list(parsed.data));
-  return result instanceof Response ? result : c.json(result);
-});
 
-operationsV2.get("/queue-health", async (c) => {
-  const result = await handle(c, () => createQueueFailureUseCases(c.env).health());
-  return result instanceof Response ? result : c.json({ data: result });
-});
 
-operationsV2.get("/release-readiness", async (c) => {
-  const result = await handle(c, () => new D1ReleaseReadinessQuery(c.env).get());
-  return result instanceof Response ? result : c.json({ data: result });
-});
-
-operationsV2.get("/compatibility-hits", async (c) => {
-  const parsed = compatibilityQuerySchema.safeParse(c.req.query());
-  if (!parsed.success) return validation(c);
-  const result = await handle(c, () =>
-    new D1ReleaseReadinessQuery(c.env).listCompatibilityHits(parsed.data.days)
-  );
-  return result instanceof Response ? result : c.json({ data: result });
-});
 
 operationsV2.get("/security-audit", async (c) => {
   const parsed = securityAuditListSchema.safeParse(c.req.query());
@@ -146,95 +99,8 @@ operationsV2.get("/credential-coverage", async (c) => {
   return result instanceof Response ? result : c.json({ data: result });
 });
 
-operationsV2.get("/migrations/checkpoints", async (c) => {
-  const result = await handle(c, () =>
-    new D1MigrationLedgerQuery(c.env).listCheckpoints()
-  );
-  return result instanceof Response ? result : c.json({ data: result });
-});
 
-operationsV2.get("/migrations/anomalies", async (c) => {
-  const parsed = anomalyListSchema.safeParse(c.req.query());
-  if (!parsed.success) return validation(c);
-  const result = await handle(c, () =>
-    new D1MigrationLedgerQuery(c.env).listAnomalies({
-      cursor: parsed.data.cursor,
-      migrationKey: parsed.data.migration_key,
-      status: parsed.data.status,
-      limit: parsed.data.limit,
-    })
-  );
-  return result instanceof Response ? result : c.json(result);
-});
 
-operationsV2.patch("/migrations/anomalies/:id", async (c) => {
-  const id = z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(Number.MAX_SAFE_INTEGER)
-    .safeParse(c.req.param("id"));
-  const body = anomalyActionSchema.safeParse(await c.req.json().catch(() => null));
-  if (!id.success || !body.success) return validation(c);
-  const updated = await new D1MigrationLedgerQuery(c.env).updateAnomaly(
-    id.data,
-    body.data.action,
-    body.data.note ?? null
-  );
-  if (!updated) {
-    return problemResponse(c, {
-      status: 404,
-      code: "MIGRATION_ANOMALY_NOT_FOUND",
-      title: "Migration anomaly not found",
-    });
-  }
-  await writeSecurityAuditEvent(c.env, {
-    eventType: `migration.anomaly.${body.data.action}`,
-    outcome: "success",
-    actorType: "admin",
-    actorId: c.get("admin").id,
-    subjectType: "migration_anomaly",
-    subjectId: id.data,
-    request: c.req.raw,
-  });
-  return c.json({ data: { id: id.data, action: body.data.action } });
-});
 
-operationsV2.post("/queue-failures/:id/replay", async (c) => {
-  const parsed = idSchema.safeParse(c.req.param("id"));
-  if (!parsed.success) return validation(c);
-  const result = await handle(c, () => createQueueFailureUseCases(c.env).replay(parsed.data));
-  if (result instanceof Response) return result;
-  await writeSecurityAuditEvent(c.env, {
-    eventType: "queue.failure.replay",
-    outcome: "success",
-    actorType: "admin",
-    actorId: c.get("admin").id,
-    subjectType: "queue_failure",
-    subjectId: parsed.data,
-    request: c.req.raw,
-  });
-  return c.json({ data: result });
-});
-
-operationsV2.post("/queue-failures/:id/terminate", async (c) => {
-  const parsed = idSchema.safeParse(c.req.param("id"));
-  if (!parsed.success) return validation(c);
-  const result = await handle(c, async () => {
-    await createQueueFailureUseCases(c.env).terminate(parsed.data);
-    return true;
-  });
-  if (result instanceof Response) return result;
-  await writeSecurityAuditEvent(c.env, {
-    eventType: "queue.failure.terminate",
-    outcome: "success",
-    actorType: "admin",
-    actorId: c.get("admin").id,
-    subjectType: "queue_failure",
-    subjectId: parsed.data,
-    request: c.req.raw,
-  });
-  return c.body(null, 204);
-});
 
 export { operationsV2 };

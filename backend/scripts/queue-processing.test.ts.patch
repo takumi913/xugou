@@ -1,0 +1,10 @@
+--- backend/scripts/queue-processing.test.ts
++++ backend/scripts/queue-processing.test.ts
+@@ -82,2 +82,7 @@
+   );
++  CREATE TABLE legacy_id_map (
++    source_table TEXT NOT NULL, source_id TEXT NOT NULL, target_table TEXT NOT NULL,
++    target_id TEXT NOT NULL, payload_checksum TEXT NOT NULL, created_at TEXT NOT NULL,
++    updated_at TEXT NOT NULL, PRIMARY KEY(source_table, source_id)
++  );
+   CREATE TABLE domain_outbox (

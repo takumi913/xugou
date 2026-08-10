@@ -70,7 +70,6 @@ const base: AgentView = {
   updated_at: "2026-08-01T00:00:00.000Z",
 };
 const rows = [base, { ...base, id: 2, name: "edge-2" }, { ...base, id: 3, name: "edge-3" }];
-let reportDisposition: "created" | "duplicate" | "conflict" = "created";
 const published: string[] = [];
 const repository: AgentRepositoryPort = {
   async listPage({ after, limit }) {
@@ -107,19 +106,12 @@ const repository: AgentRepositoryPort = {
         }
       : null;
   },
-  async createReportJob({ report }) {
-    return {
-      disposition: reportDisposition,
-      jobId: `agent-report:${report.report_id}`,
-    };
-  },
-  async markJobPublished() {},
 };
 const useCases = new AgentUseCases(
   repository,
   { async digest(token) { return `digest:${token}`; } },
   { async digest(report) { return `digest:${report.report_id}`; } },
-  { async publishJob(jobId) { published.push(jobId); } },
+  { async process(agentId, report) { published.push(`agent-report:${report.report_id}`); return { outcome: "completed" }; } },
   { shouldUpdate({ autoUpdate, currentVersion }) {
     return autoUpdate && currentVersion === "v0.2.0";
   } }
@@ -166,10 +158,6 @@ assert.equal(accepted.duplicate, false);
 assert.equal(accepted.config.update, true);
 assert.deepEqual(published, [`agent-report:${report.report_id}`]);
 
-reportDisposition = "duplicate";
-assert.equal((await useCases.acceptReport("valid-token", report)).duplicate, true);
-reportDisposition = "conflict";
-await assert.rejects(useCases.acceptReport("valid-token", report), /Report id/);
 await assert.rejects(useCases.acceptReport("invalid-token", report), /credential/);
 
 assert.equal(agentV4ReportSchema.safeParse(report).success, true);
