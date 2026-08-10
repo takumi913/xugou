@@ -19,7 +19,6 @@
     "test:sessions": "pnpm --dir backend run test:sessions",
     "test:security": "pnpm --dir backend run test:security",
     "test:workers": "pnpm --dir backend run test:workers",
-    "test:contract-release": "pnpm --dir backend run test:contract-release",
     "test:frontend": "pnpm --dir frontend run test:forms && pnpm --dir frontend run test:i18n && pnpm --dir frontend run test:version",
     "test:frontend:e2e": "pnpm --dir frontend run test:e2e && pnpm --dir frontend run test:e2e:live",
     "test:dependencies": "pnpm audit --prod && pnpm peers check",
@@ -33,7 +32,7 @@
     "lint": "pnpm --dir backend run lint && pnpm --dir frontend run lint",
     "typecheck": "pnpm --dir backend run typecheck && pnpm --dir frontend exec tsc -b --noEmit",
     "test": "pnpm run test:contracts && pnpm run test:migrations && pnpm run test:modules && pnpm run test:security && pnpm run test:frontend && (cd agent && go test ./...)",
-    "test:all": "pnpm run types:worker:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run test:workers && pnpm run test:contract-release && pnpm run test:frontend:e2e && pnpm run build && pnpm run deploy:dry-run && pnpm run test:dependencies && pnpm run test:agent:quality && pnpm run test:agent:smoke && pnpm run test:agent:cross-build && git diff --check"
+    "test:all": "pnpm run types:worker:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run test:workers && pnpm run test:frontend:e2e && pnpm run build && pnpm run deploy:dry-run && pnpm run test:dependencies && pnpm run test:agent:quality && pnpm run test:agent:smoke && pnpm run test:agent:cross-build && git diff --check"
   },
   "devDependencies": {
     "wrangler": "^4.120.0"

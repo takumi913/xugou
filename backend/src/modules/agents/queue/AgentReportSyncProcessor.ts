@@ -54,10 +54,7 @@ function maxFinite(values: Array<number | null | undefined>) {
 
 export class AgentReportSyncProcessor {
   constructor(
-    private readonly env: Pick<
-      Bindings,
-      "DB" | "AGENT_ROOM"
-    >
+    private readonly env: Bindings
   ) {}
 
   async process(agentId: number, report: AgentReportCommand) {
@@ -421,7 +418,7 @@ export class AgentReportSyncProcessor {
     }
 
     // Process outbox events synchronously to immediately rebuild status and send notifications
-    const outboxDispatcher = new OutboxDispatcher(this.env as any);
+    const outboxDispatcher = new OutboxDispatcher(this.env);
     for (const outboxEventId of outboxEventIds) {
       try {
         await outboxDispatcher.process(outboxEventId);

@@ -149,27 +149,7 @@ add("/api/v2/agents/reports", "post", "acceptAgentReportV4", {
   responses: { 202: ok(ref("AgentReportAccepted")), 400: problem, 401: problem, 409: problem, 503: problem },
 });
 
-add("/api/v2/operations/queue-failures", "get", "listQueueFailures", {
-  parameters: [
-    { name: "cursor", in: "query", schema: { type: "string" } },
-    { name: "status", in: "query", schema: { type: "string", enum: ["open", "replayed", "terminated"] } },
-    { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
-  ],
-  responses: { 200: ok(ref("QueueFailurePage")), 400: problem, 401: problem, 500: problem },
-});
-add("/api/v2/operations/queue-health", "get", "getQueueHealth", {
-  responses: { 200: ok(data(ref("QueueLedgerHealth"))), 401: problem, 500: problem },
-});
-add("/api/v2/operations/release-readiness", "get", "getReleaseReadiness", {
-  security: [{ sessionCookie: [] }, { releaseToken: [] }],
-  responses: { 200: ok(data(ref("ReleaseReadiness"))), 401: problem, 500: problem },
-});
-add("/api/v2/operations/compatibility-hits", "get", "listCompatibilityHits", {
-  parameters: [
-    { name: "days", in: "query", schema: { type: "integer", minimum: 1, maximum: 365, default: 30 } },
-  ],
-  responses: { 200: ok(data({ type: "array", items: ref("CompatibilityHit") })), 400: problem, 401: problem, 500: problem },
-});
+
 add("/api/v2/operations/security-audit", "get", "listSecurityAuditEventsV2", {
   parameters: [
     { name: "cursor", in: "query", schema: { type: "string", maxLength: 512 } },
@@ -181,25 +161,6 @@ add("/api/v2/operations/security-audit", "get", "listSecurityAuditEventsV2", {
 });
 add("/api/v2/operations/credential-coverage", "get", "getCredentialCoverageV2", {
   responses: { 200: ok(data(ref("CredentialCoverage"))), 401: problem, 500: problem },
-});
-add("/api/v2/operations/queue-failures/{id}/replay", "post", "replayQueueFailure", { parameters: [pathId("id", "string")], responses: { 200: ok(data(ref("QueueReplayResult"))), 400: problem, 401: problem, 409: problem, 503: problem } });
-add("/api/v2/operations/queue-failures/{id}/terminate", "post", "terminateQueueFailure", { parameters: [pathId("id", "string")], responses: { 204: noContent, 400: problem, 401: problem, 409: problem, 500: problem } });
-add("/api/v2/operations/migrations/checkpoints", "get", "listMigrationCheckpoints", {
-  responses: { 200: ok(data({ type: "array", maxItems: 100, items: ref("MigrationCheckpoint") })), 401: problem, 500: problem },
-});
-add("/api/v2/operations/migrations/anomalies", "get", "listMigrationAnomalies", {
-  parameters: [
-    { name: "cursor", in: "query", schema: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER } },
-    { name: "migration_key", in: "query", schema: { type: "string" } },
-    { name: "status", in: "query", schema: { type: "string", enum: ["open", "retry_requested", "resolved", "ignored"] } },
-    { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
-  ],
-  responses: { 200: ok(ref("MigrationAnomalyPage")), 400: problem, 401: problem, 500: problem },
-});
-add("/api/v2/operations/migrations/anomalies/{id}", "patch", "updateMigrationAnomaly", {
-  parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER } }],
-  requestBody: { required: true, ...json(ref("MigrationAnomalyAction")) },
-  responses: { 200: ok(data(ref("MigrationAnomalyActionResult"))), 400: problem, 401: problem, 404: problem, 500: problem },
 });
 
 add("/api/v2/status/config", "get", "getStatusConfigV2", { responses: { 200: ok(data(ref("StatusConfigView"))), 401: problem, 500: problem } });

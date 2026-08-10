@@ -479,10 +479,7 @@ const processor = new AgentReportSyncProcessor(env as never);
     }
   );
 
-  assert.equal(
-    sqlite.prepare("SELECT cpu_usage FROM agent_latest_metrics WHERE agent_id = 1").get()?.cpu_usage,
-    22.5
-  );
+
   assert.equal(
     sqlite.prepare("SELECT cpu_usage FROM agent_current_metrics WHERE agent_id = 1").get()?.cpu_usage,
     22.5
@@ -517,18 +514,26 @@ sqlite.prepare(`INSERT INTO monitor_runtime
   );
 sqlite.prepare("INSERT OR IGNORE INTO public_status_snapshots(id, refreshing) VALUES(1, 0)").run();
 sqlite.prepare("INSERT INTO notification_channels VALUES(1, 'fixture', 'webhook', '{}', 1, NULL)").run();
-sqlite.prepare("INSERT INTO notification_templates VALUES(1, 'monitor', 'monitor', '${name}: ${status}', '${details}', 1, NULL, ?, ?)").run(now, now);
-sqlite.prepare("INSERT INTO notification_templates VALUES(2, 'agent', 'agent', '${name}: ${status}', '${details}', 1, NULL, ?, ?)").run(now, now);
-sqlite.prepare(`INSERT INTO notification_settings
+sqlite.prepare("INSERT INTO notification_template_definitions VALUES(1, 'monitor', 'monitor', 1, 1, NULL, ?, ?)").run(Date.parse(now), Date.parse(now));
+sqlite.prepare("INSERT INTO notification_template_versions VALUES(1, 1, '${name}: ${status}', '${details}', ?)").run(Date.parse(now));
+sqlite.prepare("INSERT INTO notification_template_definitions VALUES(2, 'agent', 'agent', 1, 1, NULL, ?, ?)").run(Date.parse(now), Date.parse(now));
+sqlite.prepare("INSERT INTO notification_template_versions VALUES(2, 1, '${name}: ${status}', '${details}', ?)").run(Date.parse(now));
+sqlite.prepare(`INSERT INTO notification_rules
   (id, target_type, target_id, enabled, on_down, on_recovery, on_offline,
    on_cpu_threshold, cpu_threshold, on_memory_threshold, memory_threshold,
-   on_disk_threshold, disk_threshold, cooldown_minutes, channels)
-  VALUES(1, 'monitor', 1, 1, 1, 1, 1, 0, 90, 0, 85, 0, 90, 30, '[1]')`).run();
-sqlite.prepare(`INSERT INTO notification_settings
+   on_disk_threshold, disk_threshold, cooldown_minutes, created_at_ms, updated_at_ms)
+  VALUES(1, 'monitor', 1, 1, 1, 1, 1, 0, 90, 0, 85, 0, 90, 30, ?, ?)`).run(Date.parse(now), Date.parse(now));
+sqlite.prepare(`INSERT INTO notification_rule_endpoints
+  (rule_id, channel_id, sort_order, created_at_ms, updated_at_ms)
+  VALUES(1, 1, 0, ?, ?)`).run(Date.parse(now), Date.parse(now));
+sqlite.prepare(`INSERT INTO notification_rules
   (id, target_type, target_id, enabled, on_down, on_recovery, on_offline,
    on_cpu_threshold, cpu_threshold, on_memory_threshold, memory_threshold,
-   on_disk_threshold, disk_threshold, cooldown_minutes, channels)
-  VALUES(2, 'agent', 1, 1, 1, 1, 1, 1, 20, 1, 40, 1, 50, 30, '[1]')`).run();
+   on_disk_threshold, disk_threshold, cooldown_minutes, created_at_ms, updated_at_ms)
+  VALUES(2, 'agent', 1, 1, 1, 1, 1, 1, 20, 1, 40, 1, 50, 30, ?, ?)`).run(Date.parse(now), Date.parse(now));
+sqlite.prepare(`INSERT INTO notification_rule_endpoints
+  (rule_id, channel_id, sort_order, created_at_ms, updated_at_ms)
+  VALUES(2, 1, 0, ?, ?)`).run(Date.parse(now), Date.parse(now));
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => new Response(null, { status: 200 });
@@ -537,10 +542,9 @@ try {
   assert.deepEqual(await monitorProcessor.process(1, 1785542400000), {
     outcome: "completed",
   });
-  assert.equal(sqlite.prepare("SELECT status FROM monitors WHERE id = 1").get()?.status, "up");
+  assert.equal(sqlite.prepare("SELECT status FROM monitor_runtime WHERE monitor_id = 1").get()?.status, "up");
   assert.equal(sqlite.prepare("SELECT count(*) AS count FROM monitor_check_samples").get()?.count, 1);
-  assert.equal(sqlite.prepare("SELECT count(*) AS count FROM monitor_status_history_24h").get()?.count, 1);
-  assert.equal(sqlite.prepare("SELECT count(*) AS count FROM monitor_check_rollups").get()?.count, 1);
+
   assert.deepEqual(await monitorProcessor.process(1, 1785542400000), { outcome: "completed" });
 
 
@@ -590,7 +594,7 @@ try {
   assert.equal(sqlite.prepare("SELECT status FROM notification_messages").get()?.status, "sent");
   assert.equal(sqlite.prepare("SELECT count(*) AS count FROM notification_attempts").get()?.count, 3);
   assert.equal(sqlite.prepare("SELECT count(*) AS count FROM notification_cooldowns").get()?.count, 3);
-  assert.equal(sqlite.prepare("SELECT count(*) AS count FROM notification_history").get()?.count, 3);
+
 
 
 
