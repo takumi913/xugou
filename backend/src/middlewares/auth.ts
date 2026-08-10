@@ -135,15 +135,7 @@ export const adminSessionMiddleware = async (
     return next();
   }
 
-  if (
-    c.req.path === "/api/v2/operations/release-readiness" &&
-    c.req.method === "GET" &&
-    c.env.RELEASE_READINESS_TOKEN &&
-    getBearerToken(c) &&
-    constantTimeEqual(getBearerToken(c) ?? "", c.env.RELEASE_READINESS_TOKEN)
-  ) {
-    return next();
-  }
+
 
   try {
     const authenticated = await authenticateRequest(c);

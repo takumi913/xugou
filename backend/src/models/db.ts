@@ -5,7 +5,7 @@ export interface SecretBindings {
   AGENT_TOKEN_PEPPER?: string;
   NOTIFICATION_KEK?: string;
   NOTIFICATION_KEK_PREVIOUS?: string;
-  RELEASE_READINESS_TOKEN?: string;
+
 }
 
 // 允许预览/测试覆盖的可选运行参数；wrangler.toml 中的正式 Vars 由 worker-env.d.ts 生成。

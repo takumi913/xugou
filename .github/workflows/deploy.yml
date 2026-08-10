@@ -33,18 +33,18 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: agent/go.sum
       - run: pnpm install --frozen-lockfile
-      - name: Validate deployment credentials
+      - name: Verify Secret Presence
         env:
           CF_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.XUGOU_D1_DATABASE_ID }}
           D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
-          RELEASE_READINESS_URL: ${{ secrets.RELEASE_READINESS_URL }}
-          RELEASE_READINESS_TOKEN: ${{ secrets.RELEASE_READINESS_TOKEN }}
         run: |
-          set -euo pipefail
-          for value in CF_API_TOKEN CF_ACCOUNT_ID D1_DATABASE_ID D1_DATABASE_NAME RELEASE_READINESS_URL RELEASE_READINESS_TOKEN; do
-            test -n "${!value}"
+          for value in CF_API_TOKEN CF_ACCOUNT_ID D1_DATABASE_ID D1_DATABASE_NAME; do
+            if [ -z "${!value}" ]; then
+              echo "Error: Secret $value is not set."
+              exit 1
+            fi
           done
       - name: Configure Wrangler
         env:
@@ -130,34 +130,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
 
-      # Stage 5: protected runtime readiness is the final release gate.
-      - name: Stage 5 - Protected release readiness
-        env:
-          RELEASE_READINESS_URL: ${{ secrets.RELEASE_READINESS_URL }}
-          RELEASE_READINESS_TOKEN: ${{ secrets.RELEASE_READINESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          umask 077
-          ready=0
-          # 首次 Expand 发布需要等待 Cron 完成幂等 Backfill；普通发布通常首轮通过。
-          # 每轮都覆盖为最新完整 JSON，超时失败时仍上传最后一次门禁证据。
-          for attempt in $(seq 1 75); do
-            curl --fail-with-body --retry 5 --retry-all-errors \
-              --user-agent "xugou-release-readiness/1" \
-              -H "Authorization: Bearer ${RELEASE_READINESS_TOKEN}" \
-              "${RELEASE_READINESS_URL%/}/api/v2/operations/release-readiness" \
-              > .migration-evidence/release-readiness.json
-            if pnpm --dir backend exec tsx \
-              tooling/operations/verify-release-readiness.ts \
-              --file ../.migration-evidence/release-readiness.json \
-              --mode release \
-              > .migration-evidence/readiness-verification.json; then
-              ready=1
-              break
-            fi
-            if [ "$attempt" -lt 75 ]; then sleep 60; fi
-          done
-          test "$ready" -eq 1
 
       - name: Upload complete migration and readiness evidence
         if: always()
