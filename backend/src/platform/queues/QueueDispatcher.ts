@@ -40,15 +40,14 @@ export async function dispatchQueueBatch(
 
     try {
       const body = message.body as XugouQueueMessage;
-      let logResult: "success" | "deferred" = "success";
-      
+
       await eventConsumer.process(body.event_id);
       message.ack();
-      
+
       writeStructuredLog(env, {
         service: "queue",
         operation: "queue_message",
-        result: logResult,
+        result: "success",
         traceId,
         eventId: body.event_id,
         fields: {
@@ -72,11 +71,11 @@ export async function dispatchQueueBatch(
         } catch (ledgerError) {
           writeStructuredLog(env, {
             service: "queue",
-            operation: "queue_failure_ledger",
+            operation: "outbox_failure_record",
             result: "failure",
             traceId,
             eventId: body.event_id,
-            errorCode: "QUEUE_FAILURE_LEDGER_WRITE_FAILED",
+            errorCode: "OUTBOX_FAILURE_RECORD_FAILED",
             error: ledgerError,
             fields: { queue: batch.queue, message_id: message.id },
           });
@@ -96,7 +95,13 @@ export async function dispatchQueueBatch(
           attempts: message.attempts,
         },
       });
-      message.retry({ delaySeconds: Math.min(300, 2 ** Math.min(message.attempts, 8)) });
+      if (batch.queue === "xugou-jobs-dlq") {
+        message.ack();
+      } else {
+        message.retry({
+          delaySeconds: Math.min(300, 2 ** Math.min(message.attempts, 8)),
+        });
+      }
     }
   }
 }

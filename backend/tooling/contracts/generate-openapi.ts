@@ -159,10 +159,6 @@ add("/api/v2/operations/security-audit", "get", "listSecurityAuditEventsV2", {
   ],
   responses: { 200: ok(ref("SecurityAuditPage")), 400: problem, 401: problem, 500: problem },
 });
-add("/api/v2/operations/credential-coverage", "get", "getCredentialCoverageV2", {
-  responses: { 200: ok(data(ref("CredentialCoverage"))), 401: problem, 500: problem },
-});
-
 add("/api/v2/status/config", "get", "getStatusConfigV2", { responses: { 200: ok(data(ref("StatusConfigView"))), 401: problem, 500: problem } });
 add("/api/v2/status/config", "put", "saveStatusConfigV2", { requestBody: { required: true, ...json(ref("StatusConfigCommand")) }, responses: { 200: ok(data(ref("StatusConfigView"))), 400: problem, 401: problem, 500: problem } });
 add("/api/v2/status/public", "get", "getPublicStatusV2", { security: [], responses: { 200: ok(ref("PublicStatus")), 304: noContent, 503: problem, 500: problem } });
@@ -512,60 +508,8 @@ const schemas: Record<string, Schema> = {
     },
   },
   AgentReportAccepted: { type: "object", required: ["report_id", "accepted", "duplicate", "config"], properties: { report_id: { type: "string", format: "uuid" }, accepted: { type: "boolean" }, duplicate: { type: "boolean" }, config: { type: "object", required: ["collect_interval_seconds", "report_interval_seconds", "update"], properties: { collect_interval_seconds: { type: "integer" }, report_interval_seconds: { type: "integer" }, update: { type: "boolean" } } } } },
-  QueueFailure: { type: "object", required: ["failure_id", "queue_name", "message_id", "delivery_attempts", "status", "replay_count", "created_at", "updated_at"], properties: { failure_id: { type: "string" }, queue_name: { type: "string" }, message_id: { type: "string" }, source_kind: { type: ["string", "null"] }, source_id: { type: ["string", "null"] }, delivery_attempts: { type: "integer" }, last_error: { type: ["string", "null"] }, status: { type: "string", enum: ["open", "replayed", "terminated"] }, replay_count: { type: "integer" }, replayed_at: { type: ["string", "null"], format: "date-time" }, terminated_at: { type: ["string", "null"], format: "date-time" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } },
-  QueueFailurePage: { type: "object", required: ["data", "next_cursor", "has_more"], properties: { data: { type: "array", items: ref("QueueFailure") }, next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } },
-  QueueReplayResult: { type: "object", required: ["failure_id", "status"], properties: { failure_id: { type: "string" }, status: { const: "replayed" } } },
-  QueueLedgerHealth: { type: "object", required: ["generated_at", "jobs", "outbox", "notifications", "open_failures", "oldest_job_available_at", "oldest_outbox_available_at", "job_lag_seconds", "outbox_lag_seconds"], properties: { generated_at: { type: "string", format: "date-time" }, jobs: { type: "object", additionalProperties: { type: "integer" } }, outbox: { type: "object", additionalProperties: { type: "integer" } }, notifications: { type: "object", additionalProperties: { type: "integer" } }, open_failures: { type: "integer" }, oldest_job_available_at: { type: ["string", "null"] }, oldest_outbox_available_at: { type: ["string", "null"] }, job_lag_seconds: { type: "integer" }, outbox_lag_seconds: { type: "integer" } } },
-
   SecurityAuditEvent: { type: "object", required: ["id", "event_type", "outcome", "actor_type", "metadata_json", "created_at", "updated_at"], properties: { id: { type: "string" }, event_type: { type: "string" }, outcome: { type: "string", enum: ["success", "failure", "denied"] }, actor_type: { type: "string" }, actor_id: { type: ["string", "null"] }, subject_type: { type: ["string", "null"] }, subject_id: { type: ["string", "null"] }, request_id: { type: ["string", "null"] }, ip_digest: { type: ["string", "null"] }, metadata_json: { type: "string" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } },
   SecurityAuditPage: { type: "object", required: ["data", "next_cursor", "has_more"], properties: { data: { type: "array", items: ref("SecurityAuditEvent") }, next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } },
-  AgentCredentialCoverage: {
-    type: "object",
-    additionalProperties: false,
-    required: ["total", "covered", "ready"],
-    properties: {
-      total: { type: "integer", minimum: 0 },
-      covered: { type: "integer", minimum: 0 },
-      ready: { type: "boolean" },
-    },
-  },
-  NotificationSecretCoverage: {
-    type: "object",
-    additionalProperties: false,
-    required: [
-      "total",
-      "endpointCovered",
-      "encryptedSecretRows",
-      "currentKeyRows",
-      "ready",
-    ],
-    properties: {
-      total: { type: "integer", minimum: 0 },
-      endpointCovered: { type: "integer", minimum: 0 },
-      encryptedSecretRows: { type: "integer", minimum: 0 },
-      currentKeyRows: { type: "integer", minimum: 0 },
-      ready: { type: "boolean" },
-    },
-  },
-  CredentialCoverage: {
-    type: "object",
-    additionalProperties: false,
-    required: [
-      "agent_credentials",
-      "notification_secrets",
-      "ready_for_credential_contract",
-    ],
-    properties: {
-      agent_credentials: ref("AgentCredentialCoverage"),
-      notification_secrets: ref("NotificationSecretCoverage"),
-      ready_for_credential_contract: { type: "boolean" },
-    },
-  },
-  MigrationCheckpoint: { type: "object", required: ["migration_key", "phase", "status", "rows_read", "rows_written", "rows_skipped", "anomaly_rows", "created_at", "updated_at"], properties: { migration_key: { type: "string" }, phase: { type: "string" }, status: { type: "string", enum: ["pending", "running", "completed", "completed_with_anomalies", "failed"] }, last_pk: { type: ["string", "null"] }, rows_read: { type: "integer" }, rows_written: { type: "integer" }, rows_skipped: { type: "integer" }, anomaly_rows: { type: "integer" }, checksum: { type: ["string", "null"] }, last_error: { type: ["string", "null"] }, started_at: { type: ["string", "null"] }, lease_expires_at: { type: ["string", "null"] }, completed_at: { type: ["string", "null"] }, created_at: { type: "string" }, updated_at: { type: "string" } } },
-  MigrationAnomaly: { type: "object", required: ["id", "migration_key", "source_table", "source_pk", "error_code", "raw_value_json", "status", "first_seen_at", "created_at", "updated_at"], properties: { id: { type: "integer" }, migration_key: { type: "string" }, source_table: { type: "string" }, source_pk: { type: "string" }, error_code: { type: "string" }, raw_value_json: { type: "string" }, status: { type: "string", enum: ["open", "retry_requested", "resolved", "ignored"] }, resolution_note: { type: ["string", "null"] }, first_seen_at: { type: "string" }, resolved_at: { type: ["string", "null"] }, created_at: { type: "string" }, updated_at: { type: "string" } } },
-  MigrationAnomalyPage: { type: "object", required: ["data", "next_cursor", "has_more"], properties: { data: { type: "array", items: ref("MigrationAnomaly") }, next_cursor: { type: ["integer", "null"] }, has_more: { type: "boolean" } } },
-  MigrationAnomalyAction: { type: "object", additionalProperties: false, required: ["action"], properties: { action: { type: "string", enum: ["retry", "ignore"] }, note: { type: ["string", "null"], maxLength: 1000 } } },
-  MigrationAnomalyActionResult: { type: "object", required: ["id", "action"], properties: { id: { type: "integer" }, action: { type: "string", enum: ["retry", "ignore"] } } },
   StatusConfigCommand: { type: "object", additionalProperties: false, required: ["title", "description", "logoUrl", "customCss", "theme", "monitors", "agents"], properties: { title: { type: "string", maxLength: 120 }, description: { type: "string", maxLength: 500 }, logoUrl: { type: "string", maxLength: 2048 }, customCss: { type: "string", maxLength: 20000 }, theme: { type: "string" }, monitors: { type: "array", maxItems: 100, uniqueItems: true, items: { type: "integer" } }, agents: { type: "array", maxItems: 100, uniqueItems: true, items: { type: "integer" } } } },
   StatusConfigView: { type: "object", required: ["title", "description", "logoUrl", "customCss", "theme", "monitors", "agents", "monitors_has_more", "agents_has_more"], properties: { title: { type: "string" }, description: { type: "string" }, logoUrl: { type: "string" }, customCss: { type: "string" }, theme: { type: "string" }, monitors: { type: "array", maxItems: 500, items: { type: "object", required: ["id", "name", "selected"], properties: { id: { type: "integer" }, name: { type: "string" }, selected: { type: "boolean" } } } }, agents: { type: "array", maxItems: 500, items: { type: "object", required: ["id", "name", "selected"], properties: { id: { type: "integer" }, name: { type: "string" }, selected: { type: "boolean" } } } }, monitors_has_more: { type: "boolean" }, agents_has_more: { type: "boolean" } } },
   PublicMonitor: { type: "object", required: ["id", "name", "status", "response_time", "last_checked", "created_at", "updated_at", "dailyStats", "history"], properties: { id: { type: "integer" }, name: { type: "string" }, status: { type: "string", enum: ["up", "down", "pending", "unknown", "error"] }, response_time: { type: "number" }, last_checked: { type: ["string", "null"] }, created_at: { type: "string" }, updated_at: { type: "string" }, dailyStats: { type: "array", items: ref("MonitorDailyStats") }, history: { type: "array", items: ref("MonitorHistory") } } },

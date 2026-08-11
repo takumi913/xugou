@@ -87,18 +87,13 @@ app.use("*", middlewares.adminSessionMiddleware);
 app.get("/", (c) => c.json({ message: "XUGOU API 服务正在运行" }));
 
 // 路由注册
-app.route("/api/auth", api.auth);
-app.route("/api/profile", api.profile);
-app.route("/api/security", api.security);
-
-app.route("/api/dashboard", api.dashboard);
 app.route("/api/ws", api.ws);
 app.route("/api/v2/monitors", monitorsV2);
 app.route("/api/v2/agents", agentsV2);
 app.route("/api/v2/operations", operationsV2);
 app.route("/api/v2/status", statusV2);
 app.route("/api/v2/notifications", notificationsV2);
-// Session/Profile 在兼容期复用同一模块 Handler；路径版本化但不复制领域逻辑。
+// Session/Profile/Dashboard 复用模块 Handler，避免复制领域逻辑。
 app.route("/api/v2/session", api.auth);
 app.route("/api/v2/profile", api.profile);
 app.route("/api/v2/dashboard", api.dashboard);

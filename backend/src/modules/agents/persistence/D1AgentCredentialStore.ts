@@ -226,55 +226,6 @@ export async function releaseAgentEnrollmentToken(
     .run();
 }
 
-export async function backfillLegacyAgentCredentials(env: Bindings, limit = 25) {
-  if (!env.AGENT_TOKEN_PEPPER) {
-    return { migrated: 0, remaining: true, configured: false };
-  }
-  requireAgentTokenPepper(env);
-  const migrationKey = "agent-credential-v1";
-  const { results } = await env.DB.prepare(
-    `SELECT a.id, a.token FROM agents a
-     WHERE a.deleted_at IS NULL AND a.token NOT LIKE 'deleted:%'
-       AND NOT EXISTS (
-         SELECT 1 FROM agent_credentials c WHERE c.agent_id = a.id
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM migration_anomalies ma
-         WHERE ma.migration_key = ? AND ma.source_table = 'agents'
-           AND ma.source_pk = CAST(a.id AS TEXT) AND ma.status IN ('open', 'ignored')
-       )
-     ORDER BY a.id LIMIT ?`
-  )
-    .bind(migrationKey, limit)
-    .all<{ id: number; token: string }>();
-  let migrated = 0;
-  let anomalies = 0;
-  for (const row of results) {
-    try {
-      await createCredentialForAgent(env, row.id, row.token);
-      const resolvedAt = new Date().toISOString();
-      await env.DB.prepare(
-        `UPDATE migration_anomalies SET status = 'resolved', resolved_at = ?,
-         updated_at = ? WHERE migration_key = ? AND source_table = 'agents'
-           AND source_pk = ? AND status = 'retry_requested'`
-      )
-        .bind(resolvedAt, resolvedAt, migrationKey, String(row.id))
-        .run();
-      migrated += 1;
-    } catch (error) {
-      anomalies += 1;
-      null;
-    }
-  }
-  null;
-  return {
-    migrated,
-    anomalies,
-    remaining: results.length === limit,
-    configured: true,
-  };
-}
-
 export async function rotateAgentCredential(env: Bindings, agentId: number) {
   if (!(await findActiveAgent(env, agentId))) return null;
   const token = generateAgentCredentialToken();
@@ -377,19 +328,4 @@ export async function revokeAgentEnrollment(
       .bind(now, now, enrollmentId, issuedBy)
       .first<{ id: number }>()
   );
-}
-
-export async function getAgentCredentialBackfillCoverage(env: Bindings) {
-  const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS total,
-          SUM(CASE WHEN EXISTS (
-            SELECT 1 FROM agent_credentials c
-            WHERE c.agent_id = a.id AND c.revoked_at IS NULL
-          ) THEN 1 ELSE 0 END) AS covered
-       FROM agent_nodes a WHERE a.deleted_at_ms IS NULL`
-  ).first<{ total: number; covered: number | null }>();
-  return {
-    total: Number(row?.total ?? 0),
-    covered: Number(row?.covered ?? 0),
-  };
 }

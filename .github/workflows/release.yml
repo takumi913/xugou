@@ -1,62 +1,24 @@
 name: Create Release
 
-on: push
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Get Hitokoto
-        id: hitokoto
-        run: |
-          HITOKOTO=$(curl -s 'https://v1.hitokoto.cn/' | jq -r '.hitokoto')
-          echo "sentence=$HITOKOTO" >> $GITHUB_OUTPUT
-
-      - name: Generate Changelog
-        id: changelog
-        run: |
-          # 获取当前标签
-          CURRENT_TAG=${GITHUB_REF#refs/tags/}
-          
-          # 查找上一个标签（如果存在）
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 $CURRENT_TAG^ 2>/dev/null || echo "")
-          
-          # 生成变更日志
-          echo "generating changelog from $PREVIOUS_TAG to $CURRENT_TAG"
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          
-          if [ -z "$PREVIOUS_TAG" ]; then
-            # 如果没有上一个标签，则获取所有提交
-            echo "## 完整变更日志" >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT
-            git log --pretty=format:"- %s (%h) by %an" >> $GITHUB_OUTPUT
-          else
-            # 获取自上一个标签以来的提交
-            echo "## 自 $PREVIOUS_TAG 以来的变更" >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT
-            git log $PREVIOUS_TAG..$CURRENT_TAG --pretty=format:"- %s (%h) by %an" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.TOKEN }}
-          generate_release_notes: true
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }} - ${{ steps.hitokoto.outputs.sentence }}
-          body: |
-            ${{ github.event.head_commit.message }}
-            
-            ${{ steps.changelog.outputs.changelog }}
-            
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
           draft: false
           prerelease: false

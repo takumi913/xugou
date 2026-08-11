@@ -86,16 +86,6 @@ sqlite.exec(`
     version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
   );
-  CREATE TABLE legacy_id_map (
-    source_table TEXT NOT NULL, source_id TEXT NOT NULL, target_table TEXT NOT NULL,
-    target_id TEXT NOT NULL, payload_checksum TEXT NOT NULL, created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL, PRIMARY KEY(source_table, source_id)
-  );
-  CREATE TABLE migration_anomalies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, migration_key TEXT NOT NULL,
-    source_table TEXT NOT NULL, source_pk TEXT NOT NULL, error_code TEXT NOT NULL,
-    raw_value_json TEXT NOT NULL, status TEXT NOT NULL
-  );
   CREATE TABLE status_publications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_event_id TEXT UNIQUE NOT NULL,
@@ -415,11 +405,6 @@ sqlite.prepare(`INSERT INTO agent_runtime
   (agent_id, status, ip_addresses_json, version, created_at_ms, updated_at_ms)
   VALUES (1, 'inactive', '[]', 0, ?, ?)`)
   .run(Date.parse(now), Date.parse(now));
-sqlite.prepare(`INSERT INTO legacy_id_map
-  (source_table, source_id, target_table, target_id, payload_checksum,
-   created_at, updated_at)
-  VALUES ('agents', '1', 'agent_nodes', '1', 'fixture', ?, ?)`)
-  .run(now, now);
 sqlite.prepare(`INSERT INTO notification_rules
   (id, target_type, target_id, enabled, on_down, on_recovery, on_offline,
    on_cpu_threshold, cpu_threshold, on_memory_threshold, memory_threshold,
@@ -617,7 +602,7 @@ try {
   assert.equal(
     retryDelaySeconds,
     2,
-    "failure-ledger outages must preserve the per-message retry backoff"
+    "D1 outages must preserve the per-message retry backoff"
   );
 } finally {
   globalThis.fetch = originalFetch;

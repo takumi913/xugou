@@ -33,18 +33,7 @@ type ReleaseManifest struct {
 	ReleasedAt    string            `json:"released_at"`
 }
 
-// ReleaseChannel 仅用于兼容旧的签名通道指针格式。
-type ReleaseChannel struct {
-	SchemaVersion  int    `json:"schema_version"`
-	Channel        string `json:"channel"`
-	Version        string `json:"version"`
-	ManifestURL    string `json:"manifest_url"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	ReleasedAt     string `json:"released_at"`
-}
-
 // signedDocumentEnvelope 把签名与被签名载荷放在同一个可原子替换的对象中。
-// 读取逻辑仍兼容历史上与文档分离的 .sig 文件。
 type signedDocumentEnvelope struct {
 	SchemaVersion int    `json:"schema_version"`
 	PayloadBase64 string `json:"payload_base64"`
@@ -157,44 +146,25 @@ func fetchSignedDocument(client *http.Client, documentURL string, publicKey ed25
 	if err != nil {
 		return nil, err
 	}
-	var envelopeProbe struct {
-		PayloadBase64 string `json:"payload_base64"`
-		Signature     string `json:"signature"`
+	var envelope signedDocumentEnvelope
+	if err := decodeStrictJSON(payload, &envelope, "签名文档封装"); err != nil {
+		return nil, err
 	}
-	if json.Unmarshal(payload, &envelopeProbe) == nil &&
-		(envelopeProbe.PayloadBase64 != "" || envelopeProbe.Signature != "") {
-		var envelope signedDocumentEnvelope
-		if err := decodeStrictJSON(payload, &envelope, "签名文档封装"); err != nil {
-			return nil, err
-		}
-		if envelope.SchemaVersion != 1 {
-			return nil, errors.New("签名文档封装版本无效")
-		}
-		signedPayload, err := decodeBase64(envelope.PayloadBase64)
-		if err != nil || len(signedPayload) == 0 || len(signedPayload) > maxManifestBytes {
-			return nil, errors.New("签名文档载荷格式无效")
-		}
-		signature, err := decodeBase64(envelope.Signature)
-		if err != nil || len(signature) != ed25519.SignatureSize {
-			return nil, errors.New("签名格式无效")
-		}
-		if !ed25519.Verify(publicKey, signedPayload, signature) {
-			return nil, errors.New("签名校验失败")
-		}
-		return signedPayload, nil
+	if envelope.SchemaVersion != 1 {
+		return nil, errors.New("签名文档封装版本无效")
 	}
-	signatureText, err := fetchLimited(client, documentURL+".sig", 4096)
-	if err != nil {
-		return nil, fmt.Errorf("获取签名失败: %w", err)
+	signedPayload, err := decodeBase64(envelope.PayloadBase64)
+	if err != nil || len(signedPayload) == 0 || len(signedPayload) > maxManifestBytes {
+		return nil, errors.New("签名文档载荷格式无效")
 	}
-	signature, err := decodeBase64(string(signatureText))
+	signature, err := decodeBase64(envelope.Signature)
 	if err != nil || len(signature) != ed25519.SignatureSize {
 		return nil, errors.New("签名格式无效")
 	}
-	if !ed25519.Verify(publicKey, payload, signature) {
+	if !ed25519.Verify(publicKey, signedPayload, signature) {
 		return nil, errors.New("签名校验失败")
 	}
-	return payload, nil
+	return signedPayload, nil
 }
 
 func decodeStrictJSON(payload []byte, destination any, label string) error {
@@ -211,7 +181,6 @@ func decodeStrictJSON(payload []byte, destination any, label string) error {
 }
 
 // FetchVerifiedRelease 校验发布清单的 Ed25519 签名，再选择当前平台产物。
-// 为保证已有 Agent 仍可升级，也兼容旧的通道指针格式。
 func FetchVerifiedRelease(manifestURL, publicKeyBase64, goos, goarch string) (VerifiedRelease, error) {
 	manifestURL = ManifestURL(manifestURL)
 	publicKey, err := decodeBase64(publicKeyBase64)
@@ -224,60 +193,8 @@ func FetchVerifiedRelease(manifestURL, publicKeyBase64, goos, goarch string) (Ve
 		return VerifiedRelease{}, fmt.Errorf("获取签名发布文档失败: %w", err)
 	}
 
-	var envelope struct {
-		ManifestURL string `json:"manifest_url"`
-	}
-	if err := json.Unmarshal(documentBytes, &envelope); err != nil {
-		return VerifiedRelease{}, fmt.Errorf("发布文档格式无效: %w", err)
-	}
-	manifestBytes := documentBytes
-	if envelope.ManifestURL != "" {
-		var channel ReleaseChannel
-		if err := decodeStrictJSON(documentBytes, &channel, "升级通道指针"); err != nil {
-			return VerifiedRelease{}, err
-		}
-		if channel.SchemaVersion != 1 || (channel.Channel != "stable" && channel.Channel != "dev") {
-			return VerifiedRelease{}, errors.New("升级通道指针元数据无效")
-		}
-		if _, ok := parseSemver(channel.Version); !ok || len(channel.ManifestSHA256) != sha256.Size*2 {
-			return VerifiedRelease{}, errors.New("升级通道指针版本或摘要无效")
-		}
-		if _, err := hex.DecodeString(channel.ManifestSHA256); err != nil {
-			return VerifiedRelease{}, errors.New("升级通道指针摘要无效")
-		}
-		if _, err := time.Parse(time.RFC3339, channel.ReleasedAt); err != nil {
-			return VerifiedRelease{}, errors.New("升级通道指针发布时间无效")
-		}
-		resolved, err := url.Parse(manifestURL)
-		if err != nil {
-			return VerifiedRelease{}, errors.New("升级通道地址无效")
-		}
-		manifestReference, err := url.Parse(channel.ManifestURL)
-		if err != nil {
-			return VerifiedRelease{}, errors.New("升级清单地址无效")
-		}
-		manifestURL = resolved.ResolveReference(manifestReference).String()
-		if _, err := validateDownloadURL(manifestURL); err != nil {
-			return VerifiedRelease{}, err
-		}
-		manifestBytes, err = fetchSignedDocument(client, manifestURL, ed25519.PublicKey(publicKey))
-		if err != nil {
-			return VerifiedRelease{}, fmt.Errorf("获取不可变升级清单失败: %w", err)
-		}
-		digest := sha256.Sum256(manifestBytes)
-		if !strings.EqualFold(hex.EncodeToString(digest[:]), channel.ManifestSHA256) {
-			return VerifiedRelease{}, errors.New("升级清单摘要与通道指针不一致")
-		}
-		var versionOnly struct {
-			Version string `json:"version"`
-		}
-		if err := json.Unmarshal(manifestBytes, &versionOnly); err != nil || versionOnly.Version != channel.Version {
-			return VerifiedRelease{}, errors.New("升级清单版本与通道指针不一致")
-		}
-	}
-
 	var manifest ReleaseManifest
-	if err := decodeStrictJSON(manifestBytes, &manifest, "升级清单"); err != nil {
+	if err := decodeStrictJSON(documentBytes, &manifest, "升级清单"); err != nil {
 		return VerifiedRelease{}, err
 	}
 	if manifest.SchemaVersion != 1 {

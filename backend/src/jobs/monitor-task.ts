@@ -118,8 +118,6 @@ export async function generateDailyMonitorStats(
     lastMonitorId = results[results.length - 1].monitor_id;
     processed += results.length;
   }
-  // 旧样本是升级守恒与回切证据。兼容窗口内只生成日投影，不在运行时删除源行；
-  // Contract 发布会在最终 Bookmark/Export 和逐行映射对账后独立清理旧表。
   return { success: true, processed, date };
 }
 

@@ -452,22 +452,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v2/operations/credential-coverage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getCredentialCoverageV2"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v2/status/config": {
         parameters: {
             query?: never;
@@ -1247,54 +1231,6 @@ export interface components {
                 update: boolean;
             };
         };
-        QueueFailure: {
-            failure_id: string;
-            queue_name: string;
-            message_id: string;
-            source_kind?: string | null;
-            source_id?: string | null;
-            delivery_attempts: number;
-            last_error?: string | null;
-            /** @enum {string} */
-            status: "open" | "replayed" | "terminated";
-            replay_count: number;
-            /** Format: date-time */
-            replayed_at?: string | null;
-            /** Format: date-time */
-            terminated_at?: string | null;
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        QueueFailurePage: {
-            data: components["schemas"]["QueueFailure"][];
-            next_cursor: string | null;
-            has_more: boolean;
-        };
-        QueueReplayResult: {
-            failure_id: string;
-            /** @constant */
-            status: "replayed";
-        };
-        QueueLedgerHealth: {
-            /** Format: date-time */
-            generated_at: string;
-            jobs: {
-                [key: string]: number;
-            };
-            outbox: {
-                [key: string]: number;
-            };
-            notifications: {
-                [key: string]: number;
-            };
-            open_failures: number;
-            oldest_job_available_at: string | null;
-            oldest_outbox_available_at: string | null;
-            job_lag_seconds: number;
-            outbox_lag_seconds: number;
-        };
         SecurityAuditEvent: {
             id: string;
             event_type: string;
@@ -1316,71 +1252,6 @@ export interface components {
             data: components["schemas"]["SecurityAuditEvent"][];
             next_cursor: string | null;
             has_more: boolean;
-        };
-        AgentCredentialCoverage: {
-            total: number;
-            covered: number;
-            ready: boolean;
-        };
-        NotificationSecretCoverage: {
-            total: number;
-            endpointCovered: number;
-            encryptedSecretRows: number;
-            currentKeyRows: number;
-            ready: boolean;
-        };
-        CredentialCoverage: {
-            agent_credentials: components["schemas"]["AgentCredentialCoverage"];
-            notification_secrets: components["schemas"]["NotificationSecretCoverage"];
-            ready_for_credential_contract: boolean;
-        };
-        MigrationCheckpoint: {
-            migration_key: string;
-            phase: string;
-            /** @enum {string} */
-            status: "pending" | "running" | "completed" | "completed_with_anomalies" | "failed";
-            last_pk?: string | null;
-            rows_read: number;
-            rows_written: number;
-            rows_skipped: number;
-            anomaly_rows: number;
-            checksum?: string | null;
-            last_error?: string | null;
-            started_at?: string | null;
-            lease_expires_at?: string | null;
-            completed_at?: string | null;
-            created_at: string;
-            updated_at: string;
-        };
-        MigrationAnomaly: {
-            id: number;
-            migration_key: string;
-            source_table: string;
-            source_pk: string;
-            error_code: string;
-            raw_value_json: string;
-            /** @enum {string} */
-            status: "open" | "retry_requested" | "resolved" | "ignored";
-            resolution_note?: string | null;
-            first_seen_at: string;
-            resolved_at?: string | null;
-            created_at: string;
-            updated_at: string;
-        };
-        MigrationAnomalyPage: {
-            data: components["schemas"]["MigrationAnomaly"][];
-            next_cursor: number | null;
-            has_more: boolean;
-        };
-        MigrationAnomalyAction: {
-            /** @enum {string} */
-            action: "retry" | "ignore";
-            note?: string | null;
-        };
-        MigrationAnomalyActionResult: {
-            id: number;
-            /** @enum {string} */
-            action: "retry" | "ignore";
         };
         StatusConfigCommand: {
             title: string;
@@ -3693,46 +3564,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiProblem"];
-                };
-            };
-            /** @description Problem Details */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiProblem"];
-                };
-            };
-            /** @description Problem Details */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiProblem"];
-                };
-            };
-        };
-    };
-    getCredentialCoverageV2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["CredentialCoverage"];
-                    };
                 };
             };
             /** @description Problem Details */

@@ -79,7 +79,7 @@ func assertKeysEqual(t *testing.T, got, want []string) {
 }
 
 // TestSystemInfoWireFieldNames 断言 SystemInfo 序列化后的顶层字段名集合与
-// 服务端 zod schema（backend/src/api/schemas.ts agentStatusItemSchema）约定一致。
+// 服务端 zod schema（backend/src/modules/agents/http/schemas.ts）约定一致。
 // 字段名硬编码，防止结构体重构导致 wire 格式漂移。
 func TestSystemInfoWireFieldNames(t *testing.T) {
 	assertKeysEqual(t, jsonKeys(t, fullSystemInfo()), []string{

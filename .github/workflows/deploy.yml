@@ -62,59 +62,16 @@ jobs:
         run: pnpm run test:all
       - name: Verify reproducible Git input
         run: test -z "$(git status --porcelain)"
-      # Stage 1: preflight and point-in-time evidence.
-      - name: Stage 1 - D1 preflight
+      - name: Apply D1 migrations
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
           D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
         run: |
           set -euo pipefail
-          umask 077
-          install -d -m 700 .migration-evidence
-          pnpm exec wrangler d1 time-travel info "$D1_DATABASE_NAME" --json -c .wrangler.production.toml > .migration-evidence/pre-bookmark.json
-          pnpm exec wrangler d1 export "$D1_DATABASE_NAME" --remote --output=.migration-evidence/pre.sql -c .wrangler.production.toml
-          KEK_VERSION="$(sed -n 's/^NOTIFICATION_KEK_VERSION = "\([0-9][0-9]*\)"/\1/p' wrangler.toml | head -n 1)"
-          pnpm --dir backend migration:preflight -- --sql-export ../.migration-evidence/pre.sql --allow-empty --notification-kek-version "$KEK_VERSION" > .migration-evidence/preflight.json
+          pnpm exec wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c .wrangler.production.toml
 
-      # Stage 2: apply all D1 migrations.
-      - name: Stage 2 - Apply D1 migrations
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
-          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
-        run: |
-          set -euo pipefail
-          umask 077
-          pnpm exec wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c .wrangler.production.toml | tee .migration-evidence/migration-result.txt
-
-      # Stage 3: re-export and prove integrity/conservation before Worker traffic changes.
-      - name: Stage 3 - D1 postflight
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
-          D1_DATABASE_NAME: ${{ secrets.XUGOU_D1_DATABASE_NAME }}
-        run: |
-          set -euo pipefail
-          umask 077
-          pnpm exec wrangler d1 time-travel info "$D1_DATABASE_NAME" --json -c .wrangler.production.toml > .migration-evidence/post-bookmark.json
-          pnpm exec wrangler d1 export "$D1_DATABASE_NAME" --remote --output=.migration-evidence/post.sql -c .wrangler.production.toml
-          KEK_VERSION="$(sed -n 's/^NOTIFICATION_KEK_VERSION = "\([0-9][0-9]*\)"/\1/p' wrangler.toml | head -n 1)"
-          pnpm --dir backend migration:preflight -- --sql-export ../.migration-evidence/post.sql --allow-empty --notification-kek-version "$KEK_VERSION" > .migration-evidence/post-preflight.json
-          pnpm --dir backend migration:postflight -- --mode expand --before ../.migration-evidence/preflight.json --after ../.migration-evidence/post-preflight.json --output ../.migration-evidence/postflight.json
-          pnpm --dir backend migration:manifest -- \
-            --preflight ../.migration-evidence/preflight.json \
-            --sql-export ../.migration-evidence/pre.sql \
-            --bookmark ../.migration-evidence/pre-bookmark.json \
-            --migration-result ../.migration-evidence/migration-result.txt \
-            --postflight ../.migration-evidence/postflight.json \
-            --post-sql-export ../.migration-evidence/post.sql \
-            --post-bookmark ../.migration-evidence/post-bookmark.json \
-            --git-sha "${{ github.sha }}" \
-            --output ../.migration-evidence/migration-manifest.json
-
-      # Stage 4: deploy only after postflight has passed.
-      - name: Stage 4 - Deploy Worker
+      - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.XUGOU_CF_API_TOKEN }}
@@ -123,12 +80,3 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
-
-      - name: Upload complete migration and readiness evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migration-readiness-evidence-${{ github.sha }}
-          retention-days: 90
-          if-no-files-found: ignore
-          path: .migration-evidence/

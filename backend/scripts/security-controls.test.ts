@@ -97,18 +97,6 @@ assert.equal(
 const backendRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = join(backendRoot, "..");
 const gitignore = readFileSync(join(repositoryRoot, ".gitignore"), "utf8");
-for (const evidenceDirectory of [
-  ".preflight",
-  ".backups",
-  ".recovery",
-  ".migration-evidence",
-]) {
-  assert.match(
-    gitignore,
-    new RegExp(`^/${evidenceDirectory.replace(".", "\\.")}/$`, "m"),
-    `${evidenceDirectory} must stay outside version control`
-  );
-}
 assert.match(
   gitignore,
   /^\/\.wrangler\.production\.toml$/m,

@@ -179,7 +179,7 @@ jobs:
           Path('release-metadata/manifest.json').write_text(json.dumps(envelope,separators=(',',':')))
           PY
           shred -u release-metadata/key.pem
-      - name: Publish latest objects and remove version archives
+      - name: Publish latest objects
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -201,10 +201,3 @@ jobs:
           # 先更新全部二进制，最后原子切换内嵌签名的单对象清单。
           for file in artifacts/xugou-agent-*; do publish_mutable "$file" "latest/$(basename "$file")"; done
           publish_mutable release-metadata/manifest.json latest/manifest.json
-          # latest 切换成功后清理所有历史版本、旧通道和分离签名对象。
-          aws s3 rm "s3://${R2_BUCKET}/releases/" --recursive --endpoint-url "$endpoint"
-          aws s3 rm "s3://${R2_BUCKET}/channels/" --recursive --endpoint-url "$endpoint"
-          aws s3 rm "s3://${R2_BUCKET}/latest/manifest.json.sig" --endpoint-url "$endpoint" || true
-          releases_remaining="$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix 'releases/' --max-keys 1 --endpoint-url "$endpoint" --query 'KeyCount' --output text)"
-          channels_remaining="$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix 'channels/' --max-keys 1 --endpoint-url "$endpoint" --query 'KeyCount' --output text)"
-          [[ "$releases_remaining" == "0" && "$channels_remaining" == "0" ]]

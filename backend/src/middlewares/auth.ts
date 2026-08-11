@@ -15,8 +15,6 @@ import { isV2ApiRequest, problemResponse } from "../platform/http/problem";
 
 function isPublicStatusRoute(path: string) {
   return (
-    path === "/api/status/public/data" ||
-    /^\/api\/status\/public\/agents\/\d+\/metrics$/.test(path) ||
     path === "/api/v2/status/public" ||
     path === "/api/v2/status/public/ws" ||
     /^\/api\/v2\/status\/public\/agents\/\d+\/metrics$/.test(path)
@@ -116,11 +114,8 @@ export const adminSessionMiddleware = async (
   }
 
   if (
-    (c.req.path === "/api/agents/status" ||
-      c.req.path === "/api/agents/register" ||
-      c.req.path === "/api/v2/agents/register" ||
+    (c.req.path === "/api/v2/agents/register" ||
       c.req.path === "/api/v2/agents/reports" ||
-      c.req.path === "/api/auth/login" ||
       c.req.path === "/api/v2/session/login") &&
     c.req.method === "POST"
   ) {

@@ -83,11 +83,7 @@ blob-report/
 .env*.local
 /backend/.env
 
-# --- Production Evidence (contains D1 exports, bookmarks, signatures) ---
-/.preflight/
-/.backups/
-/.recovery/
-/.migration-evidence/
+# --- Rendered production configuration ---
 /.wrangler.production.toml
 
 # --- IDE / Editor Configuration ---

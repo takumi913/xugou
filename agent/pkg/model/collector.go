@@ -4,7 +4,7 @@ import "time"
 
 // DynamicMetrics 每次采集都会变化的动态指标，由 SystemInfo 与 Sample 匿名内嵌共用。
 // 内嵌时不带 json tag，字段在两者的 JSON 中平铺，字段名由此处的 tag 唯一决定
-// （服务端 zod 依赖这些字段名，修改前先看 backend/src/api/schemas.ts）。
+// （服务端 zod 依赖这些字段名，修改前先看 backend/src/modules/agents/http/schemas.ts）。
 type DynamicMetrics struct {
 	CPU            CPUInfo               `json:"cpu"`
 	Memory         MemoryInfo            `json:"memory"`

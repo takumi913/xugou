@@ -8,7 +8,6 @@ import {
 import { getEnvNumber } from "../utils/env";
 
 import {
-  backfillNotificationSecrets,
   rotateNotificationSecretKek,
 } from "../modules/notifications/persistence/NotificationSecretMaintenance";
 import {
@@ -29,7 +28,6 @@ const DEFAULT_SECURITY_AUDIT_RETENTION_DAYS = 180;
 const DEFAULT_STATUS_PUBLICATION_RETENTION_DAYS = 7;
 const DEFAULT_PROCESSED_EVENT_RETENTION_DAYS = 30;
 const DEFAULT_NOTIFICATION_EVENT_RETENTION_DAYS = 90;
-const DEFAULT_API_COMPATIBILITY_HIT_RETENTION_DAYS = 400;
 const SECURITY_RATE_LIMIT_RETENTION_DAYS = 7;
 
 
@@ -79,7 +77,7 @@ export const runScheduledTasks = async (
     // 执行监控检查任务
     await monitorTask.scheduled(event, env, ctx);
 
-    // 新指标只写不可变 report samples；旧历史由可恢复 Backfill 读取，不再运行时改表。
+    // Agent 定时任务只推进在线状态与低频事件。
     await agentTask.scheduled(event, env, ctx);
 
     // 执行清理任务 - 每天执行一次
@@ -107,8 +105,6 @@ function getCutoffIso(days: number) {
 
 export async function cleanupOldRecords(env: Bindings) {
   const cleanupStartedAt = new Date().toISOString();
-  // monitor_daily_stats 与 notification_history 在兼容窗口内仍是 Backfill 源和
-  // 回切证据；只清理目标模型及无迁移依赖的数据。旧源表由独立 Contract 发布处理。
   await env.DB.prepare(`DELETE FROM admin_sessions WHERE expires_at <= ?`)
     .bind(cleanupStartedAt)
     .run();
@@ -187,15 +183,6 @@ export async function cleanupOldRecords(env: Bindings) {
       max: 3650,
     })
   );
-  const compatibilityHitCutoff = getCutoffIso(
-    getEnvNumber(
-      env,
-      "API_COMPATIBILITY_HIT_RETENTION_DAYS",
-      DEFAULT_API_COMPATIBILITY_HIT_RETENTION_DAYS,
-      { min: 60, max: 3650 }
-    )
-  ).slice(0, 10);
-
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM agent_metric_rollups WHERE bucket_start < ?`).bind(
       agentRollupCutoff
@@ -241,9 +228,6 @@ export async function cleanupOldRecords(env: Bindings) {
            WHERE active_publication_id IS NOT NULL
          )`
     ).bind(statusPublicationCutoff),
-    env.DB.prepare(`DELETE FROM api_compatibility_hits WHERE day < ?`).bind(
-      compatibilityHitCutoff
-    ),
   ]);
   return {
     success: true,

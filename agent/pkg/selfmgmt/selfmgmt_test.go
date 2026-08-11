@@ -8,14 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
-	"sync/atomic"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -215,66 +212,48 @@ func TestSignedReleaseManifestAndArtifact(t *testing.T) {
 	}
 	artifact := append([]byte{0x7f, 'E', 'L', 'F'}, []byte("signed agent body")...)
 	digest := sha256.Sum256(artifact)
-	var manifestBytes []byte
-	var signature string
-	var channelBytes []byte
+	var manifestEnvelope []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/manifest.json":
-			_, _ = w.Write(manifestBytes)
-		case "/manifest.json.sig":
-			_, _ = w.Write([]byte(signature))
-		case "/channels/stable.json":
-			_, _ = w.Write(channelBytes)
-		case "/agent":
-			w.Header().Set("Content-Length", fmt.Sprint(len(artifact)))
+		case "/latest/manifest.json":
+			_, _ = w.Write(manifestEnvelope)
+		case "/latest/xugou-agent-linux-amd64":
+			w.Header().Set("Content-Length", strconv.Itoa(len(artifact)))
 			_, _ = w.Write(artifact)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
-	manifest := ReleaseManifest{
+
+	manifestBytes, err := json.Marshal(ReleaseManifest{
 		SchemaVersion: 1,
-		Version:       "v2.0.0",
+		Version:       "1.2.4",
 		ReleasedAt:    time.Now().UTC().Format(time.RFC3339),
 		Artifacts: []ReleaseArtifact{{
 			OS:     "linux",
 			Arch:   "amd64",
-			URL:    server.URL + "/agent",
+			URL:    server.URL + "/latest/xugou-agent-linux-amd64",
 			Size:   int64(len(artifact)),
 			SHA256: hex.EncodeToString(digest[:]),
 		}},
-	}
-	manifestBytes, err = json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, manifestBytes))
-	manifestDigest := sha256.Sum256(manifestBytes)
-	channelPayload, err := json.Marshal(ReleaseChannel{
-		SchemaVersion:  1,
-		Channel:        "stable",
-		Version:        manifest.Version,
-		ManifestURL:    server.URL + "/manifest.json",
-		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ReleasedAt:     manifest.ReleasedAt,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	channelBytes, err = json.Marshal(signedDocumentEnvelope{
+	manifestEnvelope, err = json.Marshal(signedDocumentEnvelope{
 		SchemaVersion: 1,
-		PayloadBase64: base64.StdEncoding.EncodeToString(channelPayload),
+		PayloadBase64: base64.StdEncoding.EncodeToString(manifestBytes),
 		Signature: base64.StdEncoding.EncodeToString(
-			ed25519.Sign(privateKey, channelPayload),
+			ed25519.Sign(privateKey, manifestBytes),
 		),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	release, err := FetchVerifiedRelease(
-		server.URL+"/channels/stable.json",
+		server.URL+"/latest/manifest.json",
 		base64.StdEncoding.EncodeToString(publicKey),
 		"linux",
 		"amd64",
@@ -282,28 +261,9 @@ func TestSignedReleaseManifestAndArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchVerifiedRelease failed: %v", err)
 	}
-	if release.Manifest.Version != "v2.0.0" || release.Artifact.Size != int64(len(artifact)) {
+	if release.Manifest.Version != "1.2.4" || release.Artifact.Size != int64(len(artifact)) {
 		t.Fatalf("unexpected release: %+v", release)
 	}
-	directManifestEnvelope, err := json.Marshal(signedDocumentEnvelope{
-		SchemaVersion: 1,
-		PayloadBase64: base64.StdEncoding.EncodeToString(manifestBytes),
-		Signature:     signature,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyChannelBytes := channelBytes
-	channelBytes = directManifestEnvelope
-	if _, err := FetchVerifiedRelease(
-		server.URL+"/channels/stable.json",
-		base64.StdEncoding.EncodeToString(publicKey),
-		"linux",
-		"amd64",
-	); err != nil {
-		t.Fatalf("direct signed manifest envelope failed: %v", err)
-	}
-	channelBytes = legacyChannelBytes
 	path, err := DownloadVerifiedArtifact(release, t.TempDir())
 	if err != nil {
 		t.Fatalf("DownloadVerifiedArtifact failed: %v", err)
@@ -316,154 +276,24 @@ func TestSignedReleaseManifestAndArtifact(t *testing.T) {
 		t.Fatal("verified artifact content mismatch")
 	}
 
-	validChannelBytes := channelBytes
-	var tamperedChannel signedDocumentEnvelope
-	if err := json.Unmarshal(channelBytes, &tamperedChannel); err != nil {
+	var tampered signedDocumentEnvelope
+	if err := json.Unmarshal(manifestEnvelope, &tampered); err != nil {
 		t.Fatal(err)
 	}
-	tamperedChannel.Signature = base64.StdEncoding.EncodeToString(
+	tampered.Signature = base64.StdEncoding.EncodeToString(
 		make([]byte, ed25519.SignatureSize),
 	)
-	channelBytes, err = json.Marshal(tamperedChannel)
+	manifestEnvelope, err = json.Marshal(tampered)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := FetchVerifiedRelease(
-		server.URL+"/channels/stable.json",
+		server.URL+"/latest/manifest.json",
 		base64.StdEncoding.EncodeToString(publicKey),
 		"linux",
 		"amd64",
 	); err == nil {
-		t.Fatal("tampered embedded channel signature must be rejected")
-	}
-	channelBytes = validChannelBytes
-
-	signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
-	if _, err := FetchVerifiedRelease(
-		server.URL+"/manifest.json",
-		base64.StdEncoding.EncodeToString(publicKey),
-		"linux",
-		"amd64",
-	); err == nil {
-		t.Fatal("tampered signature must be rejected")
-	}
-}
-
-func TestConcurrentChannelSwitchReturnsOnlyCompleteReleases(t *testing.T) {
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	documents := map[string][]byte{}
-	signatures := map[string][]byte{}
-	var activeChannel atomic.Value
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/channels/stable.json" {
-			_, _ = w.Write(activeChannel.Load().([]byte))
-			return
-		}
-		if payload, ok := documents[r.URL.Path]; ok {
-			_, _ = w.Write(payload)
-			return
-		}
-		if signature, ok := signatures[r.URL.Path]; ok {
-			_, _ = w.Write(signature)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
-
-	makeRelease := func(version string) []byte {
-		artifact := append([]byte{0x7f, 'E', 'L', 'F'}, []byte(version)...)
-		artifactDigest := sha256.Sum256(artifact)
-		manifestPath := "/releases/" + version + "/manifest.json"
-		manifest, marshalErr := json.Marshal(ReleaseManifest{
-			SchemaVersion: 1,
-			Version:       version,
-			ReleasedAt:    "2026-08-10T00:00:00Z",
-			Artifacts: []ReleaseArtifact{{
-				OS:     "linux",
-				Arch:   "amd64",
-				URL:    server.URL + "/releases/" + version + "/agent",
-				Size:   int64(len(artifact)),
-				SHA256: hex.EncodeToString(artifactDigest[:]),
-			}},
-		})
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		documents[manifestPath] = manifest
-		signatures[manifestPath+".sig"] = []byte(base64.StdEncoding.EncodeToString(
-			ed25519.Sign(privateKey, manifest),
-		))
-		manifestDigest := sha256.Sum256(manifest)
-		channelPayload, marshalErr := json.Marshal(ReleaseChannel{
-			SchemaVersion:  1,
-			Channel:        "stable",
-			Version:        version,
-			ManifestURL:    server.URL + manifestPath,
-			ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-			ReleasedAt:     "2026-08-10T00:00:00Z",
-		})
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		envelope, marshalErr := json.Marshal(signedDocumentEnvelope{
-			SchemaVersion: 1,
-			PayloadBase64: base64.StdEncoding.EncodeToString(channelPayload),
-			Signature: base64.StdEncoding.EncodeToString(
-				ed25519.Sign(privateKey, channelPayload),
-			),
-		})
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		return envelope
-	}
-	oldChannel := makeRelease("1.0.0")
-	newChannel := makeRelease("2.0.0")
-	activeChannel.Store(oldChannel)
-
-	const readers = 8
-	const readsPerReader = 10
-	errorsSeen := make(chan error, readers*readsPerReader)
-	var readersDone sync.WaitGroup
-	for range readers {
-		readersDone.Add(1)
-		go func() {
-			defer readersDone.Done()
-			for range readsPerReader {
-				release, fetchErr := FetchVerifiedRelease(
-					server.URL+"/channels/stable.json",
-					base64.StdEncoding.EncodeToString(publicKey),
-					"linux",
-					"amd64",
-				)
-				if fetchErr != nil {
-					errorsSeen <- fetchErr
-					continue
-				}
-				version := release.Manifest.Version
-				if (version != "1.0.0" && version != "2.0.0") ||
-					!strings.Contains(release.URL, "/releases/"+version+"/") {
-					errorsSeen <- fmt.Errorf("mixed release observed: %+v", release)
-				}
-			}
-		}()
-	}
-	for index := range 200 {
-		if index%2 == 0 {
-			activeChannel.Store(newChannel)
-		} else {
-			activeChannel.Store(oldChannel)
-		}
-	}
-	activeChannel.Store(newChannel)
-	readersDone.Wait()
-	close(errorsSeen)
-	for observed := range errorsSeen {
-		t.Error(observed)
+		t.Fatal("tampered embedded signature must be rejected")
 	}
 }
 
