@@ -363,7 +363,7 @@ async function insertAgent(
             auto_renewal, is_hidden, traffic_limit_gb, traffic_reset_day,
             traffic_calc_type, auto_update, sort_order, created_at_ms,
             updated_at_ms, deleted_at_ms)
-           VALUES (?, ?, 60000, 60000, NULL, '[]', NULL, 'USD', NULL, NULL,
+           VALUES (?, ?, 1000, 60000, NULL, '[]', NULL, 'USD', NULL, NULL,
                    0, 0, NULL, 1, 'sum', 0, 0, ?, ?, NULL)`
         ).bind(row.id, input.name, nowMs, nowMs),
         env.DB.prepare(

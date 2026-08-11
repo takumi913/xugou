@@ -9,7 +9,10 @@ Xugou Agent 是一个系统监控客户端，用于收集系统信息并上报�
 - 监控内存使用情况
 - 监控磁盘使用情况
 - 监控网络接口状态
-- 支持自定义收集间隔
+- 默认每 1 秒采集 CPU、内存、Load、网卡累计量等轻量指标
+- 使用独立上行 WebSocket 将最新样本直接送入 Worker AgentRoom 并广播给网页
+- 磁盘、IP、进程/连接数和线路拨测使用 30 秒缓存，避免秒级重复枚举
+- 默认每 60 秒把本地 Spool 中的样本压缩为一个 HTTP 批次写入 D1
 - 支持自定义监控硬盘设备和网络设备
 - 支持配置文件和环境变量配置
 - 使用 v4 `report_id`、gzip 批次和最多 100 条样本的分块上报
@@ -88,7 +91,7 @@ printf '%s' 'YOUR_API_TOKEN' > ~/.xugou-agent.token
 ./xugou-agent --token-file ~/.xugou-agent.token
 
 # 独立指定采集与批量上报间隔
-./xugou-agent --collect-interval 60 --report-interval 60
+./xugou-agent --collect-interval 1 --report-interval 60
 
 # 设置 Spool 容量和单请求压缩后大小
 ./xugou-agent --spool-max-bytes 67108864 --report-max-compressed-bytes 65536
@@ -104,7 +107,7 @@ printf '%s' 'YOUR_API_TOKEN' > ~/.xugou-agent.token
 ```bash
 export XUGOU_SERVER=https://monitor.example.com
 export XUGOU_TOKEN_FILE=$HOME/.xugou-agent.token
-export XUGOU_COLLECT_INTERVAL=60
+export XUGOU_COLLECT_INTERVAL=1
 export XUGOU_REPORT_INTERVAL=60
 export XUGOU_SPOOL_DIR=$HOME/.xugou-spool
 # 服务端 update=1 使用的自建签名清单地址
@@ -116,11 +119,12 @@ export XUGOU_UPDATE_MANIFEST_URL=https://mirror.example/latest/manifest.json
 
 ### 持久化与重试语义
 
-1. 每次采集成功后先写入本地 Spool，文件中不保存 Agent Credential。
-2. 上报时按最老样本组批，最多 100 条且压缩后不超过配置上限。
-3. 首次组批会原子保存 `inflight.json` 和 UUID `report_id`；HTTP 超时、5xx 与进程重启后重用相同信封。
-4. 服务端返回 2xx 后通过两阶段 Ack 清理样本；Ack 中途退出时，下一次启动会完成清理。
-5. 默认 Spool 上限为 64 MiB；达到上限时保留 inflight，并从最老的待组批样本开始清理，同时累计丢弃计数。
+1. 每次轻量采集同时进入最新值 WebSocket 通道与本地 Spool；文件中不保存 Agent Credential。
+2. WebSocket 断线只丢弃已过时的实时帧，Spool 与每 60 秒一次的 HTTP 批量上报继续运行。
+3. HTTP 上报按最老样本组批，最多 100 条且压缩后不超过配置上限；正常一分钟约为一个 60 条批次。
+4. 首次组批会原子保存 `inflight.json` 和 UUID `report_id`；HTTP 超时、5xx 与进程重启后重用相同信封。
+5. 服务端返回 2xx 后通过两阶段 Ack 清理样本；Ack 中途退出时，下一次启动会完成清理。
+6. 默认 Spool 上限为 64 MiB；达到上限时保留 inflight，并从最老的待组批样本开始清理，同时累计丢弃计数。
 
 ## 开发
 
@@ -142,6 +146,7 @@ agent/
 │       └── version.go # 版本命令
 ├── pkg/
 │   ├── collector/   # 数据收集器
+│   ├── realtime/    # 独立上行 WebSocket、最新值缓冲与实时网速
 │   ├── reporter/    # v4 gzip 数据上报器
 │   └── spool/       # 持久化样本、稳定 report_id 与两阶段 Ack
 └── main.go          # 程序入口

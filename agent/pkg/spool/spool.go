@@ -26,12 +26,13 @@ import (
 )
 
 const (
-	DefaultMaxBytes           int64 = 64 * 1024 * 1024
-	DefaultMaxEntries               = 10_000
-	DefaultMaxSamples               = 10
-	DefaultMaxCompressedBytes       = 64 * 1024
-	inflightFileName                = "inflight.json"
-	stateFileName                   = "state.json"
+	DefaultMaxBytes            int64 = 64 * 1024 * 1024
+	DefaultMaxEntries                = 10_000
+	DefaultMaxSamples                = 100
+	DefaultMaxCompressedBytes        = 64 * 1024
+	defaultBoundsCheckInterval       = 60
+	inflightFileName                 = "inflight.json"
+	stateFileName                    = "state.json"
 )
 
 type Options struct {
@@ -48,10 +49,11 @@ type Stats struct {
 }
 
 type Store struct {
-	mu         sync.Mutex
-	dir        string
-	maxBytes   int64
-	maxEntries int
+	mu                   sync.Mutex
+	dir                  string
+	maxBytes             int64
+	maxEntries           int
+	addsSinceBoundsCheck int
 }
 
 type sampleRecord struct {
@@ -102,6 +104,9 @@ func Open(options Options) (*Store, error) {
 	if _, err := store.readInflight(); err != nil {
 		return nil, fmt.Errorf("读取 spool inflight 失败: %w", err)
 	}
+	if _, err := store.enforceBounds(); err != nil {
+		return nil, fmt.Errorf("收敛 spool 容量失败: %w", err)
+	}
 	return store, nil
 }
 
@@ -135,6 +140,14 @@ func (s *Store) Add(info *model.SystemInfo) (uint64, error) {
 	if err := atomicWrite(filepath.Join(s.dir, name), data); err != nil {
 		return 0, fmt.Errorf("写入 spool 样本失败: %w", err)
 	}
+	// 秒级采集下每次都扫描并排序整个目录会随断网时长持续放大开销。
+	// 默认每分钟收敛一次容量；小型测试/显式小队列仍逐条严格收敛。
+	s.addsSinceBoundsCheck++
+	if s.addsSinceBoundsCheck < defaultBoundsCheckInterval &&
+		s.maxEntries >= defaultBoundsCheckInterval {
+		return 0, nil
+	}
+	s.addsSinceBoundsCheck = 0
 	dropped, err := s.enforceBounds()
 	if err != nil {
 		return dropped, err

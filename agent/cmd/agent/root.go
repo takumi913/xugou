@@ -35,7 +35,7 @@ func init() {
 	rootCmd.PersistentFlags().StringSlice("devices", []string{}, "指定监控的硬盘设备列表 (例如: /dev/sda1,/dev/sdb1)")
 	rootCmd.PersistentFlags().StringSlice("interfaces", []string{}, "指定监控的网络接口列表 (例如: eth0,wlan0)")
 	rootCmd.PersistentFlags().IntP("interval", "i", 60, "兼容旧配置：数据采集和上报间隔（秒）")
-	rootCmd.PersistentFlags().Int("collect-interval", 60, "本机数据采集间隔（秒）")
+	rootCmd.PersistentFlags().Int("collect-interval", 1, "本机轻量指标采集间隔（秒）")
 	rootCmd.PersistentFlags().Int("report-interval", 60, "向服务器批量上报间隔（秒）")
 	rootCmd.PersistentFlags().String("spool-dir", "", "持久化采样队列目录（默认与配置文件同目录）")
 	rootCmd.PersistentFlags().Int64("spool-max-bytes", 64*1024*1024, "持久化采样队列大小上限（字节）")

@@ -235,8 +235,8 @@ const agentUpdateProperties = {
   os: { type: ["string", "null"], maxLength: 128 },
   version: { type: ["string", "null"], maxLength: 128 },
   status: { type: ["string", "null"], enum: ["active", "inactive", null] },
-  collect_interval_seconds: { type: "integer", minimum: 1, maximum: 86400 },
-  report_interval_seconds: { type: "integer", minimum: 1, maximum: 86400 },
+  collect_interval_seconds: { type: "integer", minimum: 1, maximum: 3600 },
+  report_interval_seconds: { type: "integer", minimum: 10, maximum: 3600 },
   group_name: { type: ["string", "null"], maxLength: 64 },
   tags: { type: "array", maxItems: 50, items: { type: "string", maxLength: 64 } },
   auto_update: { type: "boolean" },
@@ -498,7 +498,7 @@ const schemas: Record<string, Schema> = {
       version: { type: ["string", "null"], maxLength: 128 },
       boot_time: { type: ["integer", "null"], minimum: 0 },
       keepalive_seconds: { type: "integer", minimum: 1, maximum: 86400 },
-      report_interval_seconds: { type: "integer", minimum: 1, maximum: 86400 },
+      report_interval_seconds: { type: "integer", minimum: 10, maximum: 3600 },
       samples: {
         type: "array",
         minItems: 1,
@@ -555,7 +555,10 @@ const routeFiles = [
   ["notifications", "notificationsV2"],
 ] as const;
 const implemented = new Set<string>();
-const transportOnlyRoutes = new Set(["get /api/v2/status/public/ws"]);
+const transportOnlyRoutes = new Set([
+  "get /api/v2/agents/live",
+  "get /api/v2/status/public/ws",
+]);
 for (const [moduleName, variable] of routeFiles) {
   const source = await readFile(path.join(backendDir, `src/modules/${moduleName}/http/routes.ts`), "utf8");
   const expression = new RegExp(`${variable}\\.(get|post|put|patch|delete)\\(\"([^\"]+)\"`, "g");

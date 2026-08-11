@@ -38,6 +38,22 @@ assert.match(publisher, /AGENT_ROOM/);
 assert.match(publisher, /getByName\(realtimeRoomName\(update\.agentId\)\)/);
 assert.doesNotMatch(publisher, /METRICS_BROADCASTER|idFromName\("global"\)/);
 
+const agentRoutes = readFileSync(
+  join(backendRoot, "src/modules/agents/http/routes.ts"),
+  "utf8"
+);
+assert.match(agentRoutes, /agentsV2\.get\("\/live"/);
+assert.match(agentRoutes, /authenticateAgentToken/);
+assert.match(agentRoutes, /\/agent-ws/);
+
+const agentRoom = readFileSync(
+  join(backendRoot, "src/durable/AgentRoom.ts"),
+  "utf8"
+);
+assert.match(agentRoom, /agentLiveMetricFrameSchema/);
+assert.match(agentRoom, /liveFrameToBroadcastUpdate/);
+assert.match(agentRoom, /kind:\s*"agent"/);
+
 const dashboard = readFileSync(
   join(repositoryRoot, "frontend/src/pages/Dashboard.tsx"),
   "utf8"

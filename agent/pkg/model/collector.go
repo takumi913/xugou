@@ -95,6 +95,30 @@ type AgentReport struct {
 	Samples               []*AgentReportSample `json:"samples"`
 }
 
+// LiveMetricFrame 是 Agent 到 Worker 独立上行 WebSocket 的实时协议。
+// 实时帧只承载指标，不携带 Agent Credential 和静态身份；身份在 WebSocket
+// 握手阶段通过 Authorization Header 完成绑定。
+type LiveMetricFrame struct {
+	Type            string                `json:"type"`
+	ProtocolVersion int                   `json:"protocol_version"`
+	Sequence        uint64                `json:"sequence"`
+	CollectedAt     string                `json:"collected_at"`
+	CPU             CPUInfo               `json:"cpu"`
+	Memory          MemoryInfo            `json:"memory"`
+	Load            LoadInfo              `json:"load"`
+	Disks           []DiskInfo            `json:"disks,omitempty"`
+	Network         []NetworkInfo         `json:"network,omitempty"`
+	Swap            *SwapInfo             `json:"swap,omitempty"`
+	ProcessCount    int                   `json:"process_count,omitempty"`
+	TCPConnections  int                   `json:"tcp_connections,omitempty"`
+	UDPConnections  int                   `json:"udp_connections,omitempty"`
+	Ping            map[string]PingResult `json:"ping,omitempty"`
+	IPv4Reachable   *bool                 `json:"ipv4_reachable,omitempty"`
+	IPv6Reachable   *bool                 `json:"ipv6_reachable,omitempty"`
+	NetworkRxSpeed  *float64              `json:"network_rx_speed"`
+	NetworkTxSpeed  *float64              `json:"network_tx_speed"`
+}
+
 // NewAgentReportSample 从一次完整采集中生成不含凭据的 v4 样本。
 func NewAgentReportSample(info *SystemInfo) *AgentReportSample {
 	return &AgentReportSample{

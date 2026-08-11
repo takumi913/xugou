@@ -21,6 +21,8 @@ import (
 	"github.com/xugou/agent/pkg/utils"
 )
 
+const maxMetricItems = 128
+
 // Collector 定义数据收集器接口
 type Collector interface {
 	Collect(ctx context.Context) (*model.SystemInfo, error)
@@ -41,8 +43,19 @@ type stableMetadata struct {
 type DefaultCollector struct {
 	stableMu       sync.RWMutex
 	stableMetadata *stableMetadata
+	inventoryMu    sync.Mutex
+	inventory      *inventorySnapshot
 	prober         netProber
 	conns          connCounter
+}
+
+// inventorySnapshot 缓存枚举成本相对高、秒级变化价值较低的字段。CPU、内存、
+// Load 和网卡累计计数仍每秒读取，磁盘、IP、进程数最多每 30 秒刷新一次。
+type inventorySnapshot struct {
+	IPAddresses  []string
+	Disks        []model.DiskInfo
+	ProcessCount int
+	collectedAt  time.Time
 }
 
 // NewCollector 创建一个新的数据收集器
@@ -116,13 +129,14 @@ func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, erro
 	info.Version = metadata.Version
 	info.BootTime = metadata.BootTime
 
-	// 获取本地IP地址
-	info.IPAddresses = utils.GetLocalIPs()
-
-	// 获取CPU信息
-	cpuPercent, err := cpu.Percent(time.Second, false)
+	// interval=0 使用 gopsutil 保存的上次 CPU 计数，读取过程不再额外阻塞 1 秒。
+	// 采集循环本身提供稳定的一秒时间窗。
+	cpuPercent, err := cpu.Percent(0, false)
 	if err != nil {
 		return nil, fmt.Errorf("获取CPU使用率失败: %w", err)
+	}
+	if len(cpuPercent) == 0 {
+		return nil, fmt.Errorf("获取CPU使用率失败: 返回值为空")
 	}
 
 	info.CPU = model.CPUInfo{
@@ -144,45 +158,13 @@ func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, erro
 		UsageRate: memInfo.UsedPercent,
 	}
 
-	// 获取磁盘信息
-	configDevices := viper.GetStringSlice("devices")
-	deviceSet := make(map[string]struct{})
-	for _, d := range configDevices {
-		deviceSet[d] = struct{}{}
-	}
-
-	partitions, err := disk.Partitions(false)
+	inventory, err := c.currentInventory(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("获取磁盘分区信息失败: %w", err)
+		return nil, err
 	}
-
-	for _, partition := range partitions {
-		// 如果指定了设备列表，并且当前分区不在列表中，则跳过
-		if len(configDevices) > 0 {
-			_, deviceMatch := deviceSet[partition.Device]
-			_, mountpointMatch := deviceSet[partition.Mountpoint]
-			if !deviceMatch && !mountpointMatch {
-				continue
-			}
-		}
-
-		usage, err := disk.Usage(partition.Mountpoint)
-		if err != nil {
-			// log.Printf("获取磁盘 %s 使用情况失败: %v", partition.Mountpoint, err) // 可选的日志记录
-			continue
-		}
-
-		diskInfo := model.DiskInfo{
-			Device:     partition.Device,
-			MountPoint: partition.Mountpoint,
-			Total:      usage.Total,
-			Used:       usage.Used,
-			Free:       usage.Free,
-			UsageRate:  usage.UsedPercent,
-			FSType:     partition.Fstype,
-		}
-		info.Disks = append(info.Disks, diskInfo)
-	}
+	info.IPAddresses = append([]string(nil), inventory.IPAddresses...)
+	info.Disks = append([]model.DiskInfo(nil), inventory.Disks...)
+	info.ProcessCount = inventory.ProcessCount
 
 	// 获取网络信息
 	configInterfaces := viper.GetStringSlice("interfaces")
@@ -211,6 +193,9 @@ func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, erro
 			PacketsRecv: netIO.PacketsRecv,
 		}
 		info.Network = append(info.Network, networkInfo)
+		if len(info.Network) >= maxMetricItems {
+			break
+		}
 	}
 
 	// 获取系统负载
@@ -232,11 +217,6 @@ func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, erro
 		}
 	}
 
-	// 获取进程数（拿不到时保持零值）
-	if pids, err := process.PidsWithContext(ctx); err == nil {
-		info.ProcessCount = len(pids)
-	}
-
 	// 获取 TCP/UDP 连接数（大机器上枚举连接可能很慢，30s TTL 缓存 + 超时保护）
 	tcpCount, udpCount := c.conns.current(ctx)
 	info.TCPConnections = tcpCount
@@ -255,6 +235,63 @@ func (c *DefaultCollector) Collect(ctx context.Context) (*model.SystemInfo, erro
 	return info, nil
 }
 
+const inventoryInterval = 30 * time.Second
+
+func (c *DefaultCollector) currentInventory(ctx context.Context) (*inventorySnapshot, error) {
+	c.inventoryMu.Lock()
+	defer c.inventoryMu.Unlock()
+	if c.inventory != nil && time.Since(c.inventory.collectedAt) < inventoryInterval {
+		return c.inventory, nil
+	}
+
+	configDevices := viper.GetStringSlice("devices")
+	deviceSet := make(map[string]struct{}, len(configDevices))
+	for _, device := range configDevices {
+		deviceSet[device] = struct{}{}
+	}
+	partitions, err := disk.Partitions(false)
+	if err != nil {
+		return nil, fmt.Errorf("获取磁盘分区信息失败: %w", err)
+	}
+	disks := make([]model.DiskInfo, 0, len(partitions))
+	for _, partition := range partitions {
+		if len(configDevices) > 0 {
+			_, deviceMatch := deviceSet[partition.Device]
+			_, mountpointMatch := deviceSet[partition.Mountpoint]
+			if !deviceMatch && !mountpointMatch {
+				continue
+			}
+		}
+		usage, usageErr := disk.Usage(partition.Mountpoint)
+		if usageErr != nil {
+			continue
+		}
+		disks = append(disks, model.DiskInfo{
+			Device:     partition.Device,
+			MountPoint: partition.Mountpoint,
+			Total:      usage.Total,
+			Used:       usage.Used,
+			Free:       usage.Free,
+			UsageRate:  usage.UsedPercent,
+			FSType:     partition.Fstype,
+		})
+		if len(disks) >= maxMetricItems {
+			break
+		}
+	}
+	processCount := 0
+	if pids, processErr := process.PidsWithContext(ctx); processErr == nil {
+		processCount = len(pids)
+	}
+	c.inventory = &inventorySnapshot{
+		IPAddresses:  utils.GetLocalIPs(),
+		Disks:        disks,
+		ProcessCount: processCount,
+		collectedAt:  time.Now(),
+	}
+	return c.inventory, nil
+}
+
 const (
 	// connectionCountTimeout 枚举连接数的超时上限
 	connectionCountTimeout = 5 * time.Second
@@ -268,19 +305,37 @@ type connCounter struct {
 	mu          sync.Mutex
 	tcp, udp    int
 	collectedAt time.Time
+	refreshing  bool
 }
 
 // current 返回缓存的连接数，缓存过期时重新枚举（错误或超时缓存零值）
 func (c *connCounter) current(ctx context.Context) (int, int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.collectedAt.IsZero() && time.Since(c.collectedAt) < connectionCountInterval {
-		return c.tcp, c.udp
+	if c.collectedAt.IsZero() {
+		c.mu.Unlock()
+		tcp, udp := countConnections(ctx)
+		c.mu.Lock()
+		if c.collectedAt.IsZero() {
+			c.tcp, c.udp = tcp, udp
+			c.collectedAt = time.Now()
+		}
+		c.mu.Unlock()
+		return tcp, udp
 	}
-	c.tcp, c.udp = countConnections(ctx)
-	c.collectedAt = time.Now()
-	return c.tcp, c.udp
+	tcp, udp := c.tcp, c.udp
+	if time.Since(c.collectedAt) >= connectionCountInterval && !c.refreshing {
+		c.refreshing = true
+		go func() {
+			freshTCP, freshUDP := countConnections(context.Background())
+			c.mu.Lock()
+			c.tcp, c.udp = freshTCP, freshUDP
+			c.collectedAt = time.Now()
+			c.refreshing = false
+			c.mu.Unlock()
+		}()
+	}
+	c.mu.Unlock()
+	return tcp, udp
 }
 
 // countConnections 统计 TCP/UDP 连接数；错误或超时返回零值。

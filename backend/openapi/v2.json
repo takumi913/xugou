@@ -5506,12 +5506,12 @@
           "collect_interval_seconds": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 86400
+            "maximum": 3600
           },
           "report_interval_seconds": {
             "type": "integer",
-            "minimum": 1,
-            "maximum": 86400
+            "minimum": 10,
+            "maximum": 3600
           },
           "group_name": {
             "type": [
@@ -6239,12 +6239,12 @@
           "collect_interval_seconds": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 86400
+            "maximum": 3600
           },
           "report_interval_seconds": {
             "type": "integer",
-            "minimum": 1,
-            "maximum": 86400
+            "minimum": 10,
+            "maximum": 3600
           },
           "group_name": {
             "type": [
@@ -6382,12 +6382,12 @@
           "collect_interval_seconds": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 86400
+            "maximum": 3600
           },
           "report_interval_seconds": {
             "type": "integer",
-            "minimum": 1,
-            "maximum": 86400
+            "minimum": 10,
+            "maximum": 3600
           },
           "group_name": {
             "type": [
@@ -6994,8 +6994,8 @@
           },
           "report_interval_seconds": {
             "type": "integer",
-            "minimum": 1,
-            "maximum": 86400
+            "minimum": 10,
+            "maximum": 3600
           },
           "samples": {
             "type": "array",

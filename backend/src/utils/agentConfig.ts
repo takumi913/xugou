@@ -29,12 +29,12 @@ export const MAX_COLLECT_INTERVAL = 3600;
 export const MIN_REPORT_INTERVAL = 10;
 export const MAX_REPORT_INTERVAL = 3600;
 
-export const DEFAULT_COLLECT_INTERVAL = 60;
+export const DEFAULT_COLLECT_INTERVAL = 1;
 export const DEFAULT_REPORT_INTERVAL = 60;
 
 // 单次上报最多承载/广播/缓存的样本条数（zod samples 上限、Agent Report Adapter 展开上限、
 // realtime publisher 与 AgentRoom 批量上限的单一事实源）
-export const MAX_REPORT_SAMPLES = 300;
+export const MAX_REPORT_SAMPLES = 100;
 
 export interface AgentIntervalConfig {
   collect_interval: number;

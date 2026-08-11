@@ -330,6 +330,13 @@
       "when": 1786418219664,
       "tag": "0046_young_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1786420823099,
+      "tag": "0047_uneven_thunderbolt",
+      "breakpoints": true
     }
   ]
 }

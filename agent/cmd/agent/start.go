@@ -16,6 +16,7 @@ import (
 	"github.com/xugou/agent/pkg/collector"
 	"github.com/xugou/agent/pkg/config"
 	"github.com/xugou/agent/pkg/model"
+	"github.com/xugou/agent/pkg/realtime"
 	"github.com/xugou/agent/pkg/reporter"
 	"github.com/xugou/agent/pkg/spool"
 )
@@ -103,6 +104,16 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 初始化数据收集器和上报器
 	dataCollector := collector.NewCollector()
 	dataReporter := reporter.NewReporter()
+	liveClient, err := realtime.NewClient(
+		config.ServerURL,
+		config.Token,
+		config.AgentVersion,
+		config.ProxyURL,
+	)
+	if err != nil {
+		fmt.Printf("初始化实时 WebSocket 失败: %v\n", err)
+		return
+	}
 	sampleSpool, err := spool.Open(spool.Options{
 		Dir:        config.SpoolDir,
 		MaxBytes:   config.SpoolMaxBytes,
@@ -112,12 +123,12 @@ func runStart(cmd *cobra.Command, args []string) {
 		fmt.Printf("初始化持久化采样队列失败: %v\n", err)
 		return
 	}
-	fmt.Println("使用HTTP上报器")
+	fmt.Println("使用实时 WebSocket + HTTP 批量上报器")
+	go liveClient.Run(ctx)
 
 	collectTicker := time.NewTicker(time.Duration(config.CollectInterval) * time.Second)
 	defer collectTicker.Stop()
-	reportTicker := time.NewTicker(time.Duration(config.ReportInterval) * time.Second)
-	defer reportTicker.Stop()
+	configUpdates := make(chan remoteConfigUpdate)
 
 	// 设置信号处理，用于优雅退出
 	sigCh := make(chan os.Signal, 1)
@@ -125,27 +136,76 @@ func runStart(cmd *cobra.Command, args []string) {
 
 	fmt.Println("Xugou Agent 已启动，按 Ctrl+C 停止")
 
-	// 每次采集先原子落盘；上报成功后才删除稳定 inflight 批次。
-	collectSample(ctx, dataCollector, sampleSpool)
-	reportSamples(ctx, dataReporter, sampleSpool, collectTicker, reportTicker)
+	// 每次采集立即进入实时最新值通道并原子落盘；HTTP 成功后才删除 inflight。
+	collectSample(ctx, dataCollector, sampleSpool, liveClient)
+	go runReportLoop(ctx, dataReporter, sampleSpool, configUpdates)
 
 	// 主循环
 	for {
 		select {
 		case <-collectTicker.C:
-			collectSample(ctx, dataCollector, sampleSpool)
-		case <-reportTicker.C:
-			stats, statsErr := sampleSpool.Stats()
-			if statsErr != nil {
-				fmt.Printf("读取持久化采样队列状态失败: %v\n", statsErr)
+			collectSample(ctx, dataCollector, sampleSpool, liveClient)
+		case update := <-configUpdates:
+			applyRemoteConfig(update.config, collectTicker)
+			if update.config.Update {
+				TriggerRemoteUpdate()
 			}
-			if statsErr == nil && stats.Samples == 0 {
-				collectSample(ctx, dataCollector, sampleSpool)
-			}
-			reportSamples(ctx, dataReporter, sampleSpool, collectTicker, reportTicker)
+			close(update.applied)
 		case sig := <-sigCh:
 			fmt.Printf("收到信号 %v，正在停止...\n", sig)
 			return
+		}
+	}
+}
+
+type remoteConfigUpdate struct {
+	config  *config.RemoteConfig
+	applied chan struct{}
+}
+
+// runReportLoop 与秒级采集循环完全独立。HTTP 超时、退避和断线追赶不会暂停
+// 本地采集、Spool 写入或实时 WebSocket 发布。
+func runReportLoop(
+	ctx context.Context,
+	r reporter.Reporter,
+	samples *spool.Store,
+	updates chan<- remoteConfigUpdate,
+) {
+	reportTicker := time.NewTicker(time.Duration(config.ReportInterval) * time.Second)
+	defer reportTicker.Stop()
+
+	report := func() bool {
+		remote := reportSamples(ctx, r, samples)
+		if remote == nil {
+			return true
+		}
+		update := remoteConfigUpdate{config: remote, applied: make(chan struct{})}
+		select {
+		case <-ctx.Done():
+			return false
+		case updates <- update:
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-update.applied:
+			reportTicker.Reset(time.Duration(remote.ReportInterval) * time.Second)
+			return true
+		}
+	}
+
+	// 启动时先发送首条样本完成 Enrollment 注册，之后进入固定批量周期。
+	if !report() {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-reportTicker.C:
+			if !report() {
+				return
+			}
 		}
 	}
 }
@@ -162,7 +222,16 @@ func configurationKeySet(cmd *cobra.Command, key string) bool {
 	return viper.InConfig(key)
 }
 
-func collectSample(ctx context.Context, c collector.Collector, samples *spool.Store) {
+type liveMetricPublisher interface {
+	Publish(info *model.SystemInfo)
+}
+
+func collectSample(
+	ctx context.Context,
+	c collector.Collector,
+	samples *spool.Store,
+	live liveMetricPublisher,
+) {
 	timeoutSeconds := max(config.CollectInterval, 15)
 	roundCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -173,26 +242,25 @@ func collectSample(ctx context.Context, c collector.Collector, samples *spool.St
 		return
 	}
 
+	// 实时路径只保存一个最新内存帧，网络写入由独立 goroutine 完成。
+	// 即使 WebSocket 断开，下面的本地 spool 仍持续写入。
+	live.Publish(info)
+
 	dropped, err := samples.Add(info)
 	if err != nil {
 		fmt.Printf("持久化采集样本失败: %v\n", err)
 		return
 	}
-	stats, err := samples.Stats()
-	if err != nil {
-		fmt.Printf("采集样本已落盘，读取队列状态失败: %v\n", err)
-		return
+	if dropped > 0 {
+		fmt.Printf("持久化采样队列达到上限，本轮丢弃最旧样本: %d\n", dropped)
 	}
-	fmt.Printf("采集样本已落盘，队列样本数: %d, 队列字节数: %d, 本轮丢弃: %d\n", stats.Samples, stats.Bytes, dropped)
 }
 
 func reportSamples(
 	ctx context.Context,
 	r reporter.Reporter,
 	samples *spool.Store,
-	collectTicker *time.Ticker,
-	reportTicker *time.Ticker,
-) {
+) *config.RemoteConfig {
 	timeoutSeconds := max(config.ReportInterval, 15)
 	roundCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -204,7 +272,7 @@ func reportSamples(
 		pending, ok, err := samples.Next(spool.DefaultMaxSamples, config.ReportMaxCompressedBytes)
 		if err != nil {
 			fmt.Printf("创建持久化上报批次失败: %v\n", err)
-			return
+			return remoteConfig
 		}
 		if !ok {
 			break
@@ -212,11 +280,11 @@ func reportSamples(
 		responseConfig, err := reportWithBackoff(roundCtx, r, pending)
 		if err != nil {
 			fmt.Printf("上报系统信息失败: %v\n", err)
-			return
+			return remoteConfig
 		}
 		if err := samples.Ack(pending.ReportID); err != nil {
 			fmt.Printf("提交已确认上报批次失败: report_id=%s err=%v\n", pending.ReportID, err)
-			return
+			return remoteConfig
 		}
 		if responseConfig != nil {
 			remoteConfig = responseConfig
@@ -224,13 +292,7 @@ func reportSamples(
 		fmt.Printf("系统信息已确认上报，report_id=%s, 样本数=%d, 时间=%s\n", pending.ReportID, len(pending.Samples), time.Now().Format("2006-01-02 15:04:05"))
 	}
 
-	if remoteConfig != nil {
-		applyRemoteConfig(remoteConfig, collectTicker, reportTicker)
-		// v3 update 指令：异步触发自升级（互斥防重入，失败只记日志，不落配置文件）
-		if remoteConfig.Update {
-			TriggerRemoteUpdate()
-		}
-	}
+	return remoteConfig
 }
 
 func reportWithBackoff(
@@ -271,27 +333,24 @@ func reportWithBackoff(
 func applyRemoteConfig(
 	remote *config.RemoteConfig,
 	collectTicker *time.Ticker,
-	reportTicker *time.Ticker,
 ) {
-	if remote.CollectInterval == config.CollectInterval &&
-		remote.ReportInterval == config.ReportInterval {
-		return
+	intervalsChanged := remote.CollectInterval != config.CollectInterval ||
+		remote.ReportInterval != config.ReportInterval
+	if intervalsChanged {
+		fmt.Printf(
+			"收到服务端配置下发: 采集间隔 %d秒 -> %d秒, 上报间隔 %d秒 -> %d秒\n",
+			config.CollectInterval, remote.CollectInterval,
+			config.ReportInterval, remote.ReportInterval,
+		)
+
+		if err := config.PersistIntervals(
+			config.ConfigFilePath, remote.CollectInterval, remote.ReportInterval,
+		); err != nil {
+			fmt.Printf("警告: 持久化服务端配置失败（仅内存生效）: %v\n", err)
+		}
+
+		config.CollectInterval = remote.CollectInterval
+		config.ReportInterval = remote.ReportInterval
+		collectTicker.Reset(time.Duration(config.CollectInterval) * time.Second)
 	}
-
-	fmt.Printf(
-		"收到服务端配置下发: 采集间隔 %d秒 -> %d秒, 上报间隔 %d秒 -> %d秒\n",
-		config.CollectInterval, remote.CollectInterval,
-		config.ReportInterval, remote.ReportInterval,
-	)
-
-	if err := config.PersistIntervals(
-		config.ConfigFilePath, remote.CollectInterval, remote.ReportInterval,
-	); err != nil {
-		fmt.Printf("警告: 持久化服务端配置失败（仅内存生效）: %v\n", err)
-	}
-
-	config.CollectInterval = remote.CollectInterval
-	config.ReportInterval = remote.ReportInterval
-	collectTicker.Reset(time.Duration(config.CollectInterval) * time.Second)
-	reportTicker.Reset(time.Duration(config.ReportInterval) * time.Second)
 }

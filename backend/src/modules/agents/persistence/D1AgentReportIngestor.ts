@@ -143,8 +143,9 @@ function currentThresholdState(
 }
 
 /**
- * Agent 高频上报直接落入 D1。Queue 只接收状态变化或阈值越界事件，
- * 原始样本通过 json_each 在 D1 内展开，避免为每个样本创建一条 JS statement。
+ * Agent 每 60 秒通过 HTTP 提交一个高密度批次并直接落入 D1。Queue 只接收
+ * 状态变化或阈值越界事件；原始样本通过 json_each 在 D1 内展开，避免为每个
+ * 样本创建一条 JS statement。
  */
 export class D1AgentReportIngestor {
   constructor(private readonly env: Bindings) {}

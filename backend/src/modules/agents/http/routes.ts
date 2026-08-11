@@ -30,6 +30,7 @@ import {
 import {
   AgentCredentialConfigurationError,
   AgentCredentialLimitError,
+  authenticateAgentToken,
   issueAgentEnrollmentToken,
   listAgentCredentialMetadata,
   listAgentEnrollments,
@@ -44,6 +45,7 @@ import {
 import { requestStatusRebuild } from "../../status/persistence/status-events";
 import { streamJsonDataArrayResponse } from "../../../platform/http/stream-json";
 import { agentReportSourceFromCf } from "../../../utils/geo";
+import { realtimeRoomName } from "../realtime/RealtimeSharding";
 
 const agentsV2 = new Hono<{
   Bindings: Bindings;
@@ -365,6 +367,56 @@ agentsV2.post("/register", async (c) => {
     }
     throw error;
   }
+});
+
+// Agent 数据面上行 WebSocket：Bearer 只在 Worker 握手时校验，DO 只接收已绑定
+// 的数字 Agent ID。实时帧不写 D1，也不进入 Queue。
+agentsV2.get("/live", async (c) => {
+  if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+    return problemResponse(c, {
+      status: 426,
+      code: "WEBSOCKET_UPGRADE_REQUIRED",
+      title: "WebSocket upgrade is required",
+    });
+  }
+  const token = bearerToken(c);
+  if (!token) {
+    return problemResponse(c, {
+      status: 401,
+      code: "AGENT_CREDENTIAL_REQUIRED",
+      title: "Agent credential is required",
+    });
+  }
+  let agent: Awaited<ReturnType<typeof authenticateAgentToken>>;
+  try {
+    agent = await authenticateAgentToken(c.env, token);
+  } catch (error) {
+    if (error instanceof AgentCredentialConfigurationError) {
+      return problemResponse(c, {
+        status: 503,
+        code: "AGENT_CREDENTIAL_NOT_CONFIGURED",
+        title: "Agent credential is not configured",
+      });
+    }
+    throw error;
+  }
+  if (!agent) {
+    return problemResponse(c, {
+      status: 401,
+      code: "AGENT_CREDENTIAL_INVALID",
+      title: "Agent credential is invalid",
+    });
+  }
+
+  const target = new URL("http://internal/agent-ws");
+  target.searchParams.set("agentId", String(agent.id));
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("Authorization");
+  headers.delete("Cookie");
+  return c.env.AGENT_ROOM.getByName(realtimeRoomName(agent.id)).fetch(target, {
+    method: "GET",
+    headers,
+  });
 });
 
 agentsV2.get("/:id/metrics", async (c) => {

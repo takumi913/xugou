@@ -12,7 +12,8 @@ SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 # --- 默认参数 ---
 SERVER_URL=""
 AGENT_TOKEN=""
-AGENT_INTERVAL="60" # 默认间隔60秒
+AGENT_COLLECT_INTERVAL="1"
+AGENT_REPORT_INTERVAL="60"
 
 # --- 环境变量相关函数 ---
 detect_shell_rc() {
@@ -72,11 +73,12 @@ print_usage() {
   echo "Options for 'install' command:"
   echo "  --server <url>       必需. 服务器地址 (例如: http://localhost:8787)."
   echo "  --token <token>      必需. Agent 认证令牌."
-  echo "  --interval <seconds> 可选. Agent 心跳间隔 (默认为 ${AGENT_INTERVAL} 秒)."
+  echo "  --collect-interval <seconds> 可选. 轻量指标采集间隔 (默认为 ${AGENT_COLLECT_INTERVAL} 秒)."
+  echo "  --report-interval <seconds>  可选. HTTP 批量上报间隔 (默认为 ${AGENT_REPORT_INTERVAL} 秒)."
   echo ""
   echo "示例:"
   echo "  $0 install --server http://localhost:8787 --token yoursecrettoken"
-  echo "  $0 --server http://localhost:8787 --token yoursecrettoken --interval 300"
+  echo "  $0 --server http://localhost:8787 --token yoursecrettoken --collect-interval 1 --report-interval 60"
   echo "  $0 update"
   echo "  $0 uninstall"
   exit 1
@@ -170,7 +172,8 @@ do_install() {
   echo "开始安装 ${AGENT_NAME}..."
   echo "服务器地址: ${SERVER_URL}"
   echo "Agent 令牌: **** (已隐藏)"
-  echo "心跳间隔: ${AGENT_INTERVAL} 秒"
+  echo "轻量采集间隔: ${AGENT_COLLECT_INTERVAL} 秒"
+  echo "HTTP 批量上报间隔: ${AGENT_REPORT_INTERVAL} 秒"
 
   if [ "$PLATFORM" = "windows" ]; then
     echo ""
@@ -180,7 +183,7 @@ do_install() {
     echo "  ${DOWNLOAD_BASE_URL}/${AGENT_NAME}-windows-amd64${EXTENSION} (针对 AMD64/x86_64)"
     echo "  ${DOWNLOAD_BASE_URL}/${AGENT_NAME}-windows-arm64${EXTENSION} (针对 ARM64)"
     echo "下载后，您可以使用以下命令运行 (请替换参数值):"
-    echo "  .\\${AGENT_NAME}${EXTENSION} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\""
+    echo "  .\\${AGENT_NAME}${EXTENSION} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\""
     exit 0
   fi
 
@@ -224,7 +227,7 @@ do_install() {
     if [ -z "$SUDO_CMD" ] && [[ $EUID -ne 0 ]]; then
         echo "错误: 需要 sudo 权限来安装 systemd 服务，但 sudo 命令未找到或您不是 root 用户。" >&2
         echo "您可以尝试使用 root 用户运行此脚本，或手动将 ${LOCAL_AGENT_DOWNLOAD_PATH} 移动到 PATH 路径并运行。" >&2
-        echo "运行命令: ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\""
+        echo "运行命令: ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\""
         exit 1
     fi
 
@@ -242,7 +245,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${AGENT_INSTALL_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\"
+ExecStart=${AGENT_INSTALL_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\"
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -281,13 +284,13 @@ WantedBy=multi-user.target"
     echo "Agent 已下载到 ${LOCAL_AGENT_DOWNLOAD_PATH}"
     if [ "$PLATFORM" = "darwin" ]; then
         echo "在 macOS 上, 您可以这样运行 Agent:"
-        echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\""
+        echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\""
         echo "要在后台运行, 可以使用 nohup:"
-        echo "  nohup ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\" > xugou-agent.log 2>&1 &"
+        echo "  nohup ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\" > xugou-agent.log 2>&1 &"
         echo "或者考虑使用 launchd 创建一个持久化服务。"
     else # Generic Linux without systemd or other OS
         echo "您可以这样运行 Agent:"
-        echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --interval \"${AGENT_INTERVAL}\""
+        echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${SERVER_URL}\" --token \"${AGENT_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\""
     fi
     print_builtin_commands "${LOCAL_AGENT_DOWNLOAD_PATH}" ""
   fi
@@ -386,7 +389,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${AGENT_INSTALL_PATH} start --server \"${XUGOU_SERVER}\" --token \"${XUGOU_TOKEN}\" --interval \"${AGENT_INTERVAL}\"
+ExecStart=${AGENT_INSTALL_PATH} start --server \"${XUGOU_SERVER}\" --token \"${XUGOU_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\"
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -411,7 +414,7 @@ WantedBy=multi-user.target"
   else
     echo "Agent 已下载到 ${LOCAL_AGENT_DOWNLOAD_PATH}"
     echo "使用如下命令启动 Agent："
-    echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${XUGOU_SERVER}\" --token \"${XUGOU_TOKEN}\" --interval \"${AGENT_INTERVAL}\""
+    echo "  ${LOCAL_AGENT_DOWNLOAD_PATH} start --server \"${XUGOU_SERVER}\" --token \"${XUGOU_TOKEN}\" --collect-interval \"${AGENT_COLLECT_INTERVAL}\" --report-interval \"${AGENT_REPORT_INTERVAL}\""
   fi
   echo "更新完成。"
 }
@@ -503,8 +506,17 @@ if [[ "$SUBCOMMAND" == "install" ]]; then
         AGENT_TOKEN="$2"
         shift 2
         ;;
+      --collect-interval)
+        AGENT_COLLECT_INTERVAL="$2"
+        shift 2
+        ;;
+      --report-interval)
+        AGENT_REPORT_INTERVAL="$2"
+        shift 2
+        ;;
       --interval)
-        AGENT_INTERVAL="$2"
+        # 兼容旧安装命令：旧参数现在只调整 HTTP 批量周期，秒级采集保持开启。
+        AGENT_REPORT_INTERVAL="$2"
         shift 2
         ;;
       -h|--help) # Allow --help after 'install' subcommand too

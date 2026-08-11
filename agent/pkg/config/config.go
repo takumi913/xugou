@@ -5,7 +5,7 @@ var (
 	Token           string = ""
 	TokenFile       string = ""
 	Interval        int    = 120
-	CollectInterval int    = 60
+	CollectInterval int    = 1
 	ReportInterval  int    = 60
 	ProxyURL        string = ""
 	// ConfigFilePath 本地配置文件路径（用于服务端下发配置的原子持久化，空则仅内存生效）

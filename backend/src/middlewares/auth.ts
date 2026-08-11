@@ -122,6 +122,10 @@ export const adminSessionMiddleware = async (
     return next();
   }
 
+  if (c.req.path === "/api/v2/agents/live" && c.req.method === "GET") {
+    return next();
+  }
+
   // WebSocket 在升级路由中独立校验 HttpOnly Cookie 会话。
   if (c.req.path === "/api/ws" && c.req.method === "GET") {
     return next();

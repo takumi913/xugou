@@ -93,7 +93,7 @@ const CreateAgent = () => {
   };
 
   // 生成并复制安装命令
-  const oneLinerInstallCommand = `curl -sSL ${getInstallScriptUrl()} | bash -s -- --server ${serverUrl} --token ${token} --interval 60`;
+  const oneLinerInstallCommand = `curl -sSL ${getInstallScriptUrl()} | bash -s -- --server ${serverUrl} --token ${token} --collect-interval 1 --report-interval 60`;
 
   const handleCopyInstallCommand = () => {
     navigator.clipboard.writeText(oneLinerInstallCommand);

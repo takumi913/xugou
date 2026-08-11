@@ -145,7 +145,7 @@ function toView(row: typeof agents.$inferSelect): AgentView {
     version: row.version,
     keepalive: row.keepalive,
     boot_time: row.boot_time,
-    collect_interval_seconds: row.collect_interval ?? 60,
+    collect_interval_seconds: row.collect_interval ?? 1,
     report_interval_seconds: row.report_interval ?? 60,
     last_seen_at: row.last_seen_at,
     next_offline_at: row.next_offline_at,
@@ -177,7 +177,7 @@ function toAuthenticated(row: typeof agents.$inferSelect): AuthenticatedAgent {
     id: row.id,
     name: row.name,
     status: row.status ?? "inactive",
-    collect_interval_seconds: row.collect_interval ?? 60,
+    collect_interval_seconds: row.collect_interval ?? 1,
     report_interval_seconds: row.report_interval ?? 60,
     auto_update: row.auto_update === 1,
   };

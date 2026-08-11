@@ -8,6 +8,7 @@ import { realtimeRoomName } from "../src/modules/agents/realtime/RealtimeShardin
 interface AgentRoomHealth {
   ok: boolean;
   subscribers: number;
+  upstreams: number;
   hasLatestReport: boolean;
 }
 
@@ -25,6 +26,22 @@ async function connect(
   expect(response.status).toBe(101);
   const socket = response.webSocket;
   if (!socket) throw new Error("Expected WebSocket response");
+  socket.accept();
+  return socket;
+}
+
+async function connectAgent(
+  stub: DurableObjectStub,
+  agentId: number
+): Promise<WebSocket> {
+  const url = new URL("http://internal/agent-ws");
+  url.searchParams.set("agentId", String(agentId));
+  const response = await stub.fetch(url, {
+    headers: { Upgrade: "websocket" },
+  });
+  expect(response.status).toBe(101);
+  const socket = response.webSocket;
+  if (!socket) throw new Error("Expected Agent WebSocket response");
   socket.accept();
   return socket;
 }
@@ -176,5 +193,57 @@ describe("sharded Agent Durable Object realtime isolation", () => {
     expect(data).not.toHaveProperty("threshold_state");
     expect(data).not.toHaveProperty("ip_addresses");
     socket.close(1000, "done");
+  });
+
+  it("broadcasts an Agent upstream frame immediately without an HTTP push", async () => {
+    const agentId = 99401;
+    const stub = env.AGENT_ROOM.getByName(realtimeRoomName(agentId));
+    const subscriber = await connect(stub, [agentId]);
+    const upstream = await connectAgent(stub, agentId);
+    const updateMessage = new Promise<string>((resolve) => {
+      subscriber.addEventListener("message", (event) => {
+        if (
+          typeof event.data === "string" &&
+          event.data.includes('"type":"batchUpdate"')
+        ) {
+          resolve(event.data);
+        }
+      });
+    });
+
+    upstream.send(
+      JSON.stringify({
+        type: "metric",
+        protocol_version: 1,
+        sequence: 1,
+        collected_at: "2026-08-11T08:00:00.000Z",
+        cpu: { usage: 38, cores: 4, model_name: "fixture" },
+        memory: { total: 4096, used: 2048, free: 2048, usage_rate: 50 },
+        load: { load1: 0.3, load5: 0.2, load15: 0.1 },
+        network_rx_speed: 1024,
+        network_tx_speed: 512,
+      })
+    );
+
+    const message = JSON.parse(await updateMessage) as {
+      updates: Array<{
+        agentId: number;
+        samples: Array<{ data: Record<string, unknown> }>;
+      }>;
+    };
+    expect(message.updates[0]).toMatchObject({ agentId });
+    expect(message.updates[0].samples[0].data).toMatchObject({
+      cpu_usage: 38,
+      memory_usage_rate: 50,
+      network_rx_speed: 1024,
+      network_tx_speed: 512,
+    });
+    await expect(health(agentId)).resolves.toMatchObject({
+      subscribers: 1,
+      upstreams: 1,
+      hasLatestReport: true,
+    });
+    upstream.close(1000, "done");
+    subscriber.close(1000, "done");
   });
 });
