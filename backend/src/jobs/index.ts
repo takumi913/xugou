@@ -21,6 +21,8 @@ import { writeStructuredLog } from "../platform/observability/StructuredLogger";
 
 const DEFAULT_AGENT_ROLLUP_RETENTION_DAYS = 30;
 const DEFAULT_MONITOR_ROLLUP_RETENTION_DAYS = 90;
+const DEFAULT_AGENT_REPORT_RETENTION_DAYS = 30;
+const DEFAULT_MONITOR_SAMPLE_RETENTION_DAYS = 90;
 const DEFAULT_MONITOR_DAILY_ROLLUP_RETENTION_DAYS = 3650;
 const DEFAULT_MONITOR_INCIDENT_RETENTION_DAYS = 180;
 const DEFAULT_SECURITY_AUDIT_RETENTION_DAYS = 180;
@@ -143,6 +145,22 @@ export async function cleanupOldRecords(env: Bindings) {
       { min: 1, max: 3650 }
     )
   );
+  const agentReportCutoff = getCutoffIso(
+    getEnvNumber(
+      env,
+      "AGENT_REPORT_RETENTION_DAYS",
+      DEFAULT_AGENT_REPORT_RETENTION_DAYS,
+      { min: 1, max: 3650 }
+    )
+  );
+  const monitorSampleCutoff = getCutoffIso(
+    getEnvNumber(
+      env,
+      "MONITOR_SAMPLE_RETENTION_DAYS",
+      DEFAULT_MONITOR_SAMPLE_RETENTION_DAYS,
+      { min: 1, max: 3650 }
+    )
+  );
   const securityAuditCutoff = getCutoffIso(
     getEnvNumber(
       env,
@@ -193,6 +211,15 @@ export async function cleanupOldRecords(env: Bindings) {
     env.DB.prepare(
       `DELETE FROM monitor_incidents WHERE started_at < ? AND ended_at IS NOT NULL`
     ).bind(monitorIncidentCutoff),
+    // Raw samples are retained directly in D1 for a bounded window. Rollups keep
+    // long-term trends, so cold R2 copies are unnecessary.
+    env.DB.prepare(
+      `DELETE FROM agent_reports
+       WHERE received_at < ? AND status IN ('processed', 'failed')`
+    ).bind(agentReportCutoff),
+    env.DB.prepare(`DELETE FROM monitor_check_samples WHERE checked_at < ?`).bind(
+      monitorSampleCutoff
+    ),
   ]);
   await deleteOldSecurityAuditEvents(env, securityAuditCutoff);
   await deleteStaleSecurityRateLimits(
