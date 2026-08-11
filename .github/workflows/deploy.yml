@@ -124,17 +124,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
 
-      - name: Stage 5 - Deploy legacy Agent manifest redirect
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.XUGOU_CF_API_TOKEN }}
-          accountId: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
-          command: deploy --config download-compat/wrangler.toml
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
-
-
       - name: Upload complete migration and readiness evidence
         if: always()
         uses: actions/upload-artifact@v4
