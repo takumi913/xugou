@@ -16,7 +16,7 @@ Xugou Agent 是一个系统监控客户端，用于收集系统信息并上报�
 - 使用 v2 Bearer 注册；Enrollment/Credential 只进入 Authorization Header，不进入 JSON Body
 - 采集结果先进入权限为 `0700/0600` 的持久化 Spool，进程重启后继续投递
 - Spool 有容量上限，网络重试使用指数退避和随机抖动
-- 自升级先原子读取内嵌 Ed25519 签名的通道指针，再验证不可变清单、平台、版本、大小和 SHA-256；替换健康检查失败会恢复旧版本
+- 自升级原子读取 `latest/manifest.json` 中内嵌 Ed25519 签名的清单，再验证平台、版本、大小和 SHA-256；替换健康检查失败会恢复旧版本
 
 ## 安装
 
@@ -62,7 +62,7 @@ sudo ./xugou-agent uninstall
 
 | 能力 | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| 签名通道 / 清单 / SHA-256 校验 | 支持 | 支持 | 支持 |
+| 签名清单 / SHA-256 校验 | 支持 | 支持 | 支持 |
 | 自动替换与新版探活 | 原子 Rename | 原子 Rename | 独立 Helper 等待文件锁释放 |
 | 探活失败恢复旧版 | 支持 | 支持 | 支持 |
 | 服务恢复 | systemd 自动重启 | 控制台启动 | Windows Service 或控制台自动恢复 |
@@ -107,8 +107,8 @@ export XUGOU_TOKEN_FILE=$HOME/.xugou-agent.token
 export XUGOU_COLLECT_INTERVAL=60
 export XUGOU_REPORT_INTERVAL=300
 export XUGOU_SPOOL_DIR=$HOME/.xugou-spool
-# 服务端 update=1 使用的自建签名通道或清单地址
-export XUGOU_UPDATE_MANIFEST_URL=https://mirror.example/channels/stable.json
+# 服务端 update=1 使用的自建签名清单地址
+export XUGOU_UPDATE_MANIFEST_URL=https://mirror.example/latest/manifest.json
 ```
 
 配置优先级为：显式新参数 > 环境变量 > 配置文件 > 旧 `--interval` Alias > 默认值。

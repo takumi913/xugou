@@ -25,7 +25,7 @@ const (
 	maxArtifactBytes    = 512 * 1024 * 1024
 )
 
-// ReleaseManifest 是签名覆盖的原始发布清单。签名存放在同 URL 的 .sig 文件中。
+// ReleaseManifest 是签名覆盖的原始发布清单。
 type ReleaseManifest struct {
 	SchemaVersion int               `json:"schema_version"`
 	Version       string            `json:"version"`
@@ -33,7 +33,7 @@ type ReleaseManifest struct {
 	ReleasedAt    string            `json:"released_at"`
 }
 
-// ReleaseChannel 是最后上传的签名通道指针，指向不可变版本清单。
+// ReleaseChannel 仅用于兼容旧的签名通道指针格式。
 type ReleaseChannel struct {
 	SchemaVersion  int    `json:"schema_version"`
 	Channel        string `json:"channel"`
@@ -44,7 +44,7 @@ type ReleaseChannel struct {
 }
 
 // signedDocumentEnvelope 把签名与被签名载荷放在同一个可原子替换的对象中。
-// 不可变 Manifest 仍兼容同 URL 的 .sig；可变 Channel 必须使用此封装。
+// 读取逻辑仍兼容历史上与文档分离的 .sig 文件。
 type signedDocumentEnvelope struct {
 	SchemaVersion int    `json:"schema_version"`
 	PayloadBase64 string `json:"payload_base64"`
@@ -210,7 +210,8 @@ func decodeStrictJSON(payload []byte, destination any, label string) error {
 	return nil
 }
 
-// FetchVerifiedRelease 校验通道指针和不可变清单的 Ed25519 签名，再选择当前平台产物。
+// FetchVerifiedRelease 校验发布清单的 Ed25519 签名，再选择当前平台产物。
+// 为保证已有 Agent 仍可升级，也兼容旧的通道指针格式。
 func FetchVerifiedRelease(manifestURL, publicKeyBase64, goos, goarch string) (VerifiedRelease, error) {
 	manifestURL = ManifestURL(manifestURL)
 	publicKey, err := decodeBase64(publicKeyBase64)

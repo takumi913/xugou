@@ -25,7 +25,7 @@ func init() {
 		Short: "升级 Xugou Agent 到最新版本",
 		Long: `从官方分发地址下载最新版本，并原地原子替换当前可执行文件。
 
-默认签名通道: ` + selfmgmt.DefaultReleaseChannel + `
+默认签名清单: ` + selfmgmt.DefaultManifestURL + `
 
 行为说明:
   - 先使用内置 Ed25519 公钥验证清单签名；
@@ -60,7 +60,7 @@ func runUpdate(rawURL string, checkOnly, force bool) error {
 
 	manifestURL := rawURL
 	if manifestURL == "" {
-		manifestURL = selfmgmt.DefaultReleaseChannel
+		manifestURL = selfmgmt.DefaultManifestURL
 	}
 
 	if !checkOnly {
@@ -229,7 +229,7 @@ func TriggerRemoteUpdate() {
 
 		manifestURL := os.Getenv("XUGOU_UPDATE_MANIFEST_URL")
 		if manifestURL == "" {
-			manifestURL = selfmgmt.DefaultReleaseChannel
+			manifestURL = selfmgmt.DefaultManifestURL
 		}
 		log.Printf("收到服务端升级指令，开始验证签名清单: %s", manifestURL)
 		if err := doSelfUpdate(manifestURL, false, log.Printf); err != nil {

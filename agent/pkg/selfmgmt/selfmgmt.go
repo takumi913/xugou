@@ -13,10 +13,10 @@ import (
 const (
 	// AgentName Agent 名称，与安装脚本 install-agent.sh 保持一致
 	AgentName = "xugou-agent"
-	// DefaultDownloadBase 旧版 latest 分发地址，保留给旧 Agent 与安装脚本。
+	// DefaultDownloadBase latest 分发地址，与安装脚本保持一致。
 	DefaultDownloadBase = "https://dl.xugou.mdzz.uk/latest"
-	// DefaultReleaseChannel 是原子切换的稳定通道指针。
-	DefaultReleaseChannel = "https://dl.xugou.mdzz.uk/channels/stable.json"
+	// DefaultManifestURL 是内嵌 Ed25519 签名的最新发布清单。
+	DefaultManifestURL = DefaultDownloadBase + "/manifest.json"
 	// ServiceName systemd 服务名
 	ServiceName = "xugou-agent"
 	// ServiceUnitPath systemd 服务单元文件路径（与 install-agent.sh 保持一致）

@@ -6,15 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer（留空则生成开发版本）"
-        required: false
-        type: string
-      channel:
-        description: "发布通道"
+        description: "发布到 latest 的 SemVer"
         required: true
-        default: dev
-        type: choice
-        options: [dev, stable]
+        type: string
 
 permissions:
   contents: read
@@ -26,7 +20,6 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       commit: ${{ steps.release.outputs.commit }}
       build_date: ${{ steps.release.outputs.build_date }}
-      channel: ${{ steps.release.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,29 +28,21 @@ jobs:
         shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version }}
-          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
           commit="$(git rev-parse --short=12 HEAD)"
           build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
             version="${GITHUB_REF#refs/tags/}"
-            channel=stable
-          elif [[ -n "${INPUT_VERSION:-}" ]]; then
-            version="$INPUT_VERSION"
-            channel="${INPUT_CHANNEL:-dev}"
           else
-            version="0.0.0-dev.${GITHUB_RUN_NUMBER}+sha.${commit}"
-            channel="${INPUT_CHANNEL:-dev}"
+            version="$INPUT_VERSION"
           fi
           version="${version#v}"
           node -e 'const v=process.argv[1],m=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(v);if(!m||m[4]?.split(".").some(x=>/^\d+$/.test(x)&&x.length>1&&x.startsWith("0")))process.exit(1)' "$version"
-          [[ "$channel" == stable || "$channel" == dev ]]
           {
             echo "version=$version"
             echo "commit=$commit"
             echo "build_date=$build_date"
-            echo "channel=$channel"
           } >> "$GITHUB_OUTPUT"
 
   verify:
@@ -157,10 +142,9 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Generate and sign immutable manifest and channel pointer
+      - name: Generate and sign latest manifest
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
-          CHANNEL: ${{ needs.metadata.outputs.channel }}
           BUILD_DATE: ${{ needs.metadata.outputs.build_date }}
           UPDATE_PRIVATE_KEY_B64: ${{ secrets.AGENT_UPDATE_PRIVATE_KEY_B64 }}
         run: |
@@ -171,7 +155,7 @@ jobs:
           python3 - <<'PY'
           import hashlib,json,os
           from pathlib import Path
-          version=os.environ['VERSION']; base=f'https://dl.xugou.mdzz.uk/releases/{version}'
+          version=os.environ['VERSION']; base='https://dl.xugou.mdzz.uk/latest'
           items=[]
           for p in sorted(Path('artifacts').iterdir()):
             if not p.is_file() or not p.name.startswith('xugou-agent-'): continue
@@ -181,33 +165,27 @@ jobs:
           if len(items)!=6: raise SystemExit(f'expected 6 artifacts, found {len(items)}')
           manifest={'schema_version':1,'version':version,'artifacts':items,'released_at':os.environ['BUILD_DATE']}
           raw=json.dumps(manifest,separators=(',',':')).encode()
-          Path('release-metadata/manifest.json').write_bytes(raw)
-          channel={'schema_version':1,'channel':os.environ['CHANNEL'],'version':version,'manifest_url':f'{base}/manifest.json','manifest_sha256':hashlib.sha256(raw).hexdigest(),'released_at':os.environ['BUILD_DATE']}
-          Path('release-metadata/channel.payload.json').write_text(json.dumps(channel,separators=(',',':')))
+          Path('release-metadata/manifest.payload.json').write_bytes(raw)
           PY
           printf '%s' "$UPDATE_PRIVATE_KEY_B64" | base64 --decode > release-metadata/key.pem
-          for name in manifest.json channel.payload.json; do
-            openssl pkeyutl -sign -rawin -inkey release-metadata/key.pem -in "release-metadata/$name" -out "release-metadata/$name.sig.bin"
-            base64 -w 0 "release-metadata/$name.sig.bin" > "release-metadata/$name.sig"
-          done
+          openssl pkeyutl -sign -rawin -inkey release-metadata/key.pem -in release-metadata/manifest.payload.json -out release-metadata/manifest.sig.bin
+          base64 -w 0 release-metadata/manifest.sig.bin > release-metadata/manifest.sig
           python3 - <<'PY'
           import base64,json
           from pathlib import Path
-          payload=Path('release-metadata/channel.payload.json').read_bytes()
-          signature=Path('release-metadata/channel.payload.json.sig').read_text()
+          payload=Path('release-metadata/manifest.payload.json').read_bytes()
+          signature=Path('release-metadata/manifest.sig').read_text()
           envelope={'schema_version':1,'payload_base64':base64.b64encode(payload).decode(),'signature':signature}
-          Path('release-metadata/channel.json').write_text(json.dumps(envelope,separators=(',',':')))
+          Path('release-metadata/manifest.json').write_text(json.dumps(envelope,separators=(',',':')))
           PY
           shred -u release-metadata/key.pem
-      - name: Publish immutable objects, verify metadata, then switch pointers
+      - name: Publish latest objects and remove version archives
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET_NAME }}
-          VERSION: ${{ needs.metadata.outputs.version }}
-          CHANNEL: ${{ needs.metadata.outputs.channel }}
         run: |
           set -euo pipefail
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
@@ -220,19 +198,14 @@ jobs:
             [[ "$remote_size" == "$size" && "$remote_sha" == "$sha" && "$remote_meta_size" == "$size" ]]
             [[ -n "$remote_etag" && "$remote_etag" != None && "$second_etag" == "$remote_etag" ]]
           }
-          publish_immutable() {
-            local file="$1" key="$2"
-            if aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null 2>&1; then
-              echo "immutable object already exists: $key" >&2; exit 1
-            fi
-            publish_mutable "$file" "$key"
-          }
-          for file in artifacts/xugou-agent-* release-metadata/manifest.json release-metadata/manifest.json.sig; do
-            publish_immutable "$file" "releases/${VERSION}/$(basename "$file")"
-          done
-          # 兼容旧 Agent：先更新二进制和签名，清单最后切换。
+          # 先更新全部二进制，最后原子切换内嵌签名的单对象清单。
           for file in artifacts/xugou-agent-*; do publish_mutable "$file" "latest/$(basename "$file")"; done
-          publish_mutable release-metadata/manifest.json.sig latest/manifest.json.sig
           publish_mutable release-metadata/manifest.json latest/manifest.json
-          # 通道 JSON 内嵌签名与载荷，是最终的单对象原子指针。
-          publish_mutable release-metadata/channel.json "channels/${CHANNEL}.json"
+          # 已发布 Agent 的默认地址仍是 channels/stable.json；复用同一清单维持升级兼容。
+          publish_mutable release-metadata/manifest.json channels/stable.json
+          # latest 切换成功后清理历史版本目录和旧的分离签名/开发通道对象。
+          aws s3 rm "s3://${R2_BUCKET}/releases/" --recursive --endpoint-url "$endpoint" --no-progress
+          aws s3 rm "s3://${R2_BUCKET}/latest/manifest.json.sig" --endpoint-url "$endpoint" --no-progress || true
+          aws s3 rm "s3://${R2_BUCKET}/channels/dev.json" --endpoint-url "$endpoint" --no-progress || true
+          remaining="$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix 'releases/' --max-keys 1 --endpoint-url "$endpoint" --query 'KeyCount' --output text)"
+          [[ "$remaining" == "0" ]]

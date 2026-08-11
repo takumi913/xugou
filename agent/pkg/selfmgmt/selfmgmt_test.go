@@ -285,6 +285,25 @@ func TestSignedReleaseManifestAndArtifact(t *testing.T) {
 	if release.Manifest.Version != "v2.0.0" || release.Artifact.Size != int64(len(artifact)) {
 		t.Fatalf("unexpected release: %+v", release)
 	}
+	directManifestEnvelope, err := json.Marshal(signedDocumentEnvelope{
+		SchemaVersion: 1,
+		PayloadBase64: base64.StdEncoding.EncodeToString(manifestBytes),
+		Signature:     signature,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyChannelBytes := channelBytes
+	channelBytes = directManifestEnvelope
+	if _, err := FetchVerifiedRelease(
+		server.URL+"/channels/stable.json",
+		base64.StdEncoding.EncodeToString(publicKey),
+		"linux",
+		"amd64",
+	); err != nil {
+		t.Fatalf("direct signed manifest envelope failed: %v", err)
+	}
+	channelBytes = legacyChannelBytes
 	path, err := DownloadVerifiedArtifact(release, t.TempDir())
 	if err != nil {
 		t.Fatalf("DownloadVerifiedArtifact failed: %v", err)
