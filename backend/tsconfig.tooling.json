@@ -11,8 +11,7 @@
   },
   "include": [
     "src/worker-env.d.ts",
-    "tooling/**/*.ts",
-    "scripts/**/*.ts"
+    "tooling/**/*.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

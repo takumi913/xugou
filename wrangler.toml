@@ -56,7 +56,7 @@ NOTIFICATION_EVENT_RETENTION_DAYS = "90"
 # 最新探针版本号（如 "1.2.0"）。留空则不触发探针自升级；
 # 填写后，开启了「自动升级」的 agent 上报版本低于此值时，
 # 服务端会在配置下发响应中附加 update=1 触发探针自升级。
-LATEST_AGENT_VERSION = "v1.2.7"
+LATEST_AGENT_VERSION = "v1.2.9"
 
 [[d1_databases]]
 binding = "DB"

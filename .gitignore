@@ -26,16 +26,6 @@ frontend/dist/
 frontend/node_modules/
 frontend/out/
 
-# --- Project Specific: Mobile (Expo) ---
-# Build artifacts, dependencies and Expo files for the mobile project
-mobile/.expo/
-mobile/build/
-mobile/dist/
-mobile/node_modules/
-mobile/ios/
-mobile/android/
-mobile/build-*
-
 # --- General Build & Distribution Artifacts ---
 # Common build output directories and files
 build/
@@ -43,12 +33,6 @@ dist/
 out/
 web-build/
 *.tsbuildinfo
-
-# --- Expo / Metro ---
-# Root Expo and Metro bundler specific files/directories
-.expo/
-.metro-health-check*
-expo-env.d.ts
 
 # --- Go Specific ---
 # Go language build artifacts and workspace files
@@ -69,13 +53,6 @@ npm-debug.*
 pnpm-debug.log*
 yarn-debug.*
 yarn-error.*
-
-# --- Testing ---
-# Test coverage reports
-coverage/
-test-results/
-playwright-report/
-blob-report/
 
 # --- Environment Variables ---
 # Environment configuration files (DO NOT commit sensitive info!)
@@ -133,11 +110,3 @@ Thumbs.db # Windows
 *.rar
 *.tar.gz
 *.zip
-
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-/mobile/service-account-key.json
-.alma-snapshots
-
-# 本地参照项目(独立仓库,不纳入版本控制)
-CF-Server-Monitor/

@@ -75,12 +75,7 @@ XUGOU 采用现代化的系统架构，包含以下组件：
 ## ⭐ 支持一下作者
 
 <div align="center">
-  <a href="https://buymeacoffee.com/real_zaunist" target="_blank">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200" height="51">
-  </a>
-  <div style="margin-top: 12px;">
-    <img src="./docs/mm_reward_qrcode.png" alt="赞赏码" width="240">
-  </div>
+  <img src="./docs/mm_reward_qrcode.png" alt="赞赏码" width="240">
 </div>
 
 ## 🤝 贡献
@@ -96,4 +91,3 @@ XUGOU 采用现代化的系统架构，包含以下组件：
 ## 📄 开源协议
 
 本项目采用 MIT 协议开源，详见 [LICENSE](./LICENSE) 文件。
-

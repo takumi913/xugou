@@ -255,6 +255,7 @@ const StatusPage = () => {
                         metrics: selectedAgentMetrics || [],
                       } as never
                     }
+                    liveMetric={liveMetrics[selectedAgent.id]}
                     // 公开页不展示 IP（后端投影已剥离，此处双保险）
                     showIpAddress={false}
                   />

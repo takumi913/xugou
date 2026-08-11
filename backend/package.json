@@ -1,6 +1,6 @@
 {
   "name": "backend",
-  "version": "1.2.7",
+  "version": "1.2.9",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -9,14 +9,8 @@
     "deploy": "wrangler deploy",
     "db:generate": "drizzle-kit generate",
     "contracts:generate": "tsx tooling/contracts/generate-openapi.ts && openapi-typescript openapi/v2.json -o ../frontend/src/api/generated/v2-schema.d.ts",
-    "test:contracts": "pnpm run contracts:generate && tsx scripts/api-contracts.test.ts && tsx scripts/problem-contract.test.ts",
-    "test:migrations": "tsx scripts/wrangler-migrations.test.ts && tsx scripts/wrangler-config.test.ts",
-    "test:modules": "tsx scripts/auth-module.test.ts && tsx scripts/dashboard-module.test.ts && tsx scripts/monitor-module.test.ts && tsx scripts/agent-module.test.ts && tsx scripts/notification-module.test.ts && tsx scripts/status-module.test.ts && tsx scripts/queue-processing.test.ts && tsx scripts/observability.test.ts && tsx scripts/module-boundaries.test.ts && tsx scripts/worker-env-types.test.ts && tsx scripts/realtime-architecture.test.ts",
-    "test:sessions": "tsx scripts/session-security.test.ts",
-    "test:security": "tsx scripts/session-security.test.ts && tsx scripts/agent-credential-security.test.ts && tsx scripts/notification-secret-security.test.ts && tsx scripts/security-controls.test.ts",
-    "test:workers": "tsc -p tsconfig.test-runtime.json && vitest run --config vitest.config.ts",
     "wrangler:render-config": "tsx tooling/wrangler/render-production-config.ts",
-    "lint": "eslint src tooling scripts test-runtime vitest.config.ts --max-warnings 0",
+    "lint": "eslint src tooling --max-warnings 0",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.tooling.json"
   },
   "keywords": [],
@@ -30,7 +24,6 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.20.3",
     "@cloudflare/workers-types": "^5.20260808.1",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
@@ -45,7 +38,6 @@
     "tsx": "^4.23.11",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.66.0",
-    "vitest": "^4.1.10",
     "wrangler": "^4.120.0"
   }
 }

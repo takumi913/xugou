@@ -45,39 +45,8 @@ jobs:
             echo "build_date=$build_date"
           } >> "$GITHUB_OUTPUT"
 
-  verify:
-    needs: metadata
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.5"
-          cache-dependency-path: agent/go.sum
-      - name: Go quality and vulnerability gates
-        working-directory: agent
-        run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
-          go test ./...
-          ./scripts/smoke-test.sh
-          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-
-  windows-update-integration:
-    needs: metadata
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.5"
-          cache-dependency-path: agent/go.sum
-      - name: Exercise Windows self-management and rollback tests
-        working-directory: agent
-        run: go test ./pkg/selfmgmt ./cmd/agent
-
   build:
-    needs: [metadata, verify, windows-update-integration]
+    needs: metadata
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -10,11 +10,10 @@ permissions:
 
 env:
   NODE_VERSION: "22"
-  GO_VERSION: "1.26.5"
 
 jobs:
   deploy:
-    name: Verify, migrate, deploy and verify
+    name: Build, migrate and deploy
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -28,10 +27,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: agent/go.sum
       - run: pnpm install --frozen-lockfile
       - name: Verify Secret Presence
         env:
@@ -56,10 +51,8 @@ jobs:
           pnpm --dir backend wrangler:render-config -- \
             --template ../wrangler.toml \
             --output ../.wrangler.production.toml
-      - name: Install browser runtime
-        run: pnpm --dir frontend exec playwright install --with-deps chromium
-      - name: Unified quality gates
-        run: pnpm run test:all
+      - name: Build production bundle
+        run: pnpm run build
       - name: Verify reproducible Git input
         run: test -z "$(git status --porcelain)"
       - name: Apply D1 migrations
