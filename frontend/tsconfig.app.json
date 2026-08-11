@@ -23,7 +23,6 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Path Aliases */
-    "baseUrl": ".", // 相对于 tsconfig.app.json 文件，即 frontend/ 目录
     "paths": {
       "@/*": ["./src/*"] // 将 @/* 解析到 frontend/src/*
     }

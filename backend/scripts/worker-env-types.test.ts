@@ -14,7 +14,6 @@ const generated = readFileSync(
 for (const binding of [
   "DB",
   "ASSETS",
-  "RAW_SAMPLE_ARCHIVE",
   "AGENT_ROOM",
   "XUGOU_JOBS",
   "CF_VERSION_METADATA",

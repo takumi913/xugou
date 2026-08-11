@@ -6,7 +6,7 @@ var (
 	TokenFile       string = ""
 	Interval        int    = 120
 	CollectInterval int    = 60
-	ReportInterval  int    = 300
+	ReportInterval  int    = 60
 	ProxyURL        string = ""
 	// ConfigFilePath 本地配置文件路径（用于服务端下发配置的原子持久化，空则仅内存生效）
 	ConfigFilePath string = ""
@@ -17,5 +17,5 @@ var (
 	// SpoolMaxBytes 限制本地持久化队列总大小，满额时优先删除最老的非 inflight 样本。
 	SpoolMaxBytes int64 = 64 * 1024 * 1024
 	// ReportMaxCompressedBytes 控制单个 gzip v4 请求的压缩后大小。
-	ReportMaxCompressedBytes int = 512 * 1024
+	ReportMaxCompressedBytes int = 64 * 1024
 )

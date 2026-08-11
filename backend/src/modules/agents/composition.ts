@@ -4,8 +4,8 @@ import { ApplicationProblem } from "../../shared/errors/ApplicationProblem";
 import { hmacSha256Hex, sha256Hex } from "../../utils/crypto";
 import { shouldTriggerAgentUpdate } from "../../utils/agentConfig";
 import { AgentUseCases } from "./application/AgentUseCases";
+import { D1AgentReportIngestor } from "./persistence/D1AgentReportIngestor";
 import { DrizzleAgentRepository } from "./persistence/DrizzleAgentRepository";
-import { AgentReportSyncProcessor } from "./queue/AgentReportSyncProcessor";
 
 const MIN_AGENT_TOKEN_PEPPER_LENGTH = 32;
 
@@ -31,7 +31,7 @@ export function createAgentUseCases(env: Bindings) {
         return sha256Hex(JSON.stringify(report));
       },
     },
-    new AgentReportSyncProcessor(env),
+    new D1AgentReportIngestor(env),
     {
       shouldUpdate({ autoUpdate, currentVersion }) {
         return shouldTriggerAgentUpdate(

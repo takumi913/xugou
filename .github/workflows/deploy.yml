@@ -62,12 +62,6 @@ jobs:
         run: pnpm run test:all
       - name: Verify reproducible Git input
         run: test -z "$(git status --porcelain)"
-      - name: Verify archive bucket
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.XUGOU_CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.XUGOU_CF_API_TOKEN }}
-        run: pnpm exec wrangler r2 bucket info xugou-raw-sample-archive -c .wrangler.production.toml
-
       # Stage 1: preflight and point-in-time evidence.
       - name: Stage 1 - D1 preflight
         env:

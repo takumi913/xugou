@@ -10,6 +10,7 @@ import {
   encodeOrderedCursor,
   type OrderedCursor,
 } from "../../../shared/pagination/OrderedCursor";
+import type { AgentReportSourceLocation } from "../../../utils/geo";
 
 export interface AgentRepositoryPort {
   listPage(input: { after?: OrderedCursor; limit: number }): Promise<AgentView[]>;
@@ -31,8 +32,16 @@ export interface ReportDigestPort {
   digest(report: AgentReportCommand): Promise<string>;
 }
 
-export interface SyncReportProcessorPort {
-  process(agentId: number, report: AgentReportCommand): Promise<{ outcome: string }>;
+export interface AgentReportIngestorPort {
+  process(
+    agentId: number,
+    report: AgentReportCommand,
+    input: {
+      payloadDigest: string;
+      receivedAt: string;
+      sourceLocation?: AgentReportSourceLocation;
+    }
+  ): Promise<{ outcome: "completed" | "duplicate" | "conflict" }>;
 }
 
 export interface AgentUpdatePolicyPort {
@@ -47,7 +56,7 @@ export class AgentUseCases {
     private readonly repository: AgentRepositoryPort,
     private readonly credentialDigest: AgentCredentialDigestPort,
     private readonly reportDigest: ReportDigestPort,
-    private readonly syncReportProcessor: SyncReportProcessorPort,
+    private readonly reportIngestor: AgentReportIngestorPort,
     private readonly updatePolicy: AgentUpdatePolicyPort
   ) {}
 
@@ -124,7 +133,11 @@ export class AgentUseCases {
     }
   }
 
-  async acceptReport(token: string, report: AgentReportCommand) {
+  async acceptReport(
+    token: string,
+    report: AgentReportCommand,
+    sourceLocation?: AgentReportSourceLocation
+  ) {
     const receivedAt = new Date().toISOString();
     const agent = await this.repository.authenticateCredential({
       token,
@@ -139,8 +152,13 @@ export class AgentUseCases {
       );
     }
 
+    let ingested: { outcome: "completed" | "duplicate" | "conflict" };
     try {
-      await this.syncReportProcessor.process(agent.id, report);
+      ingested = await this.reportIngestor.process(agent.id, report, {
+        payloadDigest: await this.reportDigest.digest(report),
+        receivedAt,
+        sourceLocation,
+      });
     } catch (error) {
       throw new ApplicationProblem(
         500,
@@ -148,11 +166,18 @@ export class AgentUseCases {
         "Failed to process agent report: " + (error instanceof Error ? error.message : String(error))
       );
     }
+    if (ingested.outcome === "conflict") {
+      throw new ApplicationProblem(
+        409,
+        "REPORT_ID_REUSED",
+        "Report id was already used with different content"
+      );
+    }
 
     return {
       report_id: report.report_id,
       accepted: true,
-      duplicate: false,
+      duplicate: ingested.outcome === "duplicate",
       config: {
         collect_interval_seconds: agent.collect_interval_seconds,
         report_interval_seconds: agent.report_interval_seconds,

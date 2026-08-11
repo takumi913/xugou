@@ -1,11 +1,11 @@
 /**
- * WebSocket 实时指标客户端（参照 CF-Server-Monitor createLiveSocket 移植）
+ * WebSocket 实时指标客户端（基于 CF-Server-Monitor createLiveSocket 的订阅模型）。
  *
  * - 管理连接由浏览器自动携带 HttpOnly 会话 Cookie
- * - 断线指数退避重连（1s 起，上限 30s）
- * - 30s 心跳发 'ping'（服务端 DO 通过 setWebSocketAutoResponse 自动回 'pong'）
- * - 每个连接只绑定一个 AgentRoom，不支持 all 或多 ID 订阅
- * - 收到 batchUpdate 按样本 ts 差值分时间桶合并回放（上限 120s，超出直接套用）
+ * - 多 Agent 自动按固定分片复用连接，避免每台机器各开一个 WebSocket
+ * - 每个分片独立指数退避重连（1s 起，上限 30s）
+ * - 30s 心跳发 ping，服务端 DO 在休眠状态自动回复 pong
+ * - batchUpdate 按样本时间差分桶回放，状态变化则立即应用
  */
 
 import { ENV_API_BASE_URL } from "../config";
@@ -15,8 +15,10 @@ const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_REPLAY_DELAY_MS = 120000;
-// 回放合并调度粒度：同一时间桶内的样本共用一个 timer
 const REPLAY_BUCKET_MS = 250;
+export const AGENT_REALTIME_SHARD_COUNT = 8;
+
+export type LiveAgentStatus = "active" | "inactive";
 
 export interface LiveSocketStatus {
   connected: boolean;
@@ -27,17 +29,21 @@ export interface LiveUpdate {
   agentId: number;
   ts: number;
   data: Partial<MetricHistory>;
+  status?: LiveAgentStatus;
+  lastSeenAt?: string | null;
   /** 回放滞后（秒）：emit 时刻与样本 ts 的差值，用于 UI 滞后标记 */
   lagSeconds: number;
 }
 
 export interface CreateLiveSocketOptions {
-  /** 当前详情页订阅的唯一 Agent ID。 */
-  subscribe: number;
+  /** 详情页传单个 ID；列表页传当前投影中的全部 Agent ID。 */
+  subscribe: number | readonly number[];
   onUpdate?: (update: LiveUpdate) => void;
   onStatusChange?: (status: LiveSocketStatus) => void;
-  /** 覆盖 WebSocket URL（默认由 API 基地址 / 当前页面推导） */
+  /** 覆盖 WebSocket API URL（测试/独立 API 域名使用） */
   url?: string;
+  /** 与当前 API Origin 同源的 WebSocket 路径。 */
+  path?: string;
 }
 
 export interface LiveSocket {
@@ -50,47 +56,109 @@ interface BatchUpdateMessage {
   ts?: number;
   updates?: Array<{
     agentId?: number;
+    status?: LiveAgentStatus;
+    lastSeenAt?: string | null;
+    changedAt?: string;
     samples?: Array<{ ts?: number; data?: Partial<MetricHistory> }>;
   }>;
 }
 
-function buildWsUrl(
-  agentId: number,
-  override?: string
-): string {
-  if (override) return override;
+interface ShardConnection {
+  agentIds: number[];
+  ws: WebSocket | null;
+  connected: boolean;
+  reconnectDelay: number;
+  reconnectTimer: number | null;
+  heartbeatTimer: number | null;
+}
 
+interface ReplaySample {
+  ts: number;
+  data: Partial<MetricHistory>;
+  status?: LiveAgentStatus;
+  lastSeenAt?: string | null;
+}
+
+export function realtimeShardIndex(agentId: number): number {
+  return (agentId - 1) % AGENT_REALTIME_SHARD_COUNT;
+}
+
+export function groupRealtimeSubscriptions(
+  agentIds: readonly number[]
+): number[][] {
+  const groups = new Map<number, number[]>();
+  const normalized = [...new Set(agentIds)]
+    .filter((agentId) => Number.isSafeInteger(agentId) && agentId > 0)
+    .sort((left, right) => left - right);
+  for (const agentId of normalized) {
+    const shard = realtimeShardIndex(agentId);
+    const group = groups.get(shard) ?? [];
+    group.push(agentId);
+    groups.set(shard, group);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, ids]) => ids);
+}
+
+function buildWsUrl(
+  agentIds: readonly number[],
+  override?: string,
+  path = "/api/ws"
+): string {
   let base: URL;
   try {
-    base = ENV_API_BASE_URL
-      ? new URL(ENV_API_BASE_URL)
-      : new URL(window.location.href);
+    base = override
+      ? new URL(override)
+      : ENV_API_BASE_URL
+        ? new URL(ENV_API_BASE_URL)
+        : new URL(window.location.href);
   } catch {
     base = new URL(window.location.href);
   }
 
   const wsProtocol = base.protocol === "https:" ? "wss:" : "ws:";
-  const url = new URL(`${wsProtocol}//${base.host}/api/ws`);
-  url.searchParams.set("subscribe", String(agentId));
-
+  const url = override
+    ? new URL(base.toString())
+    : new URL(`${wsProtocol}//${base.host}${path}`);
+  if (url.protocol === "http:") url.protocol = "ws:";
+  if (url.protocol === "https:") url.protocol = "wss:";
+  url.searchParams.set("subscribe", agentIds.join(","));
   return url.toString();
 }
 
 export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
   const { onUpdate, onStatusChange } = options;
-  const agentId = options.subscribe;
-
-  let ws: WebSocket | null = null;
-  let manualClose = false;
-  let isConnected = false;
-  let reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
-  let reconnectTimer: number | null = null;
-  let heartbeatTimer: number | null = null;
+  const requestedIds = Array.isArray(options.subscribe)
+    ? options.subscribe
+    : [options.subscribe];
+  const subscriptionGroups = groupRealtimeSubscriptions(requestedIds);
+  const connections: ShardConnection[] = subscriptionGroups.map((agentIds) => ({
+    agentIds,
+    ws: null,
+    connected: false,
+    reconnectDelay: RECONNECT_INITIAL_DELAY_MS,
+    reconnectTimer: null,
+    heartbeatTimer: null,
+  }));
   const replayTimers = new Set<number>();
+  let manualClose = false;
+  let lastStatusKey = "";
 
-  const setStatus = (connected: boolean, reason?: string) => {
-    isConnected = connected;
-    onStatusChange?.({ connected, reason });
+  const notifyStatus = (reason?: string) => {
+    const connected =
+      connections.length > 0 &&
+      connections.every((connection) => connection.connected);
+    const active = connections.filter((connection) => connection.connected).length;
+    const resolvedReason = connected
+      ? "connected"
+      : active > 0
+        ? "partial"
+        : reason ?? "disconnected";
+    const key = `${connected}:${resolvedReason}:${active}/${connections.length}`;
+    if (key === lastStatusKey) return;
+    lastStatusKey = key;
+    onStatusChange?.({ connected, reason: resolvedReason });
   };
 
   const clearReplayTimers = () => {
@@ -98,54 +166,67 @@ export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
     replayTimers.clear();
   };
 
-  const stopHeartbeat = () => {
-    if (heartbeatTimer !== null) {
-      window.clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
+  const stopHeartbeat = (connection: ShardConnection) => {
+    if (connection.heartbeatTimer !== null) {
+      window.clearInterval(connection.heartbeatTimer);
+      connection.heartbeatTimer = null;
     }
   };
 
-  const startHeartbeat = () => {
-    stopHeartbeat();
-    heartbeatTimer = window.setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
+  const startHeartbeat = (connection: ShardConnection) => {
+    stopHeartbeat(connection);
+    connection.heartbeatTimer = window.setInterval(() => {
+      if (connection.ws?.readyState === WebSocket.OPEN) {
         try {
-          ws.send("ping");
+          connection.ws.send("ping");
         } catch {
-          // 忽略心跳发送失败，交给 close/error 事件处理
+          // close/error 事件负责后续重连。
         }
       }
     }, HEARTBEAT_INTERVAL_MS);
   };
 
-  const emitUpdate = (agentId: number, ts: number, data: Partial<MetricHistory>) => {
-    // 滞后 = emit 时刻与样本时间戳的差值（回放/网络延迟叠加），负值按 0 计
-    const lagSeconds = Math.max(0, (Date.now() - ts) / 1000);
-    onUpdate?.({ agentId, ts, data, lagSeconds });
+  const emitUpdate = (sample: ReplaySample, agentId: number) => {
+    const lagSeconds = Math.max(0, (Date.now() - sample.ts) / 1000);
+    const timestamp = new Date(sample.ts).toISOString();
+    onUpdate?.({
+      agentId,
+      ts: sample.ts,
+      data: { ...sample.data, timestamp: sample.data.timestamp ?? timestamp },
+      status: sample.status,
+      lastSeenAt: sample.lastSeenAt,
+      lagSeconds,
+    });
   };
 
-  // 按样本 ts 差值分时间桶（REPLAY_BUCKET_MS 粒度）合并回放：
-  // 同桶一个 timer，回调里每个 agent 只 emit 桶内最后一个样本（中间样本对 UI 无意义），
-  // 超过上限的直接按上限套用（即立即追平最新）
   const replayBatch = (msg: BatchUpdateMessage) => {
     const updates = Array.isArray(msg.updates) ? msg.updates : [];
-    // 桶序号 -> (agentId -> 桶内最后一个样本)
-    const buckets = new Map<
-      number,
-      Map<number, { ts: number; data: Partial<MetricHistory> }>
-    >();
+    const buckets = new Map<number, Map<number, ReplaySample>>();
 
     for (const update of updates) {
       const agentId = Number(update?.agentId);
-      if (!Number.isInteger(agentId) || agentId <= 0) continue;
-
-      const samples = (Array.isArray(update.samples) ? update.samples : [])
+      if (!Number.isSafeInteger(agentId) || agentId <= 0) continue;
+      const status =
+        update.status === "active" || update.status === "inactive"
+          ? update.status
+          : undefined;
+      const rawSamples = (Array.isArray(update.samples) ? update.samples : [])
         .filter((sample) => sample && typeof sample.data === "object")
         .map((sample) => ({
           ts: Number(sample.ts) || Date.now(),
           data: sample.data as Partial<MetricHistory>,
         }))
-        .sort((a, b) => a.ts - b.ts);
+        .sort((left, right) => left.ts - right.ts);
+      const fallbackTs =
+        (typeof update.changedAt === "string" && Date.parse(update.changedAt)) ||
+        Number(msg.ts) ||
+        Date.now();
+      const samples =
+        rawSamples.length > 0
+          ? rawSamples
+          : status
+            ? [{ ts: fallbackTs, data: {} }]
+            : [];
       if (samples.length === 0) continue;
 
       const firstTs = samples[0].ts;
@@ -160,50 +241,47 @@ export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
           bucket = new Map();
           buckets.set(bucketIndex, bucket);
         }
-        // samples 已按 ts 升序，后写入的即桶内最后一个样本
-        bucket.set(agentId, sample);
+        bucket.set(agentId, {
+          ...sample,
+          status,
+          lastSeenAt: update.lastSeenAt,
+        });
       }
     }
 
     for (const [bucketIndex, bucket] of buckets) {
       const timer = window.setTimeout(() => {
         replayTimers.delete(timer);
-        bucket.forEach((sample, agentId) =>
-          emitUpdate(agentId, sample.ts, sample.data)
-        );
+        bucket.forEach((sample, agentId) => emitUpdate(sample, agentId));
       }, bucketIndex * REPLAY_BUCKET_MS);
       replayTimers.add(timer);
     }
   };
 
-  const scheduleReconnect = () => {
-    if (manualClose || reconnectTimer !== null) return;
-    const delay = reconnectDelay;
-    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
-    reconnectTimer = window.setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay);
-  };
-
-  const connect = () => {
+  const connect = (connection: ShardConnection) => {
     if (manualClose) return;
+    let socket: WebSocket;
     try {
-      ws = new WebSocket(
-        buildWsUrl(agentId, options.url)
+      socket = new WebSocket(
+        buildWsUrl(connection.agentIds, options.url, options.path)
       );
+      connection.ws = socket;
     } catch {
-      setStatus(false, "unsupported");
+      connection.connected = false;
+      notifyStatus("unsupported");
       return;
     }
 
-    ws.addEventListener("open", () => {
-      reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
-      startHeartbeat();
-      setStatus(true, "connected");
+    socket.addEventListener("open", () => {
+      if (connection.ws !== socket || manualClose) return;
+      connection.connected = true;
+      connection.reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
+      startHeartbeat(connection);
+      notifyStatus();
     });
 
-    ws.addEventListener("message", (event) => {
+    socket.addEventListener("message", (event) => {
+      if (connection.ws !== socket) return;
       if (typeof event.data !== "string" || event.data === "pong") return;
       let msg: BatchUpdateMessage;
       try {
@@ -211,54 +289,67 @@ export function createLiveSocket(options: CreateLiveSocketOptions): LiveSocket {
       } catch {
         return;
       }
-      if (msg.type === "batchUpdate") {
-        replayBatch(msg);
-      }
+      if (msg.type === "batchUpdate") replayBatch(msg);
     });
 
-    ws.addEventListener("close", () => {
-      stopHeartbeat();
-      setStatus(false, "disconnected");
-      scheduleReconnect();
+    socket.addEventListener("close", () => {
+      if (connection.ws !== socket) return;
+      stopHeartbeat(connection);
+      connection.ws = null;
+      connection.connected = false;
+      notifyStatus("disconnected");
+      if (manualClose || connection.reconnectTimer !== null) return;
+      const delay = connection.reconnectDelay;
+      connection.reconnectDelay = Math.min(
+        connection.reconnectDelay * 2,
+        RECONNECT_MAX_DELAY_MS
+      );
+      connection.reconnectTimer = window.setTimeout(() => {
+        connection.reconnectTimer = null;
+        connect(connection);
+      }, delay);
     });
 
-    ws.addEventListener("error", () => {
-      setStatus(false, "error");
+    socket.addEventListener("error", () => {
+      if (connection.ws !== socket) return;
+      connection.connected = false;
+      notifyStatus("error");
       try {
-        ws?.close();
+        socket.close();
       } catch {
-        // 忽略关闭失败
+        // close 事件负责后续重连。
       }
     });
   };
 
-  // 统一拆卸序列：清回放/心跳/重连定时器并关闭连接
-  const teardown = () => {
-    clearReplayTimers();
-    stopHeartbeat();
-    if (reconnectTimer !== null) {
-      window.clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (ws) {
-      try {
-        ws.close();
-      } catch {
-        // 忽略关闭失败
-      }
-      ws = null;
-    }
-  };
-
-  connect();
+  for (const connection of connections) connect(connection);
+  if (connections.length === 0) notifyStatus("empty");
 
   return {
     close() {
       manualClose = true;
-      teardown();
+      clearReplayTimers();
+      for (const connection of connections) {
+        stopHeartbeat(connection);
+        if (connection.reconnectTimer !== null) {
+          window.clearTimeout(connection.reconnectTimer);
+          connection.reconnectTimer = null;
+        }
+        const socket = connection.ws;
+        connection.ws = null;
+        connection.connected = false;
+        try {
+          socket?.close();
+        } catch {
+          // 页面卸载时忽略连接关闭竞争。
+        }
+      }
     },
     get isConnected() {
-      return isConnected;
+      return (
+        connections.length > 0 &&
+        connections.every((connection) => connection.connected)
+      );
     },
   };
 }

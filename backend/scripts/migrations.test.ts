@@ -392,13 +392,6 @@ try {
     /report_id[\s\S]*payload_digest[\s\S]*payload_json[\s\S]*status/,
     "Agent report idempotency envelope must be present"
   );
-  assert.equal(
-    sqlite(
-      "SELECT count(*) FROM pragma_index_list('async_jobs') WHERE name = 'async_jobs_dedup_key_unique_idx';"
-    ),
-    "1",
-    "async jobs must enforce a unique business deduplication key"
-  );
   assert.match(
     sqlite(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'domain_outbox';"
@@ -427,12 +420,27 @@ try {
     "notification_cooldowns",
     "status_publications",
     "status_publication_state",
-    "queue_failures",
   ]) {
     assert.equal(
       sqlite(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '${table}';`),
       "1",
       `${table} migration table must be present`
+    );
+  }
+  for (const retiredTable of [
+    "async_jobs",
+    "queue_failures",
+    "contract_release_evidence",
+    "contract_release_state",
+    "raw_sample_archive_batches",
+    "raw_sample_archive_members",
+  ]) {
+    assert.equal(
+      sqlite(
+        `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '${retiredTable}';`
+      ),
+      "0",
+      `${retiredTable} must be removed from the current schema`
     );
   }
   assert.equal(
@@ -700,41 +708,6 @@ try {
   );
   assert.equal(contractPreflight.schema.quickCheck, "ok");
   assert.equal(contractPreflight.schema.integrityCheck, "ok");
-  assert.equal(contractPreflight.counts.unverifiedRawSampleArchiveBatches, 0);
-  assert.equal(
-    contractPreflight.counts.rawSampleArchiveMembersOnUnverifiedBatches,
-    0
-  );
-
-  sqlite(`
-    INSERT INTO raw_sample_archive_batches(
-      id, domain, object_key, content_sha256, object_size_bytes, source_rows,
-      range_start, range_end, status, attempts, created_at, updated_at
-    ) VALUES (
-      'agent:pending-fixture', 'agent',
-      'raw-samples/v1/agent/2026/01/01/pending-fixture.jsonl',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      10, 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
-      'pending', 1, '2026-01-01T00:00:00.000Z',
-      '2026-01-01T00:00:00.000Z'
-    );
-  `);
-  const pendingArchivePreflight = runMigrationPreflight(databasePath);
-  assert.equal(pendingArchivePreflight.readyForCredentialContract, false);
-  assert.equal(
-    pendingArchivePreflight.counts.unverifiedRawSampleArchiveBatches,
-    1
-  );
-  sqlite(`
-    UPDATE raw_sample_archive_batches
-    SET status = 'verified', verified_at = updated_at
-    WHERE id = 'agent:pending-fixture';
-  `);
-  assert.equal(
-    runMigrationPreflight(databasePath).readyForCredentialContract,
-    true
-  );
-
   // A surplus mapping used to be hidden by max(0, source - mapped - anomaly).
   // The final Contract gate must also reject target/map inflation.
   sqlite(`

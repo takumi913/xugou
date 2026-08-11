@@ -15,6 +15,10 @@ export interface AgentGeoInput {
   regionName?: string | null;
 }
 
+export interface AgentReportSourceLocation extends AgentGeoInput {
+  country?: string | null;
+}
+
 export interface NormalizedAgentGeo {
   latitude: number | null;
   longitude: number | null;
@@ -39,6 +43,42 @@ function normalizeGeoText(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, 128) : null;
+}
+
+/** Cloudflare country 规范为两位国家码，统一大写后用于公开地图国家质心。 */
+export function normalizeAgentCountry(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const country = value.trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(country) ? country : null;
+}
+
+/** 从 request.cf 的未知边界值中提取上报来源，避免把平台对象直接传入领域层。 */
+export function agentReportSourceFromCf(
+  value: unknown
+): AgentReportSourceLocation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const cf = value as Record<string, unknown>;
+  const country = normalizeAgentCountry(cf.country);
+  const latitude =
+    typeof cf.latitude === "string" || typeof cf.latitude === "number"
+      ? cf.latitude
+      : null;
+  const longitude =
+    typeof cf.longitude === "string" || typeof cf.longitude === "number"
+      ? cf.longitude
+      : null;
+  const city = typeof cf.city === "string" ? cf.city : null;
+  const regionName = typeof cf.region === "string" ? cf.region : null;
+  if (
+    country === null &&
+    latitude === null &&
+    longitude === null &&
+    city === null &&
+    regionName === null
+  ) {
+    return undefined;
+  }
+  return { country, latitude, longitude, city, regionName };
 }
 
 /**

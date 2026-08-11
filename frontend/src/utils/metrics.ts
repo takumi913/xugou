@@ -20,6 +20,46 @@ export interface DiskUsage {
   percent: number;
 }
 
+export interface NetworkMetric {
+  interface: string;
+  bytes_sent: number;
+  bytes_recv: number;
+  packets_sent: number;
+  packets_recv: number;
+}
+
+/** 兼容管理 DTO 的 JSON 字符串与公开 DTO 已解码数组。 */
+export function parseNetworkMetrics(
+  metric?: Partial<DisplayMetricHistory> | null
+): NetworkMetric[] {
+  if (!metric?.network_metrics) return [];
+  try {
+    const value: unknown = Array.isArray(metric.network_metrics)
+      ? metric.network_metrics
+      : JSON.parse(metric.network_metrics);
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const row = item as Record<string, unknown>;
+      const finite = (field: string) =>
+        typeof row[field] === "number" && Number.isFinite(row[field])
+          ? (row[field] as number)
+          : 0;
+      return [
+        {
+          interface: typeof row.interface === "string" ? row.interface : "",
+          bytes_sent: finite("bytes_sent"),
+          bytes_recv: finite("bytes_recv"),
+          packets_sent: finite("packets_sent"),
+          packets_recv: finite("packets_recv"),
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
 // 内存使用率：优先用后端算好的 memory_usage_rate，缺失时按 used/total 派生
 export function memoryPercent(
   metric?: Partial<DisplayMetricHistory> | null

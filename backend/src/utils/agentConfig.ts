@@ -30,7 +30,7 @@ export const MIN_REPORT_INTERVAL = 10;
 export const MAX_REPORT_INTERVAL = 3600;
 
 export const DEFAULT_COLLECT_INTERVAL = 60;
-export const DEFAULT_REPORT_INTERVAL = 300;
+export const DEFAULT_REPORT_INTERVAL = 60;
 
 // 单次上报最多承载/广播/缓存的样本条数（zod samples 上限、Agent Report Adapter 展开上限、
 // realtime publisher 与 AgentRoom 批量上限的单一事实源）

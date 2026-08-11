@@ -12,7 +12,10 @@ import { scheduleDueMonitorChecks } from "./modules/monitors/queue/MonitorSchedu
 import { operationsV2 } from "./modules/operations";
 import { statusV2 } from "./modules/status";
 import { notificationsV2 } from "./modules/notifications";
-import { ensureInitialStatusPublication } from "./modules/status/persistence/status-events";
+import {
+  ensureInitialStatusPublication,
+  requestStatusRebuild,
+} from "./modules/status/persistence/status-events";
 import {
   createTraceId,
   INTERNAL_TRACE_HEADER,
@@ -158,13 +161,21 @@ export default {
     const startedAt = performance.now();
     const traceId = crypto.randomUUID();
     try {
-      // Cron 只创建带唯一业务键的到期任务；网络检查由本 Worker 的 Queue 入口执行。
+      // 周期检查直接执行；Queue 只承载状态变化、通知和合并后的状态页重建事件。
       const scheduledAt = Number.isFinite(Number(event.scheduledTime))
         ? new Date(Number(event.scheduledTime))
         : new Date();
       await scheduleDueMonitorChecks(env, scheduledAt);
       await ensureInitialStatusPublication(env);
-      // Queue 投递失败后的持久化补偿；只重投 D1 中到期的作业/Outbox。
+      if (scheduledAt.getUTCMinutes() % 5 === 0) {
+        await requestStatusRebuild(env, {
+          reason: "periodic.metrics",
+          aggregateType: "status_page",
+          aggregateId: 1,
+          coalesceSeconds: 300,
+        });
+      }
+      // Queue 投递失败后的持久化补偿只处理低频 Outbox。
       await relayPendingQueueWork(env);
       await jobs.runScheduledTasks(event, env, ctx);
       writeStructuredLog(env, {

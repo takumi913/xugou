@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Box, Grid } from "@/components/ui/layout";
 import { getPublicAgentMetrics, getStatusPageData } from "../../api/status";
@@ -16,6 +16,18 @@ import {
 } from "../../types";
 import type { StatusPageData } from "../../types/status";
 import { useTheme } from "../../providers/ThemeProvider";
+import LiveIndicator from "../../components/LiveIndicator";
+import {
+  createLiveSocket,
+  type LiveAgentStatus,
+} from "../../utils/liveSocket";
+
+interface StatusLiveState {
+  metric: Partial<MetricHistory>;
+  status?: LiveAgentStatus;
+  lastSeenAt?: string | null;
+  ts: number;
+}
 
 const StatusPage = () => {
   const { t } = useTranslation();
@@ -27,17 +39,24 @@ const StatusPage = () => {
     PublicMetricHistory[] | null
   >(null);
   const [cardLoading, setCardLoading] = useState(false);
+  const [liveState, setLiveState] = useState<Record<number, StatusLiveState>>({});
+  const [liveConnected, setLiveConnected] = useState(false);
+  const [liveLagSeconds, setLiveLagSeconds] = useState(0);
   const statusQuery = useQuery({
     queryKey: ["status", "public"],
     queryFn: ({ signal }) => getStatusPageData(signal),
-    // 公开页只读取已脱敏 Publication，不加入任何 Agent 实时房间。
+    // Publication 是断线兜底；公开白名单指标由下方 WebSocket 实时叠加。
     refetchInterval: 60_000,
   });
-  const data: { monitors: PublicMonitor[]; agents: AgentWithLatestMetrics[] } = {
-    monitors: statusQuery.data?.monitors ?? [],
-    agents:
+  const baseAgents = useMemo(
+    () =>
       statusQuery.data?.agents.map((agent: StatusPageData["agents"][number]) => ({
         ...agent,
+        // 公开 API 只给城市级落点；共享地图组件沿用管理端 geo 字段名。
+        geo_latitude: agent.map_latitude,
+        geo_longitude: agent.map_longitude,
+        geo_city: agent.city,
+        geo_region_name: agent.region_name,
         metrics: agent.metrics
           ? {
               ...agent.metrics,
@@ -48,6 +67,61 @@ const StatusPage = () => {
             }
           : null,
       })) ?? [],
+    [statusQuery.data?.agents]
+  );
+  const agentSubscriptionKey = baseAgents.map((agent) => agent.id).join(",");
+
+  useEffect(() => {
+    setLiveConnected(false);
+    if (!agentSubscriptionKey) return;
+    const socket = createLiveSocket({
+      subscribe: agentSubscriptionKey.split(",").map(Number),
+      path: "/api/v2/status/public/ws",
+      onUpdate: ({ agentId, ts, data, status, lastSeenAt, lagSeconds }) => {
+        setLiveState((current) => {
+          const previous = current[agentId];
+          if (previous && previous.ts > ts) return current;
+          return {
+            ...current,
+            [agentId]: {
+              metric: { ...previous?.metric, ...data },
+              status: status ?? previous?.status,
+              lastSeenAt:
+                lastSeenAt !== undefined ? lastSeenAt : previous?.lastSeenAt,
+              ts,
+            },
+          };
+        });
+        setLiveLagSeconds(lagSeconds);
+      },
+      onStatusChange: ({ connected }) => setLiveConnected(connected),
+    });
+    return () => socket.close();
+  }, [agentSubscriptionKey]);
+
+  const liveMetrics = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(liveState).map(([agentId, state]) => [
+          Number(agentId),
+          state.metric,
+        ])
+      ) as Record<number, Partial<MetricHistory>>,
+    [liveState]
+  );
+  const publicAgents = useMemo(
+    () =>
+      baseAgents.map((agent) => {
+        const live = liveState[agent.id];
+        return live
+          ? { ...agent, status: live.status ?? agent.status }
+          : agent;
+      }),
+    [baseAgents, liveState]
+  );
+  const data: { monitors: PublicMonitor[]; agents: AgentWithLatestMetrics[] } = {
+    monitors: statusQuery.data?.monitors ?? [],
+    agents: publicAgents,
   };
   const pageTitle = statusQuery.data?.title || t("statusPage.title");
   const pageDescription =
@@ -135,17 +209,24 @@ const StatusPage = () => {
           </p>
         </div>
 
-        {/* 客户端监控状态：与仪表盘同源的四视图切换（bar 视图沿用信息更全的
-            AgentStatusBar；公开数据无精确坐标，地图自动降级国家质心点） */}
+        {/* 客户端监控状态：与仪表盘同源的四视图切换。公开地图消费经过
+            降精度的城市级落点，原始 IP 与原始坐标都不进入公开 DTO。 */}
         {data.agents.length > 0 && (
           <>
             <AgentViewsSection
               agents={data.agents as never}
+              liveMetrics={liveMetrics}
               title={
                 <>
                   {t("statusPage.agentStatus")}{" "}
                   <span className="group-count">[{data.agents.length}]</span>
                 </>
+              }
+              titleExtra={
+                <LiveIndicator
+                  connected={liveConnected}
+                  lagSeconds={liveLagSeconds}
+                />
               }
               storageKey="status_agent_view"
               onSelectAgent={handleAgentSelect}

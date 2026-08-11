@@ -37,7 +37,7 @@ FREE_MODE = "true"
 AGENT_ENROLLMENT_TTL_MINUTES = "30"
 NOTIFICATION_KEK_VERSION = "1"
 NOTIFICATION_KEK_ROTATION_ENABLED = "false"
-MIN_AGENT_REPORT_INTERVAL_SECONDS = "300"
+MIN_AGENT_REPORT_INTERVAL_SECONDS = "60"
 MIN_MONITOR_INTERVAL_SECONDS = "300"
 MONITOR_CHECK_BATCH_SIZE = "100"
 MONITOR_SCHEDULER_TIME_BUDGET_MS = "5000"
@@ -50,23 +50,9 @@ MONITOR_DAILY_ROLLUP_RETENTION_DAYS = "3650"
 MONITOR_INCIDENT_RETENTION_DAYS = "180"
 SECURITY_AUDIT_RETENTION_DAYS = "180"
 STATUS_PUBLICATION_RETENTION_DAYS = "7"
-QUEUE_FAILURE_RETENTION_DAYS = "30"
 PROCESSED_EVENT_RETENTION_DAYS = "30"
 NOTIFICATION_EVENT_RETENTION_DAYS = "90"
-RAW_SAMPLE_ARCHIVE_ENABLED = "true"
-RAW_SAMPLE_ARCHIVE_DELETE_ENABLED = "false"
-RAW_SAMPLE_ARCHIVE_MIN_AGE_DAYS = "1"
-RAW_SAMPLE_ARCHIVE_BATCH_SIZE = "50"
-AGENT_RAW_SAMPLE_RETENTION_DAYS = "30"
-MONITOR_RAW_SAMPLE_RETENTION_DAYS = "90"
-# 发布后对账阈值与兼容路由静默窗口；都在同一 Worker 内查询 D1 账本。
-RELEASE_MAX_JOBS_BACKLOG = "100"
-RELEASE_MAX_JOB_LAG_SECONDS = "300"
-RELEASE_MAX_SCHEDULER_LAG_SECONDS = "300"
-RELEASE_MAX_OUTBOX_BACKLOG = "100"
-RELEASE_MAX_OUTBOX_LAG_SECONDS = "300"
-RELEASE_MAX_NOTIFICATION_BACKLOG = "100"
-RELEASE_MAX_PUBLICATION_AGE_SECONDS = "300"
+# 兼容路由静默窗口。
 MANAGEMENT_V1_QUIET_DAYS = "7"
 AGENT_V1_QUIET_DAYS = "60"
 API_COMPATIBILITY_HIT_RETENTION_DAYS = "400"
@@ -83,7 +69,7 @@ LEGACY_NOTIFICATION_HISTORY_BACKFILL_BATCH_SIZE = "100"
 # 最新探针版本号（如 "1.2.0"）。留空则不触发探针自升级；
 # 填写后，开启了「自动升级」的 agent 上报版本低于此值时，
 # 服务端会在配置下发响应中附加 update=1 触发探针自升级。
-LATEST_AGENT_VERSION = "v0.1.1"
+LATEST_AGENT_VERSION = "v1.2.4"
 
 [[d1_databases]]
 binding = "DB"
@@ -92,12 +78,7 @@ database_id = "${D1_DATABASE_ID}" # 使用占位符
 migrations_table = "migrations"
 migrations_dir = "backend/drizzle"
 
-# 原始 Agent/Monitor 样本的校验归档；仍由同一个 Worker 通过 Binding 直接写入。
-[[r2_buckets]]
-binding = "RAW_SAMPLE_ARCHIVE"
-bucket_name = "xugou-raw-sample-archive"
-
-# 同一 Worker 同时生产和消费业务作业；Queue 只承担异步调度，不增加部署单元。
+# Queue 只承载状态变化、通知和合并后的状态页重建等低频 Outbox。
 [[queues.producers]]
 binding = "XUGOU_JOBS"
 queue = "xugou-jobs"
@@ -116,7 +97,8 @@ max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 0
 
-# 当前实时链路：同一 Worker Bundle 内按 Agent ID 分片的 WebSocket 房间。
+# 当前实时链路：同一 Worker Bundle 内按 Agent ID 稳定哈希的 WebSocket 分片房间；
+# Dashboard 每个分片复用一条连接，实时推送不经过 Queue。
 [[durable_objects.bindings]]
 name = "AGENT_ROOM"
 class_name = "AgentRoom"

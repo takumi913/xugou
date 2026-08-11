@@ -18,6 +18,7 @@ function isPublicStatusRoute(path: string) {
     path === "/api/status/public/data" ||
     /^\/api\/status\/public\/agents\/\d+\/metrics$/.test(path) ||
     path === "/api/v2/status/public" ||
+    path === "/api/v2/status/public/ws" ||
     /^\/api\/v2\/status\/public\/agents\/\d+\/metrics$/.test(path)
   );
 }

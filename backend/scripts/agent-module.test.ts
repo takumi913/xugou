@@ -317,7 +317,7 @@ assert.equal(
 
 assert.equal(
   isXugouQueueMessage({ version: 1, kind: "job", job_id: "job-1" }),
-  true
+  false
 );
 assert.equal(
   isXugouQueueMessage({ version: 1, kind: "outbox", event_id: "event-1" }),

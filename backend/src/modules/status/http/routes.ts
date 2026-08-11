@@ -9,6 +9,11 @@ import { ApplicationProblem } from "../../../shared/errors/ApplicationProblem";
 import { getEnvNumber } from "../../../utils/env";
 import { createStatusUseCases } from "../composition";
 import { publicAgentIdSchema, statusConfigV2Schema } from "./schemas";
+import { getAllowedOrigin } from "../../../middlewares/cors";
+import {
+  parseAgentRoomSubscriptions,
+  realtimeRoomName,
+} from "../../agents/realtime/RealtimeSharding";
 
 const statusV2 = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>();
 type AppContext = Parameters<typeof problemResponse>[0];
@@ -62,6 +67,61 @@ statusV2.put("/config", async (c) => {
     createStatusUseCases(c.env).saveConfig(parsed.data)
   );
   return result instanceof Response ? result : c.json({ data: result });
+});
+
+/**
+ * 匿名状态页实时入口。订阅范围必须完全属于当前状态页且节点公开可见；
+ * AgentRoom 再按 public scope 投影样本，管理字段不会进入这条连接。
+ */
+statusV2.get("/public/ws", async (c) => {
+  if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+    return c.json(
+      { success: false, message: "Expected WebSocket upgrade request" },
+      426
+    );
+  }
+  if (!getAllowedOrigin(c.req.header("Origin") ?? null, c.req.url, c.env)) {
+    return c.json({ success: false, message: "WebSocket origin denied" }, 403);
+  }
+
+  const agentIds = parseAgentRoomSubscriptions(c.req.query("subscribe"));
+  if (!agentIds) {
+    return c.json({ success: false, message: "Invalid agent subscriptions" }, 400);
+  }
+
+  const selected = await c.env.DB.prepare(
+    `SELECT component.component_id AS agent_id
+     FROM status_pages page
+     JOIN status_components component ON component.page_id = page.id
+     JOIN agent_nodes node ON node.id = component.component_id
+     WHERE page.singleton_key = 1 AND component.component_type = 'agent'
+       AND component.component_id IN (
+         SELECT CAST(value AS INTEGER) FROM json_each(?)
+       )
+       AND node.deleted_at_ms IS NULL AND node.is_hidden <> 1`
+  )
+    .bind(JSON.stringify(agentIds))
+    .all<{ agent_id: number }>();
+  const selectedIds = new Set(selected.results.map((row) => Number(row.agent_id)));
+  if (agentIds.some((agentId) => !selectedIds.has(agentId))) {
+    return c.json({ success: false, message: "Agent is not public" }, 404);
+  }
+
+  const namespace = c.env.AGENT_ROOM;
+  if (!namespace) {
+    return c.json({ success: false, message: "WebSocket not enabled" }, 503);
+  }
+
+  try {
+    const target = new URL("http://internal/ws");
+    target.searchParams.set("agentIds", agentIds.join(","));
+    target.searchParams.set("scope", "public");
+    return await namespace
+      .getByName(realtimeRoomName(agentIds[0]))
+      .fetch(new Request(target, { method: "GET", headers: c.req.raw.headers }));
+  } catch {
+    return c.json({ success: false, message: "WebSocket error" }, 500);
+  }
 });
 
 statusV2.get("/public", async (c) => {

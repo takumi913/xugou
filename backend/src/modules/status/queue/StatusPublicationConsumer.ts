@@ -12,7 +12,6 @@ export class StatusPublicationConsumer implements OutboxConsumer {
   readonly consumerName = "status.publication.v1";
   readonly eventTypes = [
     "monitor.checked",
-    "agent.report.processed",
     "agent.status.changed",
     "status.rebuild.requested",
   ] as const;

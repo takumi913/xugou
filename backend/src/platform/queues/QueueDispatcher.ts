@@ -25,7 +25,7 @@ export async function dispatchQueueBatch(
   const eventConsumer = new OutboxDispatcher(env);
 
   for (const message of batch.messages) {
-    if (!isXugouQueueMessage(message.body) || (message.body as XugouQueueMessage).kind === "job") {
+    if (!isXugouQueueMessage(message.body)) {
       writeStructuredLog(env, {
         service: "queue",
         operation: "queue_message",
@@ -39,7 +39,7 @@ export async function dispatchQueueBatch(
     }
 
     try {
-      const body = message.body as Extract<XugouQueueMessage, { kind: "outbox" }>;
+      const body = message.body as XugouQueueMessage;
       let logResult: "success" | "deferred" = "success";
       
       await eventConsumer.process(body.event_id);
@@ -65,7 +65,7 @@ export async function dispatchQueueBatch(
         try {
           await env.DB.prepare(
             `UPDATE domain_outbox SET attempts = attempts + 1, last_error = ?, updated_at = ?
-             WHERE job_id = ?`
+             WHERE event_id = ?`
           )
             .bind(detail.slice(0, 2048), now, body.event_id)
             .run();

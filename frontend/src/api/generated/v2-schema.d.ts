@@ -1431,6 +1431,10 @@ export interface components {
             os?: string | null;
             version?: string | null;
             region?: string | null;
+            city?: string | null;
+            region_name?: string | null;
+            map_latitude?: number | null;
+            map_longitude?: number | null;
             created_at: string;
             updated_at: string;
             traffic_limit_gb?: number | null;

@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import {
   getDashboardDataWithSignal,
   type DashboardAgent,
@@ -7,26 +8,158 @@ import {
 } from "../api/dashboard";
 import { useTranslation } from "react-i18next";
 import AgentViewsSection from "../components/AgentViewsSection";
+import LiveIndicator from "../components/LiveIndicator";
 import PageLoading from "../components/PageLoading";
 import { formatBytes, formatSpeed } from "../utils/format";
+import { createLiveSocket, type LiveAgentStatus } from "../utils/liveSocket";
+import { mergeLatestMetric, monthlyTraffic } from "../utils/metrics";
+import type { MetricHistory } from "../types/agents";
 import {
   monitorStatusColors,
   statusAccentColor,
 } from "../utils/statusColors";
+
+interface DashboardLiveState {
+  metric: Partial<MetricHistory>;
+  status?: LiveAgentStatus;
+  lastSeenAt?: string | null;
+  ts: number;
+}
+
+const EMPTY_DASHBOARD_AGENTS: DashboardAgent[] = [];
 
 const Dashboard = () => {
   const { t } = useTranslation();
   const dashboardQuery = useQuery({
     queryKey: ["dashboard"],
     queryFn: ({ signal }) => getDashboardDataWithSignal(signal),
-    // 列表页读取 D1 查询投影；避免一个页面创建全局 WebSocket 热点。
+    // D1 是查询事实与断线兜底；实时样本由下方分片 WebSocket 叠加。
     refetchInterval: 60_000,
   });
   const monitors: DashboardMonitor[] = dashboardQuery.data?.monitors ?? [];
-  const agents: DashboardAgent[] = dashboardQuery.data?.agents ?? [];
-  const summary = dashboardQuery.data?.summary;
+  const baseAgents: DashboardAgent[] =
+    dashboardQuery.data?.agents ?? EMPTY_DASHBOARD_AGENTS;
+  const baseSummary = dashboardQuery.data?.summary;
   const monitorsHasMore = dashboardQuery.data?.monitors_has_more ?? false;
   const agentsHasMore = dashboardQuery.data?.agents_has_more ?? false;
+  const [liveState, setLiveState] = useState<Record<number, DashboardLiveState>>(
+    {}
+  );
+  const [liveConnected, setLiveConnected] = useState(false);
+  const [liveLagSeconds, setLiveLagSeconds] = useState(0);
+  const agentSubscriptionKey = baseAgents.map((agent) => agent.id).join(",");
+
+  useEffect(() => {
+    setLiveConnected(false);
+    if (!agentSubscriptionKey) return;
+    const socket = createLiveSocket({
+      subscribe: agentSubscriptionKey.split(",").map(Number),
+      onUpdate: ({
+        agentId,
+        ts,
+        data,
+        status,
+        lastSeenAt,
+        lagSeconds,
+      }) => {
+        setLiveState((current) => {
+          const previous = current[agentId];
+          if (previous && previous.ts > ts) return current;
+          return {
+            ...current,
+            [agentId]: {
+              metric: { ...previous?.metric, ...data },
+              status: status ?? previous?.status,
+              lastSeenAt:
+                lastSeenAt !== undefined ? lastSeenAt : previous?.lastSeenAt,
+              ts,
+            },
+          };
+        });
+        setLiveLagSeconds(lagSeconds);
+      },
+      onStatusChange: ({ connected }) => setLiveConnected(connected),
+    });
+    return () => socket.close();
+  }, [agentSubscriptionKey]);
+
+  const liveMetrics = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(liveState).map(([agentId, state]) => [
+          Number(agentId),
+          state.metric,
+        ])
+      ) as Record<number, Partial<MetricHistory>>,
+    [liveState]
+  );
+
+  const agents = useMemo(
+    () =>
+      baseAgents.map((agent) => {
+        const live = liveState[agent.id];
+        return live
+          ? {
+              ...agent,
+              status: live.status ?? agent.status,
+              last_seen_at:
+                live.lastSeenAt !== undefined
+                  ? live.lastSeenAt
+                  : agent.last_seen_at,
+            }
+          : agent;
+      }),
+    [baseAgents, liveState]
+  );
+
+  const summary = useMemo(() => {
+    if (!baseSummary) return undefined;
+    let onlineDelta = 0;
+    for (let index = 0; index < baseAgents.length; index += 1) {
+      const wasOnline = baseAgents[index].status === "active";
+      const isOnline = agents[index]?.status === "active";
+      if (wasOnline !== isOnline) onlineDelta += isOnline ? 1 : -1;
+    }
+    const next = {
+      ...baseSummary,
+      agents_online: Math.max(0, baseSummary.agents_online + onlineDelta),
+      agents_offline: Math.max(0, baseSummary.agents_offline - onlineDelta),
+    };
+
+    // 投影未截断时，用各 Agent 最新样本重算总流量与网速；截断时保留 D1 全局值。
+    if (!agentsHasMore) {
+      let totalTraffic = 0;
+      let rxSpeed = 0;
+      let txSpeed = 0;
+      let hasTraffic = false;
+      let hasRxSpeed = false;
+      let hasTxSpeed = false;
+      agents.forEach((agent) => {
+        if (agent.status !== "active") return;
+        const live = liveMetrics[agent.id];
+        const metric = live
+          ? mergeLatestMetric(agent.metrics ?? undefined, live)
+          : agent.metrics;
+        const traffic = monthlyTraffic(metric, agent.traffic_calc_type);
+        if (traffic !== null) {
+          totalTraffic += traffic;
+          hasTraffic = true;
+        }
+        if (typeof metric?.network_rx_speed === "number") {
+          rxSpeed += metric.network_rx_speed;
+          hasRxSpeed = true;
+        }
+        if (typeof metric?.network_tx_speed === "number") {
+          txSpeed += metric.network_tx_speed;
+          hasTxSpeed = true;
+        }
+      });
+      next.total_traffic_bytes = hasTraffic ? totalTraffic : null;
+      next.network_rx_speed_bps = hasRxSpeed ? rxSpeed : null;
+      next.network_tx_speed_bps = hasTxSpeed ? txSpeed : null;
+    }
+    return next;
+  }, [agents, agentsHasMore, baseAgents, baseSummary, liveMetrics]);
 
   // 加载中显示
   if (dashboardQuery.isPending) {
@@ -183,6 +316,7 @@ const Dashboard = () => {
       {/* Agent 分组：视图切换/地区筛选/分组渲染统一在共享组件内 */}
       <AgentViewsSection
         agents={agents}
+        liveMetrics={liveMetrics}
         title={
           <>
             {t("navbar.agentMonitors")}{" "}
@@ -190,6 +324,14 @@ const Dashboard = () => {
               [{agents.length}/{summary?.agents_total ?? agents.length}]
             </span>
           </>
+        }
+        titleExtra={
+          baseAgents.length > 0 ? (
+            <LiveIndicator
+              connected={liveConnected}
+              lagSeconds={liveLagSeconds}
+            />
+          ) : undefined
         }
         storageKey="dashboard_agent_view"
       />

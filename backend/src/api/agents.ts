@@ -58,6 +58,7 @@ import { adaptLegacyAgentReport } from "../modules/agents/http/LegacyAgentReport
 import { ApplicationProblem } from "../shared/errors/ApplicationProblem";
 import { requestStatusRebuild } from "../modules/status/persistence/status-events";
 import { streamJsonArrayResponse } from "../platform/http/stream-json";
+import { agentReportSourceFromCf } from "../utils/geo";
 
 const agents = new Hono<{
   Bindings: Bindings;
@@ -455,7 +456,11 @@ agents.post("/status", async (c) => {
       parsed.data,
       c.req.header(AGENT_VERSION_HEADER)
     );
-    const result = await createAgentUseCases(c.env).acceptReport(token, report);
+    const result = await createAgentUseCases(c.env).acceptReport(
+      token,
+      report,
+      agentReportSourceFromCf(c.req.raw.cf)
+    );
     const agentIntervals = {
       collect_interval: result.config.collect_interval_seconds,
       report_interval: result.config.report_interval_seconds,

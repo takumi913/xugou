@@ -2,7 +2,7 @@ import type { Bindings } from "../models/db";
 import { writeStructuredLog } from "../platform/observability/StructuredLogger";
 import { QueueJobPublisher } from "../platform/queues/QueuePublisher";
 import { getEnvNumber } from "../utils/env";
-
+import { publishAgentStatus } from "../modules/agents/realtime/MetricsBroadcastPublisher";
 
 const DEFAULT_AGENT_OFFLINE_BATCH_SIZE = 50;
 
@@ -76,7 +76,22 @@ export async function checkAgentsStatus(env: Bindings) {
          WHERE agent_id = ? AND status = 'active' AND next_offline_at_ms <= ?`
       ).bind(nowMs, nowMs, agent.id, nowMs),
     ];
-    await env.DB.batch(statements);
+    const batchResult = await env.DB.batch(statements);
+    if (batchResult[1]?.meta.changes === 1) {
+      try {
+        await publishAgentStatus(env, agent.id, "inactive", now, lastSeenAt);
+      } catch (error) {
+        writeStructuredLog(env, {
+          service: "realtime",
+          operation: "publish_agent_offline_status",
+          result: "deferred",
+          entityType: "agent",
+          entityId: agent.id,
+          errorCode: "AGENT_OFFLINE_BROADCAST_DEFERRED",
+          error,
+        });
+      }
+    }
     const pending = await env.DB.prepare(
       `SELECT event_id FROM domain_outbox
        WHERE event_id = ? AND status = 'pending' LIMIT 1`

@@ -140,7 +140,7 @@ export async function adaptLegacyAgentReport(
 
   const reportInterval = positiveSeconds(
     primary.report_interval_seconds,
-    positiveSeconds(primary.keepalive, 300)
+    positiveSeconds(primary.keepalive, 60)
   );
   const fallbackTime = new Date(
     Math.floor(now.getTime() / (reportInterval * 1000)) * reportInterval * 1000

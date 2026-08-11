@@ -43,6 +43,7 @@ import {
 } from "../../../platform/security/SecurityStore";
 import { requestStatusRebuild } from "../../status/persistence/status-events";
 import { streamJsonDataArrayResponse } from "../../../platform/http/stream-json";
+import { agentReportSourceFromCf } from "../../../utils/geo";
 
 const agentsV2 = new Hono<{
   Bindings: Bindings;
@@ -553,7 +554,11 @@ agentsV2.post("/reports", async (c) => {
   const parsed = agentV4ReportSchema.safeParse(body.value);
   if (!parsed.success) return validationProblem(c, zodErrors(parsed.error.issues));
   const result = await handle(c, () =>
-    createAgentUseCases(c.env).acceptReport(token, parsed.data)
+    createAgentUseCases(c.env).acceptReport(
+      token,
+      parsed.data,
+      agentReportSourceFromCf(c.req.raw.cf)
+    )
   );
   return result instanceof Response ? result : c.json(result, 202);
 });

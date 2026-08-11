@@ -19,7 +19,7 @@
     "test:sessions": "pnpm --dir backend run test:sessions",
     "test:security": "pnpm --dir backend run test:security",
     "test:workers": "pnpm --dir backend run test:workers",
-    "test:frontend": "pnpm --dir frontend run test:forms && pnpm --dir frontend run test:i18n && pnpm --dir frontend run test:version",
+    "test:frontend": "pnpm --dir frontend run test:forms && pnpm --dir frontend run test:i18n && pnpm --dir frontend run test:version && pnpm --dir frontend run test:metrics",
     "test:frontend:e2e": "pnpm --dir frontend run test:e2e && pnpm --dir frontend run test:e2e:live",
     "test:dependencies": "pnpm audit --prod && pnpm peers check",
     "test:agent:quality": "cd agent && go vet ./... && test -z \"$(gofmt -l .)\" && go run golang.org/x/vuln/cmd/govulncheck@latest ./...",

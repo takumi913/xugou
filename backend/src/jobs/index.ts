@@ -19,20 +19,12 @@ import {
 import type { Bindings } from "../models/db";
 import { writeStructuredLog } from "../platform/observability/StructuredLogger";
 
-import {
-  archiveRawSamples,
-  cleanupVerifiedRawSamples,
-  shouldRunRawSampleArchive,
-} from "../platform/archive/RawSampleArchive";
-
-
 const DEFAULT_AGENT_ROLLUP_RETENTION_DAYS = 30;
 const DEFAULT_MONITOR_ROLLUP_RETENTION_DAYS = 90;
 const DEFAULT_MONITOR_DAILY_ROLLUP_RETENTION_DAYS = 3650;
 const DEFAULT_MONITOR_INCIDENT_RETENTION_DAYS = 180;
 const DEFAULT_SECURITY_AUDIT_RETENTION_DAYS = 180;
 const DEFAULT_STATUS_PUBLICATION_RETENTION_DAYS = 7;
-const DEFAULT_QUEUE_FAILURE_RETENTION_DAYS = 30;
 const DEFAULT_PROCESSED_EVENT_RETENTION_DAYS = 30;
 const DEFAULT_NOTIFICATION_EVENT_RETENTION_DAYS = 90;
 const DEFAULT_API_COMPATIBILITY_HIT_RETENTION_DAYS = 400;
@@ -80,35 +72,6 @@ export const runScheduledTasks = async (
         errorCode: "NOTIFICATION_KEK_ROTATE_FAILED",
         error,
       });
-    }
-
-    if (shouldRunRawSampleArchive(now)) {
-      try {
-        const archiveResults = await archiveRawSamples(env, now);
-        const archivedRows = archiveResults.reduce(
-          (total, result) => total + result.archivedRows,
-          0
-        );
-        if (archivedRows > 0) {
-          writeStructuredLog(env, {
-            service: "archive",
-            operation: "raw_sample_archive",
-            result: "success",
-            fields: {
-              archived_rows: archivedRows,
-              batches: archiveResults.filter((result) => result.batchId).length,
-            },
-          });
-        }
-      } catch (error) {
-        writeStructuredLog(env, {
-          service: "archive",
-          operation: "raw_sample_archive",
-          result: "failure",
-          errorCode: "RAW_SAMPLE_ARCHIVE_FAILED",
-          error,
-        });
-      }
     }
 
     // 执行监控检查任务
@@ -194,12 +157,6 @@ export async function cleanupOldRecords(env: Bindings) {
       max: 365,
     })
   );
-  const queueFailureCutoff = getCutoffIso(
-    getEnvNumber(env, "QUEUE_FAILURE_RETENTION_DAYS", DEFAULT_QUEUE_FAILURE_RETENTION_DAYS, {
-      min: 1,
-      max: 3650,
-    })
-  );
   const processedEventCutoff = getCutoffIso(
     getEnvNumber(env, "PROCESSED_EVENT_RETENTION_DAYS", DEFAULT_PROCESSED_EVENT_RETENTION_DAYS, {
       min: 1,
@@ -261,10 +218,7 @@ export async function cleanupOldRecords(env: Bindings) {
       compatibilityHitCutoff
     ),
   ]);
-  const rawSamples = await cleanupVerifiedRawSamples(env);
-
   return {
     success: true,
-    rawSamples,
   };
 }

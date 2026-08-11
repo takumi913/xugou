@@ -1,6 +1,5 @@
 import type { Bindings } from "../../../models/db";
 import { writeStructuredLog } from "../../../platform/observability/StructuredLogger";
-import { QueueJobPublisher } from "../../../platform/queues/QueuePublisher";
 import {
   monitorCheckBucket,
   prepareMonitorCheckRollupRebuild,
@@ -27,16 +26,9 @@ function message(error: unknown) {
 }
 
 export class MonitorCheckSyncProcessor {
-  private readonly publisher: QueueJobPublisher;
-
   constructor(
-    private readonly env: Pick<
-      Bindings,
-      "DB" | "XUGOU_JOBS"
-    >
-  ) {
-    this.publisher = new QueueJobPublisher(env.XUGOU_JOBS);
-  }
+    private readonly env: Pick<Bindings, "DB">
+  ) {}
 
   async process(monitorId: number, scheduledForMs: number): Promise<MonitorJobResult> {
     const now = new Date();
@@ -169,56 +161,33 @@ export class MonitorCheckSyncProcessor {
             ).bind(monitor.id, monitor.status, status, checkedIso, error, checkedIso, checkedIso)
           );
         }
+        statements.push(
+          this.env.DB.prepare(
+            `INSERT OR IGNORE INTO domain_outbox
+             (event_id, event_type, aggregate_type, aggregate_id, payload_json,
+              status, attempts, available_at, created_at, updated_at)
+             VALUES (?, 'monitor.checked', 'monitor', ?, ?, 'pending', 0, ?, ?, ?)`
+          ).bind(
+            eventId,
+            String(monitor.id),
+            JSON.stringify({
+              job_id: jobId,
+              monitor_id: monitor.id,
+              previous_status: monitor.status,
+              status,
+              response_time_ms: responseTime,
+              status_code: statusCode,
+              error,
+              changed,
+            }),
+            checkedIso,
+            checkedIso,
+            checkedIso
+          )
+        );
       }
-      
-      statements.push(
-        this.env.DB.prepare(
-          `INSERT OR IGNORE INTO domain_outbox
-           (event_id, event_type, aggregate_type, aggregate_id, payload_json,
-            status, attempts, available_at, created_at, updated_at)
-           VALUES (?, 'monitor.checked', 'monitor', ?, ?, 'pending', 0, ?, ?, ?)`
-        ).bind(
-          eventId,
-          String(monitor.id),
-          JSON.stringify({
-            job_id: jobId,
-            monitor_id: monitor.id,
-            previous_status: monitor.status,
-            status,
-            response_time_ms: responseTime,
-            status_code: statusCode,
-            error,
-            changed,
-          }),
-          checkedIso,
-          checkedIso,
-          checkedIso
-        )
-      );
       
       await this.env.DB.batch(statements);
-      
-      try {
-        await this.publisher.publishOutbox(eventId);
-        await this.env.DB.prepare(
-          `UPDATE domain_outbox SET status = 'published', attempts = attempts + 1,
-           published_at = ?, updated_at = ? WHERE event_id = ? AND status = 'pending'`
-        )
-          .bind(checkedIso, checkedIso, eventId)
-          .run();
-      } catch (cause) {
-        writeStructuredLog(this.env, {
-          service: "queue",
-          operation: "publish_monitor_result_outbox",
-          result: "deferred",
-          eventId,
-          jobId,
-          entityType: "monitor",
-          entityId: monitor.id,
-          errorCode: "MONITOR_RESULT_PUBLISH_DEFERRED",
-          error: cause,
-        });
-      }
       
       return { outcome: "completed" };
     } catch (error) {

@@ -8,27 +8,6 @@ export class QueueJobPublisher {
     private readonly queue: Cloudflare.Env["XUGOU_JOBS"]
   ) {}
 
-  async publishJob(jobId: string) {
-    await this.queue.send({
-      version: QUEUE_MESSAGE_VERSION,
-      kind: "job",
-      job_id: jobId,
-    });
-  }
-
-  async publishJobs(jobIds: string[]) {
-    if (jobIds.length === 0) return;
-    await this.queue.sendBatch(
-      jobIds.map((jobId) => ({
-        body: {
-          version: QUEUE_MESSAGE_VERSION,
-          kind: "job" as const,
-          job_id: jobId,
-        },
-      }))
-    );
-  }
-
   async publishOutbox(eventId: string) {
     await this.queue.send({
       version: QUEUE_MESSAGE_VERSION,

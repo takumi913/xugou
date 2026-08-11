@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { AgentReportSyncProcessor } from "../src/modules/agents/queue/AgentReportSyncProcessor";
+import { D1AgentReportIngestor } from "../src/modules/agents/persistence/D1AgentReportIngestor";
 import { MonitorCheckSyncProcessor } from "../src/modules/monitors/queue/MonitorCheckSyncProcessor";
 import { NotificationOutboxConsumer } from "../src/modules/notifications/queue/NotificationOutboxConsumer";
 import { dispatchQueueBatch } from "../src/platform/queues/QueueDispatcher";
@@ -202,13 +202,6 @@ sqlite.exec(`
     memory_p95 REAL, disk_max REAL, load_avg REAL, network_delta_json TEXT,
     threshold_events_json TEXT, created_at TEXT NOT NULL,
     UNIQUE(agent_id, bucket_start, bucket_size_seconds)
-  );
-  CREATE TABLE async_jobs (
-    id TEXT PRIMARY KEY, kind TEXT NOT NULL, dedup_key TEXT NOT NULL,
-    aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, payload_json TEXT NOT NULL,
-    status TEXT NOT NULL, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL,
-    available_at TEXT NOT NULL, lease_token TEXT, lease_expires_at TEXT, last_error TEXT,
-    completed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE TABLE agent_latest_metrics (
     agent_id INTEGER PRIMARY KEY, metrics_json TEXT NOT NULL, collected_at TEXT,
@@ -427,56 +420,38 @@ sqlite.prepare(`INSERT INTO legacy_id_map
    created_at, updated_at)
   VALUES ('agents', '1', 'agent_nodes', '1', 'fixture', ?, ?)`)
   .run(now, now);
+sqlite.prepare(`INSERT INTO notification_rules
+  (id, target_type, target_id, enabled, on_down, on_recovery, on_offline,
+   on_cpu_threshold, cpu_threshold, on_memory_threshold, memory_threshold,
+   on_disk_threshold, disk_threshold, cooldown_minutes, created_at_ms, updated_at_ms)
+  VALUES(2, 'agent', 1, 1, 1, 1, 1, 1, 20, 1, 40, 1, 50, 30, ?, ?)`).run(
+    Date.parse(now),
+    Date.parse(now)
+  );
 sqlite
   .prepare(`INSERT INTO agent_reports
     (report_id, agent_id, payload_digest, payload_json, sample_count, status,
      received_at, created_at, updated_at)
     VALUES (?, 1, 'digest', ?, 2, 'pending', ?, ?, ?)`)
   .run(reportId, JSON.stringify(report), now, now, now);
-sqlite
-  .prepare(`INSERT INTO async_jobs
-    (id, kind, dedup_key, aggregate_type, aggregate_id, payload_json, status,
-     attempts, max_attempts, available_at, created_at, updated_at)
-    VALUES (?, 'agent.report.process', ?, 'agent_report', ?, '{}', 'pending', 0, 8, ?, ?, ?)`)
-  .run(`agent-report:${reportId}`, `agent-report:${reportId}`, reportId, now, now, now);
-
-const queued: unknown[] = [];
 const env = {
   DB: new D1Fixture(sqlite),
-  XUGOU_JOBS: {
-    async send(body: unknown) {
-      queued.push(body);
-      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
-    },
-  },
 };
-const processor = new AgentReportSyncProcessor(env as never);
-  assert.deepEqual(await processor.process(1, report as never), {
+const processor = new D1AgentReportIngestor(env as never);
+  assert.deepEqual(await processor.process(1, report as never, {
+    payloadDigest: "digest",
+    receivedAt: now,
+  }), {
     outcome: "completed",
   });
   assert.equal(
     sqlite.prepare("SELECT count(*) AS count FROM agent_report_samples").get()?.count,
     2
   );
-  assert.deepEqual(
-    {
-      ...sqlite
-        .prepare(
-          `SELECT sample_count, cpu_avg, cpu_p95, cpu_max,
-                  memory_avg, memory_p95, memory_max
-           FROM agent_metric_rollups WHERE agent_id = 1`
-        )
-        .get(),
-    },
-    {
-      sample_count: 2,
-      cpu_avg: 22,
-      cpu_p95: 22.5,
-      cpu_max: 22.5,
-      memory_avg: 47.5,
-      memory_p95: 48,
-      memory_max: 48,
-    }
+  assert.equal(
+    sqlite.prepare("SELECT count(*) AS count FROM agent_metric_rollups").get()?.count,
+    0,
+    "high-frequency ingestion must not rebuild rollups inline"
   );
 
 
@@ -488,10 +463,27 @@ const processor = new AgentReportSyncProcessor(env as never);
     sqlite.prepare("SELECT status FROM agent_runtime WHERE agent_id = 1").get()?.status,
     "active"
   );
+  assert.deepEqual(
+    {
+      ...sqlite
+        .prepare("SELECT status, payload_json FROM agent_reports WHERE report_id = ?")
+        .get(reportId),
+    },
+    { status: "processed", payload_json: "{}" }
+  );
 
 
-  assert.deepEqual(await processor.process(1, report as never), {
-    outcome: "completed",
+  assert.deepEqual(await processor.process(1, report as never, {
+    payloadDigest: "digest",
+    receivedAt: now,
+  }), {
+    outcome: "duplicate",
+  });
+  assert.deepEqual(await processor.process(1, report as never, {
+    payloadDigest: "different-digest",
+    receivedAt: now,
+  }), {
+    outcome: "conflict",
   });
 const monitorJobId = "monitor-check:1:1785542400000";
 sqlite
@@ -526,11 +518,6 @@ sqlite.prepare(`INSERT INTO notification_rules
 sqlite.prepare(`INSERT INTO notification_rule_endpoints
   (rule_id, channel_id, sort_order, created_at_ms, updated_at_ms)
   VALUES(1, 1, 0, ?, ?)`).run(Date.parse(now), Date.parse(now));
-sqlite.prepare(`INSERT INTO notification_rules
-  (id, target_type, target_id, enabled, on_down, on_recovery, on_offline,
-   on_cpu_threshold, cpu_threshold, on_memory_threshold, memory_threshold,
-   on_disk_threshold, disk_threshold, cooldown_minutes, created_at_ms, updated_at_ms)
-  VALUES(2, 'agent', 1, 1, 1, 1, 1, 1, 20, 1, 40, 1, 50, 30, ?, ?)`).run(Date.parse(now), Date.parse(now));
 sqlite.prepare(`INSERT INTO notification_rule_endpoints
   (rule_id, channel_id, sort_order, created_at_ms, updated_at_ms)
   VALUES(2, 1, 0, ?, ?)`).run(Date.parse(now), Date.parse(now));

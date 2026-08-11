@@ -201,11 +201,10 @@ jobs:
           # 先更新全部二进制，最后原子切换内嵌签名的单对象清单。
           for file in artifacts/xugou-agent-*; do publish_mutable "$file" "latest/$(basename "$file")"; done
           publish_mutable release-metadata/manifest.json latest/manifest.json
-          # 已发布 Agent 的默认地址仍是 channels/stable.json；复用同一清单维持升级兼容。
-          publish_mutable release-metadata/manifest.json channels/stable.json
-          # latest 切换成功后清理历史版本目录和旧的分离签名/开发通道对象。
+          # latest 切换成功后清理所有历史版本、旧通道和分离签名对象。
           aws s3 rm "s3://${R2_BUCKET}/releases/" --recursive --endpoint-url "$endpoint" --no-progress
+          aws s3 rm "s3://${R2_BUCKET}/channels/" --recursive --endpoint-url "$endpoint" --no-progress
           aws s3 rm "s3://${R2_BUCKET}/latest/manifest.json.sig" --endpoint-url "$endpoint" --no-progress || true
-          aws s3 rm "s3://${R2_BUCKET}/channels/dev.json" --endpoint-url "$endpoint" --no-progress || true
-          remaining="$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix 'releases/' --max-keys 1 --endpoint-url "$endpoint" --query 'KeyCount' --output text)"
-          [[ "$remaining" == "0" ]]
+          releases_remaining="$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix 'releases/' --max-keys 1 --endpoint-url "$endpoint" --query 'KeyCount' --output text)"
+          channels_remaining="$(aws s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix 'channels/' --max-keys 1 --endpoint-url "$endpoint" --query 'KeyCount' --output text)"
+          [[ "$releases_remaining" == "0" && "$channels_remaining" == "0" ]]

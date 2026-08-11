@@ -3,8 +3,12 @@ import { useTranslation } from "react-i18next";
 import type { MetricHistory } from "../types";
 import { Badge } from "./ui/badge";
 import { ProgressBar } from "./StatBar";
-import { formatBytes } from "../utils/format";
-import { memoryPercent, parseDiskUsage } from "../utils/metrics";
+import { formatBytes, formatSpeed } from "../utils/format";
+import {
+  memoryPercent,
+  parseDiskUsage,
+  parseNetworkMetrics,
+} from "../utils/metrics";
 import { regionFlagEmoji, regionLabel } from "../utils/region";
 import {
   Apple,
@@ -23,14 +27,6 @@ interface AgentStatusBarProps {
     os?: string | null;
     region?: string | null;
   };
-}
-
-interface NetworkMetric {
-  interface: string;
-  bytes_sent: number;
-  bytes_recv: number;
-  packets_sent: number;
-  packets_recv: number;
 }
 
 const formatPercent = (val: number | undefined, decimals = 2) =>
@@ -96,20 +92,10 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
   let totalUpload = 0;
   let totalDownload = 0;
 
-  if (latestMetric?.network_metrics) {
-    // 解析并聚合所有网络接口数据
-    try {
-      const networks = JSON.parse(
-        latestMetric.network_metrics
-      ) as NetworkMetric[];
-      networks.forEach((network) => {
-        totalUpload += network.bytes_sent;
-        totalDownload += network.bytes_recv;
-      });
-    } catch (e) {
-      console.error("解析网络数据失败:", e);
-    }
-  }
+  parseNetworkMetrics(latestMetric).forEach((network) => {
+    totalUpload += network.bytes_sent;
+    totalDownload += network.bytes_recv;
+  });
 
   return (
     <div className="terminal-card p-4 transition-all">
@@ -157,7 +143,8 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
           label={t("agent.metrics.memory.title")}
           value={formatPercent(memoryUsageRate)}
           subValue={
-            latestMetric
+            typeof latestMetric?.memory_used === "number" &&
+            typeof latestMetric.memory_total === "number"
               ? `${formatBytes(latestMetric.memory_used, 2)} / ${formatBytes(
                   latestMetric.memory_total,
                   2
@@ -177,14 +164,25 @@ const AgentStatusBar: React.FC<AgentStatusBarProps> = ({
         />
         <MetricCard
           label={t("agent.metrics.load.title")}
-          value={latestMetric?.load_1?.toFixed(2) || "-"}
+          value={
+            typeof latestMetric?.load_1 === "number"
+              ? latestMetric.load_1.toFixed(2)
+              : "-"
+          }
           subValue={
-            latestMetric
-              ? `${latestMetric.load_5?.toFixed(
-                  2
-                )} / ${latestMetric.load_15?.toFixed(2)}`
+            typeof latestMetric?.load_5 === "number" &&
+            typeof latestMetric.load_15 === "number"
+              ? `${latestMetric.load_5.toFixed(2)} / ${latestMetric.load_15.toFixed(2)}`
               : undefined
           }
+        />
+        <MetricCard
+          label={t("agentStatusBar.uploadSpeed")}
+          value={formatSpeed(latestMetric?.network_tx_speed)}
+        />
+        <MetricCard
+          label={t("agentStatusBar.downloadSpeed")}
+          value={formatSpeed(latestMetric?.network_rx_speed)}
         />
       </div>
 

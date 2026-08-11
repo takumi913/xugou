@@ -72,7 +72,7 @@ export interface AgentViewsSectionProps {
 /**
  * 客户端多视图分区（从 Dashboard 抽取，供仪表盘与公开状态页共用）：
  * 标题行 + bar/ring/table/map 视图切换 + 地区筛选栏 + group_name 分组段。
- * 公开状态页数据无 geo 坐标时地图自动降级为国家质心点（WorldMapView 内建）。
+ * 公开状态页使用城市级落点；历史节点缺少城市数据时才按国家落点展示。
  */
 const AgentViewsSection = ({
   agents,

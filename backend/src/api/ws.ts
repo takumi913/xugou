@@ -5,23 +5,21 @@ import { Bindings } from "../models/db";
 import { authenticateAdminSession } from "../modules/auth/persistence/D1SessionStore";
 import { SESSION_COOKIE_NAME } from "../utils/session-cookie";
 import { getAllowedOrigin } from "../middlewares/cors";
+import {
+  parseAgentRoomSubscription,
+  parseAgentRoomSubscriptions,
+  realtimeRoomName,
+} from "../modules/agents/realtime/RealtimeSharding";
 
 /**
- * GET /api/ws?subscribe=<agent-id>
+ * GET /api/ws?subscribe=<agent-id[,agent-id...]>
  *
- * 实时连接只服务 Agent 详情页。入口先校验单一 Agent ID 和管理员会话，再把
- * 升级请求转发到以该 ID 命名的 AgentRoom。Dashboard 与公开状态页读取查询
- * 投影并定时刷新，不再接入全局实时广播。
+ * 入口校验管理员会话与订阅 ID。同一请求中的 ID 必须属于同一个稳定分片；
+ * Dashboard 客户端会自动按分片建立少量连接，详情页仍只建立一条连接。
  */
 const ws = new Hono<{ Bindings: Bindings }>();
 
-export function parseAgentRoomSubscription(raw: string | undefined): number | null {
-  if (!raw || raw.includes(",") || raw.trim().toLowerCase() === "all") {
-    return null;
-  }
-  const agentId = Number(raw);
-  return Number.isSafeInteger(agentId) && agentId > 0 ? agentId : null;
-}
+export { parseAgentRoomSubscription, parseAgentRoomSubscriptions };
 
 ws.get("/", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
@@ -37,10 +35,13 @@ ws.get("/", async (c) => {
     return c.json({ success: false, message: "WebSocket origin denied" }, 403);
   }
 
-  const agentId = parseAgentRoomSubscription(c.req.query("subscribe"));
-  if (agentId === null) {
+  const agentIds = parseAgentRoomSubscriptions(c.req.query("subscribe"));
+  if (!agentIds) {
     return c.json(
-      { success: false, message: "Exactly one agent id is required" },
+      {
+        success: false,
+        message: "Agent ids must be valid and belong to one realtime shard",
+      },
       400
     );
   }
@@ -68,10 +69,10 @@ ws.get("/", async (c) => {
 
   try {
     const target = new URL("http://internal/ws");
-    target.searchParams.set("agentId", String(agentId));
+    target.searchParams.set("agentIds", agentIds.join(","));
 
     return await namespace
-      .getByName(String(agentId))
+      .getByName(realtimeRoomName(agentIds[0]))
       .fetch(new Request(target, { method: "GET", headers: c.req.raw.headers }));
   } catch {
     return c.json({ success: false, message: "WebSocket error" }, 500);

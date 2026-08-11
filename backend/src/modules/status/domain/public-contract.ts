@@ -96,6 +96,10 @@ export type PublicAgentSource = {
   os: string | null;
   version: string | null;
   region?: string | null;
+  city?: string | null;
+  region_name?: string | null;
+  map_latitude?: number | null;
+  map_longitude?: number | null;
   created_at: string;
   updated_at: string;
   traffic_limit_gb?: number | null;
@@ -114,6 +118,9 @@ export type PublicMonitorSource = {
 };
 
 export function toPublicAgent(agent: PublicAgentSource) {
+  const latitude = cityMapCoordinate(agent.map_latitude, 90);
+  const longitude = cityMapCoordinate(agent.map_longitude, 180);
+  const hasMapPoint = latitude !== null && longitude !== null;
   return {
     id: agent.id,
     name: agent.name,
@@ -122,12 +129,27 @@ export function toPublicAgent(agent: PublicAgentSource) {
     os: agent.os,
     version: agent.version,
     region: agent.region ?? null,
+    city: agent.city?.trim().slice(0, 128) || null,
+    region_name: agent.region_name?.trim().slice(0, 128) || null,
+    // 两位小数约为公里级，只用于城市落点，不发布 D1 保存的原始坐标。
+    map_latitude: hasMapPoint ? latitude : null,
+    map_longitude: hasMapPoint ? longitude : null,
     created_at: agent.created_at,
     updated_at: agent.updated_at,
     traffic_limit_gb: agent.traffic_limit_gb ?? null,
     traffic_reset_day: agent.traffic_reset_day ?? null,
     traffic_calc_type: agent.traffic_calc_type ?? null,
   };
+}
+
+function cityMapCoordinate(
+  value: number | null | undefined,
+  maximum: number
+): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > maximum) {
+    return null;
+  }
+  return Math.round(value * 100) / 100;
 }
 
 export function toPublicMonitor(monitor: PublicMonitorSource) {
@@ -185,6 +207,21 @@ function boundedString(value: unknown) {
   return typeof value === "string" ? value.slice(0, MAX_PUBLIC_METRIC_STRING) : "";
 }
 
+function nullableFiniteNumber(
+  value: unknown,
+  maximum = Number.MAX_SAFE_INTEGER
+): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.min(value, maximum)
+    : null;
+}
+
+function nullableBoundedString(value: unknown): string | null {
+  return typeof value === "string"
+    ? value.slice(0, MAX_PUBLIC_METRIC_STRING)
+    : null;
+}
+
 function metricArray(value: unknown): unknown[] | null {
   if (typeof value === "string") {
     try {
@@ -236,6 +273,41 @@ export function projectPublicNetworkMetrics(
       packets_recv: finiteNumber(row.packets_recv),
     }];
   });
+}
+
+/**
+ * AgentRoom 的匿名连接只接收这个白名单投影。它与 Publication 使用同一
+ * 磁盘/网络字段清洗器，避免实时通道旁路公开 DTO 的隐私边界。
+ */
+export function projectPublicRealtimeMetric(
+  value: unknown
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const metric = value as Record<string, unknown>;
+  return {
+    timestamp: nullableBoundedString(metric.timestamp),
+    cpu_usage: nullableFiniteNumber(metric.cpu_usage, 100),
+    memory_total: nullableFiniteNumber(metric.memory_total),
+    memory_used: nullableFiniteNumber(metric.memory_used),
+    memory_free: nullableFiniteNumber(metric.memory_free),
+    memory_usage_rate: nullableFiniteNumber(metric.memory_usage_rate, 100),
+    load_1: nullableFiniteNumber(metric.load_1),
+    load_5: nullableFiniteNumber(metric.load_5),
+    load_15: nullableFiniteNumber(metric.load_15),
+    disk_metrics: projectPublicDiskMetrics(metric.disk_metrics) ?? [],
+    network_metrics: projectPublicNetworkMetrics(metric.network_metrics) ?? [],
+    swap_total: nullableFiniteNumber(metric.swap_total),
+    swap_used: nullableFiniteNumber(metric.swap_used),
+    process_count: nullableFiniteNumber(metric.process_count),
+    tcp_connections: nullableFiniteNumber(metric.tcp_connections),
+    udp_connections: nullableFiniteNumber(metric.udp_connections),
+    ipv4_reachable: nullableFiniteNumber(metric.ipv4_reachable, 1),
+    ipv6_reachable: nullableFiniteNumber(metric.ipv6_reachable, 1),
+    network_rx_speed: nullableFiniteNumber(metric.network_rx_speed),
+    network_tx_speed: nullableFiniteNumber(metric.network_tx_speed),
+    month_rx: nullableFiniteNumber(metric.month_rx),
+    month_tx: nullableFiniteNumber(metric.month_tx),
+  };
 }
 
 /**

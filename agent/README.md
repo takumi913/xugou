@@ -88,10 +88,10 @@ printf '%s' 'YOUR_API_TOKEN' > ~/.xugou-agent.token
 ./xugou-agent --token-file ~/.xugou-agent.token
 
 # 独立指定采集与批量上报间隔
-./xugou-agent --collect-interval 60 --report-interval 300
+./xugou-agent --collect-interval 60 --report-interval 60
 
 # 设置 Spool 容量和单请求压缩后大小
-./xugou-agent --spool-max-bytes 67108864 --report-max-compressed-bytes 524288
+./xugou-agent --spool-max-bytes 67108864 --report-max-compressed-bytes 65536
 
 # 指定http 代理
 ./xugou-agent --proxy http://proxy.example.com:8080
@@ -105,7 +105,7 @@ printf '%s' 'YOUR_API_TOKEN' > ~/.xugou-agent.token
 export XUGOU_SERVER=https://monitor.example.com
 export XUGOU_TOKEN_FILE=$HOME/.xugou-agent.token
 export XUGOU_COLLECT_INTERVAL=60
-export XUGOU_REPORT_INTERVAL=300
+export XUGOU_REPORT_INTERVAL=60
 export XUGOU_SPOOL_DIR=$HOME/.xugou-spool
 # 服务端 update=1 使用的自建签名清单地址
 export XUGOU_UPDATE_MANIFEST_URL=https://mirror.example/latest/manifest.json

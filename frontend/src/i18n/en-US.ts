@@ -176,7 +176,7 @@ const enUS = {
     "dashboard.view.table": "Table",
     "dashboard.view.map": "Map",
     "dashboard.map.unknownLocation": "Unknown location",
-    "dashboard.map.approxLocation": "Country centroid (no precise coords)",
+    "dashboard.map.approxLocation": "Country-level location",
     "dashboard.map.detailHint": "Click for details",
     "dashboard.map.filterHint": "Click to filter this region",
     "dashboard.map.zoomIn": "Zoom in",
@@ -699,6 +699,8 @@ const enUS = {
     "agentStatusBar.storage": "Storage",
     "agentStatusBar.totalUpload": "Total Upload",
     "agentStatusBar.totalDownload": "Total Download",
+    "agentStatusBar.uploadSpeed": "Live Upload",
+    "agentStatusBar.downloadSpeed": "Live Download",
     
     //补全
     "notifications.fetch.error": "Failed to fetch notification configuration.",

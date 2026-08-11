@@ -77,6 +77,27 @@ func TestSpoolPersistsStableInflightAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestSpoolCapsNewReportsAtDefaultBatchSize(t *testing.T) {
+	store, err := Open(Options{Dir: t.TempDir(), MaxEntries: DefaultMaxSamples + 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < DefaultMaxSamples+1; i++ {
+		if _, err := store.Add(testInfo(base.Add(time.Duration(i)*time.Minute), float64(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, ok, err := store.Next(DefaultMaxSamples, DefaultMaxCompressedBytes)
+	if err != nil || !ok {
+		t.Fatalf("创建受限批次失败: ok=%v err=%v", ok, err)
+	}
+	if len(report.Samples) != DefaultMaxSamples {
+		t.Fatalf("批次样本数=%d, want %d", len(report.Samples), DefaultMaxSamples)
+	}
+}
+
 func TestSpoolNeverPersistsTokenAndUsesRestrictedPermissions(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(Options{Dir: dir, MaxBytes: 1024 * 1024, MaxEntries: 10})

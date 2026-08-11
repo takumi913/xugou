@@ -46,8 +46,13 @@ import {
   normalizeTrafficResetDay,
   sumNetworkTotals,
 } from "../src/utils/traffic";
-import { normalizeAgentGeo } from "../src/utils/geo";
 import {
+  agentReportSourceFromCf,
+  normalizeAgentCountry,
+  normalizeAgentGeo,
+} from "../src/utils/geo";
+import {
+  projectPublicRealtimeMetric,
   toPublicAgent,
   toPublicMonitor,
   parsePublicStatusSnapshot,
@@ -520,6 +525,24 @@ assert.equal(
   normalizeAgentGeo({ latitude: "35.68950", longitude: "139.6917" }).latitude,
   "coordinate rounding is stable so repeated reports compare equal"
 );
+assert.equal(normalizeAgentCountry(" jp "), "JP");
+assert.equal(normalizeAgentCountry("Japan"), null);
+assert.deepEqual(
+  agentReportSourceFromCf({
+    country: "jp",
+    latitude: "35.6895",
+    longitude: "139.6917",
+    city: "Tokyo",
+    region: "Tokyo",
+  }),
+  {
+    country: "JP",
+    latitude: "35.6895",
+    longitude: "139.6917",
+    city: "Tokyo",
+    regionName: "Tokyo",
+  }
+);
 
 // ---- 地图：公开状态页 agent 投影绝不含 geo_*（隐私分级负向断言） ----
 
@@ -543,6 +566,10 @@ const publicAgentSource: PublicAgentSource & Record<string, unknown> = {
   geo_longitude: 139.6917,
   geo_city: "Tokyo",
   geo_region_name: "Tokyo",
+  city: "Tokyo",
+  region_name: "Tokyo",
+  map_latitude: 35.6895,
+  map_longitude: 139.6917,
 };
 const publicAgentProjection = toPublicAgent(publicAgentSource);
 assert.equal(
@@ -565,6 +592,37 @@ assert.equal(
   "JP",
   "public agent projection keeps coarse country-level region"
 );
+assert.deepEqual(
+  {
+    city: publicAgentProjection.city,
+    region_name: publicAgentProjection.region_name,
+    map_latitude: publicAgentProjection.map_latitude,
+    map_longitude: publicAgentProjection.map_longitude,
+  },
+  {
+    city: "Tokyo",
+    region_name: "Tokyo",
+    map_latitude: 35.69,
+    map_longitude: 139.69,
+  },
+  "public agent projection exposes a rounded city-level map point"
+);
+
+const publicRealtimeMetric = projectPublicRealtimeMetric({
+  timestamp: "2026-08-11T01:00:00.000Z",
+  cpu_usage: 12,
+  network_rx_speed: 1024,
+  network_tx_speed: 512,
+  network_metrics: JSON.stringify([
+    { interface: "eth0", bytes_recv: 100, bytes_sent: 50 },
+  ]),
+  threshold_state: { cpu: true },
+  ip_addresses: ["192.0.2.1"],
+});
+assert.equal(publicRealtimeMetric.cpu_usage, 12);
+assert.equal(publicRealtimeMetric.network_rx_speed, 1024);
+assert.equal("threshold_state" in publicRealtimeMetric, false);
+assert.equal("ip_addresses" in publicRealtimeMetric, false);
 
 const publicMonitorSource: PublicMonitorSource & Record<string, unknown> = {
   id: 7,
@@ -650,12 +708,12 @@ assert.equal(
 );
 assert.deepEqual(
   normalizeAgentIntervals({ collect_interval: null, report_interval: null }),
-  { collect_interval: 60, report_interval: 300 },
+  { collect_interval: 60, report_interval: 60 },
   "missing intervals fall back to defaults"
 );
 assert.deepEqual(
   normalizeAgentIntervals({ collect_interval: 5000, report_interval: 5 }),
-  { collect_interval: 60, report_interval: 300 },
+  { collect_interval: 60, report_interval: 60 },
   "out-of-range intervals fall back to defaults"
 );
 assert.deepEqual(

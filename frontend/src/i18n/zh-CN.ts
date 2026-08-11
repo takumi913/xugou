@@ -176,7 +176,7 @@ const zhCN = {
     "dashboard.view.table": "表格",
     "dashboard.view.map": "地图",
     "dashboard.map.unknownLocation": "未知位置",
-    "dashboard.map.approxLocation": "国家质心（无精确坐标）",
+    "dashboard.map.approxLocation": "仅国家信息",
     "dashboard.map.detailHint": "点击查看详情",
     "dashboard.map.filterHint": "点击筛选该地区",
     "dashboard.map.zoomIn": "放大",
@@ -709,6 +709,8 @@ const zhCN = {
     "agentStatusBar.storage": "存储",
     "agentStatusBar.totalUpload": "总上传",
     "agentStatusBar.totalDownload": "总下载",
+    "agentStatusBar.uploadSpeed": "实时上传",
+    "agentStatusBar.downloadSpeed": "实时下载",
     
     //补全
     "notifications.fetch.error": "获取通知配置失败。",

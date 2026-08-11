@@ -10,6 +10,7 @@
     "test:forms": "tsx --tsconfig tsconfig.app.json scripts/forms-contract.test.ts",
     "test:i18n": "tsx --tsconfig tsconfig.app.json scripts/i18n-contract.test.ts",
     "test:version": "tsx --tsconfig tsconfig.app.json scripts/version-contract.test.ts",
+    "test:metrics": "tsx --tsconfig tsconfig.app.json scripts/metrics-contract.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:live": "playwright test --config playwright.live.config.ts",
     "preview": "vite preview"

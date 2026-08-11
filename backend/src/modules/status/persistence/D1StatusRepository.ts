@@ -7,7 +7,9 @@ import type { StatusPageConfigCommand } from "../domain/models";
 import {
   projectPublicDiskMetrics,
   projectPublicNetworkMetrics,
+  toPublicAgent,
   type PublicAgentMetric,
+  type PublicAgentSource,
 } from "../domain/public-contract";
 
 const DEFAULT_CONFIG = {
@@ -487,6 +489,9 @@ export class D1StatusRepository implements StatusRepositoryPort {
          ORDER BY d.id ASC`;
     const publicAgentQuery = `SELECT n.id, n.name, r.status, r.hostname, r.os,
                 r.agent_version AS version, r.region,
+                r.geo_city AS city, r.geo_region_name AS region_name,
+                r.geo_latitude AS map_latitude,
+                r.geo_longitude AS map_longitude,
                 strftime('%Y-%m-%dT%H:%M:%fZ',
                          n.created_at_ms / 1000.0, 'unixepoch') AS created_at,
                 strftime('%Y-%m-%dT%H:%M:%fZ',
@@ -520,7 +525,7 @@ export class D1StatusRepository implements StatusRepositoryPort {
         ).bind(config.id, since).all<Record<string, unknown>>(),
         this.env.DB.prepare(publicAgentQuery)
           .bind(config.id)
-          .all<Record<string, unknown>>(),
+          .all<PublicAgentSource>(),
         this.env.DB.prepare(
           true
             ? `SELECT agent_id,
@@ -604,7 +609,7 @@ export class D1StatusRepository implements StatusRepositoryPort {
             : rawHistory.get(Number(row.id)) ?? [],
       })),
       agents: agentResult.results.map((row) => ({
-        ...row,
+        ...toPublicAgent(row),
         metrics: latestByAgent.get(Number(row.id)) ?? null,
       })),
     };

@@ -3,17 +3,27 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseAgentRoomSubscription } from "../src/api/ws";
+import {
+  parseAgentRoomSubscription,
+  parseAgentRoomSubscriptions,
+} from "../src/api/ws";
+import {
+  AGENT_REALTIME_SHARD_COUNT,
+  realtimeRoomName,
+} from "../src/modules/agents/realtime/RealtimeSharding";
 
 const backendRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = join(backendRoot, "..");
 
 assert.equal(parseAgentRoomSubscription("42"), 42);
+assert.deepEqual(parseAgentRoomSubscriptions("1,9,17,9"), [1, 9, 17]);
+assert.equal(realtimeRoomName(1), "agent-shard:0");
+assert.equal(realtimeRoomName(AGENT_REALTIME_SHARD_COUNT), "agent-shard:7");
 for (const invalid of [undefined, "", "all", "1,2", "0", "-1", "1.5", "x"]) {
   assert.equal(
-    parseAgentRoomSubscription(invalid),
+    parseAgentRoomSubscriptions(invalid),
     null,
-    `${String(invalid)} must not select an Agent room`
+    `${String(invalid)} must not select a realtime shard`
   );
 }
 
@@ -25,20 +35,33 @@ const publisher = readFileSync(
   "utf8"
 );
 assert.match(publisher, /AGENT_ROOM/);
-assert.match(publisher, /getByName\(String\(agentId\)\)/);
+assert.match(publisher, /getByName\(realtimeRoomName\(update\.agentId\)\)/);
 assert.doesNotMatch(publisher, /METRICS_BROADCASTER|idFromName\("global"\)/);
 
-for (const relativePath of [
-  "frontend/src/pages/Dashboard.tsx",
-  "frontend/src/pages/status/StatusPage.tsx",
-]) {
-  const source = readFileSync(join(repositoryRoot, relativePath), "utf8");
-  assert.doesNotMatch(
-    source,
-    /createLiveSocket|\/api\/ws/,
-    `${relativePath} must read a projection instead of joining realtime rooms`
-  );
-}
+const dashboard = readFileSync(
+  join(repositoryRoot, "frontend/src/pages/Dashboard.tsx"),
+  "utf8"
+);
+assert.match(dashboard, /createLiveSocket/);
+assert.match(dashboard, /liveMetrics/);
+
+const statusPage = readFileSync(
+  join(repositoryRoot, "frontend/src/pages/status/StatusPage.tsx"),
+  "utf8"
+);
+assert.match(statusPage, /createLiveSocket/);
+assert.match(statusPage, /\/api\/v2\/status\/public\/ws/);
+assert.doesNotMatch(statusPage, /path:\s*["']\/api\/ws["']/);
+
+const liveSocket = readFileSync(
+  join(repositoryRoot, "frontend/src/utils/liveSocket.ts"),
+  "utf8"
+);
+assert.match(liveSocket, /groupRealtimeSubscriptions/);
+assert.match(
+  liveSocket,
+  new RegExp(`AGENT_REALTIME_SHARD_COUNT = ${AGENT_REALTIME_SHARD_COUNT}`)
+);
 
 const wrangler = readFileSync(join(repositoryRoot, "wrangler.toml"), "utf8");
 assert.match(wrangler, /name = "AGENT_ROOM"\s+class_name = "AgentRoom"/);

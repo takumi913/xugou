@@ -28,8 +28,8 @@ import (
 const (
 	DefaultMaxBytes           int64 = 64 * 1024 * 1024
 	DefaultMaxEntries               = 10_000
-	DefaultMaxSamples               = 100
-	DefaultMaxCompressedBytes       = 512 * 1024
+	DefaultMaxSamples               = 10
+	DefaultMaxCompressedBytes       = 64 * 1024
 	inflightFileName                = "inflight.json"
 	stateFileName                   = "state.json"
 )

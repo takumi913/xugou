@@ -22,7 +22,7 @@ import { regionFlagEmoji, regionLabel } from "../utils/region";
 /**
  * 城市级散点世界地图视图（Dashboard 第 4 视图）
  * - 底图：构建期预投影的国家轮廓（assets/worldMap.ts，运行时零依赖）
- * - 散点：有 geo 经纬度 → 实心点；仅有 region → 国家质心空心虚线点；
+ * - 散点：有城市坐标 → 实心点；仅有 region → 国家质心空心虚线点；
  *   两者皆无 → 角落「未知位置 n」徽章；同城（geo_city+国家码）聚合
  * - 交互：hover 终端风格 tooltip；单机点击跳详情，多机点击联动地区筛选；
  *   wheel 缩放（指针为中心，1x-8x）+ 拖拽平移 + 双击复位 + 右下角按钮
@@ -40,7 +40,7 @@ interface MapCluster {
   key: string;
   x: number;
   y: number;
-  // geo=精确坐标实心点；centroid=国家质心降级空心点
+  // geo=城市级坐标实心点；centroid=国家质心降级空心点
   kind: "geo" | "centroid";
   city: string | null;
   regionName: string | null;

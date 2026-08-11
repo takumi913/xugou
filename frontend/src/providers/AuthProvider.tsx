@@ -14,6 +14,7 @@ import {
 import { AuthContextType, LoginRequest, User } from "../types";
 import { useTranslation } from "react-i18next";
 import { queryClient } from "./QueryProvider";
+import { OpenApiRequestError } from "../api/generated/v2-client";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -50,8 +51,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         }
       } catch (error) {
         if (active) {
-          console.error(t("auth.error.fetchUser"), error);
-          clearAuthState();
+          if (error instanceof OpenApiRequestError && error.status === 401) {
+            // 匿名访问公开状态页是正常路径；保留其已启动的 React Query。
+            clearLegacyAuthStorage();
+            setUser(null);
+          } else {
+            console.error(t("auth.error.fetchUser"), error);
+            clearAuthState();
+          }
         }
       } finally {
         if (active) {

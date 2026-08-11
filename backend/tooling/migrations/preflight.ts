@@ -250,35 +250,6 @@ export function runMigrationPreflight(
       )
     : -1;
 
-  counts.unverifiedRawSampleArchiveBatches = tables.has(
-    "raw_sample_archive_batches"
-  )
-    ? scalar(
-        resolvedDatabase,
-        "SELECT count(*) FROM raw_sample_archive_batches WHERE status <> 'verified' OR verified_at IS NULL;"
-      )
-    : -1;
-  if (counts.unverifiedRawSampleArchiveBatches > 0) {
-    warnings.push(
-      `${counts.unverifiedRawSampleArchiveBatches} 个 Raw Sample Archive Batch 尚未通过 R2 校验`
-    );
-  }
-  counts.rawSampleArchiveMembersOnUnverifiedBatches =
-    tables.has("raw_sample_archive_members") &&
-    tables.has("raw_sample_archive_batches")
-      ? scalar(
-          resolvedDatabase,
-          `SELECT count(*) FROM raw_sample_archive_members member
-           INNER JOIN raw_sample_archive_batches batch ON batch.id = member.batch_id
-           WHERE batch.status <> 'verified' OR batch.verified_at IS NULL;`
-        )
-      : -1;
-  if (counts.rawSampleArchiveMembersOnUnverifiedBatches > 0) {
-    blockers.push(
-      `存在 ${counts.rawSampleArchiveMembersOnUnverifiedBatches} 条指向未验证 R2 Batch 的 Raw Sample Member`
-    );
-  }
-
   const legacyHistoryTables = tableNames.filter(
     (name) =>
       name === "agent_metrics_history_old" ||
@@ -896,8 +867,6 @@ export function runMigrationPreflight(
     counts.notificationSecretsOutsideTargetKek === 0 &&
     counts.openMigrationAnomalies === 0 &&
     counts.incompleteMigrationCheckpoints === 0 &&
-    counts.unverifiedRawSampleArchiveBatches === 0 &&
-    counts.rawSampleArchiveMembersOnUnverifiedBatches === 0 &&
     counts.unconservedLegacyAgentHistoryRows === 0 &&
     counts.unconservedLegacyAgentModelRows === 0 &&
     counts.unconservedLegacyAgentCurrentMetricsRows === 0 &&

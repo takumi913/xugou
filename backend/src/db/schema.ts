@@ -271,7 +271,7 @@ export const agents = sqliteTable(
     history_partition_id: int("history_partition_id").default(0),
     // 服务端下发给探针的采集/上报间隔（秒），上报响应中按 MD5 协商下发
     collect_interval: int("collect_interval").default(60),
-    report_interval: int("report_interval").default(300),
+    report_interval: int("report_interval").default(60),
     // 上报来源地区（Cloudflare request.cf.country，ISO 3166-1 两位码）
     region: text("region"),
     // 上报来源地理位置（Cloudflare request.cf.latitude/longitude/city/region，
@@ -618,8 +618,8 @@ export const agentMetricRollups = sqliteTable(
   })
 );
 
-// Agent v4 上报信封。HTTP 入口只持久化已鉴权、已去除 Token 的规范化载荷，
-// Queue Consumer 以 report_id 去重并推进处理状态。
+// Agent v4 上报幂等账本。HTTP 入口直接完成轻量化 D1 批量写入，
+// payload_json 处理完成后立即清空，report_id + digest 用于识别安全重投。
 export const agentReports = sqliteTable(
   "agent_reports",
   {
@@ -672,61 +672,7 @@ export const agentReportSamples = sqliteTable(
   })
 );
 
-// R2 原始样本归档账本：只有 checksum/size/head 全部验证后才写入 member，
-// 清理任务也只删除已关联 verified batch 的旧样本。
-export const rawSampleArchiveBatches = sqliteTable(
-  "raw_sample_archive_batches",
-  {
-    id: text("id").primaryKey(),
-    domain: text("domain").notNull(),
-    object_key: text("object_key").notNull(),
-    content_sha256: text("content_sha256").notNull(),
-    object_size_bytes: int("object_size_bytes").notNull(),
-    source_rows: int("source_rows").notNull(),
-    range_start: text("range_start").notNull(),
-    range_end: text("range_end").notNull(),
-    status: text("status").notNull().default("pending"),
-    attempts: int("attempts").notNull().default(1),
-    r2_version: text("r2_version"),
-    r2_etag: text("r2_etag"),
-    verified_at: text("verified_at"),
-    last_error: text("last_error"),
-    created_at: text("created_at").notNull(),
-    updated_at: text("updated_at").notNull(),
-  },
-  (table) => ({
-    objectKeyUnique: uniqueIndex(
-      "raw_sample_archive_batches_object_key_unique_idx"
-    ).on(table.object_key),
-    statusUpdatedIdx: index(
-      "raw_sample_archive_batches_status_updated_idx"
-    ).on(table.status, table.updated_at),
-  })
-);
-
-export const rawSampleArchiveMembers = sqliteTable(
-  "raw_sample_archive_members",
-  {
-    domain: text("domain").notNull(),
-    source_key: text("source_key").notNull(),
-    source_parent_key: text("source_parent_key").notNull(),
-    batch_id: text("batch_id")
-      .notNull()
-      .references(() => rawSampleArchiveBatches.id, { onDelete: "restrict" }),
-    archived_at: text("archived_at").notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.domain, table.source_key] }),
-    batchIdx: index("raw_sample_archive_members_batch_idx").on(table.batch_id),
-    parentIdx: index("raw_sample_archive_members_parent_idx").on(
-      table.domain,
-      table.source_parent_key
-    ),
-  })
-);
-
-
-// 领域副作用先与业务写入同一 D1 batch，再由 Queue 投递并按 event_id 消费。
+// 仅状态变化、告警和状态页合并重建等低频副作用写入 Outbox。
 export const domainOutbox = sqliteTable(
   "domain_outbox",
   {
