@@ -163,7 +163,7 @@ type remoteConfigUpdate struct {
 	applied chan struct{}
 }
 
-// runReportLoop 与秒级采集循环完全独立。HTTP 超时、退避和断线追赶不会暂停
+// runReportLoop 与秒级采集循环完全独立。HTTP 超时、退避和断线补偿不会暂停
 // 本地采集、Spool 写入或实时 WebSocket 发布。
 func runReportLoop(
 	ctx context.Context,
@@ -265,33 +265,26 @@ func reportSamples(
 	roundCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	// 单轮最多追赶 10 个批次，避免长期断网后的积压只能按 report interval 慢速消化，
-	// 同时给采集循环留下明确的执行预算。
-	var remoteConfig *config.RemoteConfig
-	for range 10 {
-		pending, ok, err := samples.Next(spool.DefaultMaxSamples, config.ReportMaxCompressedBytes)
-		if err != nil {
-			fmt.Printf("创建持久化上报批次失败: %v\n", err)
-			return remoteConfig
-		}
-		if !ok {
-			break
-		}
-		responseConfig, err := reportWithBackoff(roundCtx, r, pending)
-		if err != nil {
-			fmt.Printf("上报系统信息失败: %v\n", err)
-			return remoteConfig
-		}
-		if err := samples.Ack(pending.ReportID); err != nil {
-			fmt.Printf("提交已确认上报批次失败: report_id=%s err=%v\n", pending.ReportID, err)
-			return remoteConfig
-		}
-		if responseConfig != nil {
-			remoteConfig = responseConfig
-		}
-		fmt.Printf("系统信息已确认上报，report_id=%s, 样本数=%d, 时间=%s\n", pending.ReportID, len(pending.Samples), time.Now().Format("2006-01-02 15:04:05"))
+	// 每个上报周期只发送一个批次。DefaultMaxSamples 足以容纳一分钟的秒级
+	// 采样；断网期间由有界 Spool 保存最近窗口，恢复后也不会形成 HTTP 请求风暴。
+	pending, ok, err := samples.Next(spool.DefaultMaxSamples, config.ReportMaxCompressedBytes)
+	if err != nil {
+		fmt.Printf("创建持久化上报批次失败: %v\n", err)
+		return nil
 	}
-
+	if !ok {
+		return nil
+	}
+	remoteConfig, err := reportWithBackoff(roundCtx, r, pending)
+	if err != nil {
+		fmt.Printf("上报系统信息失败: %v\n", err)
+		return nil
+	}
+	if err := samples.Ack(pending.ReportID); err != nil {
+		fmt.Printf("提交已确认上报批次失败: report_id=%s err=%v\n", pending.ReportID, err)
+		return remoteConfig
+	}
+	fmt.Printf("系统信息已确认上报，report_id=%s, 样本数=%d, 时间=%s\n", pending.ReportID, len(pending.Samples), time.Now().Format("2006-01-02 15:04:05"))
 	return remoteConfig
 }
 

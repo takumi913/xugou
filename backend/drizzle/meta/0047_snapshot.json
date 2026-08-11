@@ -1870,7 +1870,7 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
-          "default": 1
+          "default": 60
         },
         "report_interval": {
           "name": "report_interval",

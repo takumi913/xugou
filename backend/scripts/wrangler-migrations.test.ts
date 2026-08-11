@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,16 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const persistTo = mkdtempSync(join(tmpdir(), "xugou-wrangler-migrations-"));
 const environment = { ...process.env, CI: "1", NO_COLOR: "1" };
+
+const intervalMigration = readFileSync(
+  join(repositoryRoot, "backend/drizzle/0047_uneven_thunderbolt.sql"),
+  "utf8"
+);
+assert.doesNotMatch(
+  intervalMigration,
+  /DROP\s+TABLE\s+[`\"]?agents[`\"]?/i,
+  "interval-only migration must not rebuild agents and cascade agent credentials"
+);
 
 try {
   execFileSync(

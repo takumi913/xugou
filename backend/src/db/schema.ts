@@ -269,8 +269,9 @@ export const agents = sqliteTable(
     next_offline_at: text("next_offline_at"),
     // 历史指标分区 ID（1-900），历史行主键 = partitionId * 10^13 + YYMMDDHHmmss
     history_partition_id: int("history_partition_id").default(0),
-    // 服务端下发给探针的采集/上报间隔（秒），上报响应中按 MD5 协商下发
-    collect_interval: int("collect_interval").default(1),
+    // 旧表 DDL 保留 60 秒默认值以避免仅为改默认值重建父表并级联凭据；
+    // 运行时事实源 agent_nodes 始终显式写入 1 秒采集配置。
+    collect_interval: int("collect_interval").default(60),
     report_interval: int("report_interval").default(60),
     // 上报来源地区（Cloudflare request.cf.country，ISO 3166-1 两位码）
     region: text("region"),
