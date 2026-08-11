@@ -14,11 +14,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Get Hitokoto
+        id: hitokoto
+        run: |
+          HITOKOTO=$(curl -s 'https://v1.hitokoto.cn/' | jq -r '.hitokoto')
+          echo "sentence=$HITOKOTO" >> "$GITHUB_OUTPUT"
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }} - ${{ steps.hitokoto.outputs.sentence }}
           generate_release_notes: true
           draft: false
           prerelease: false
