@@ -11,6 +11,20 @@ Object.defineProperty(globalThis, "localStorage", {
   },
 });
 
+const rootPackage = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8")
+) as { version: string };
+const frontendPackage = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8")
+) as { version: string };
+const backendPackage = JSON.parse(
+  readFileSync(new URL("../../backend/package.json", import.meta.url), "utf8")
+) as { version: string };
+
+assert.match(rootPackage.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+assert.equal(frontendPackage.version, rootPackage.version);
+assert.equal(backendPackage.version, rootPackage.version);
+
 assert.equal(compareSemver("v1.2.3", "1.2.4"), -1);
 assert.equal(compareSemver("1.2.3", "1.2.3-rc1"), 1);
 assert.equal(compareSemver("not-a-version", "1.0.0"), null);
