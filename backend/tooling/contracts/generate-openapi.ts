@@ -394,7 +394,7 @@ const schemas: Record<string, Schema> = {
   LoginCommand: { type: "object", additionalProperties: false, required: ["username", "password"], properties: { username: { type: "string", minLength: 1, maxLength: 64 }, password: { type: "string", minLength: 1, maxLength: 256 } } },
   AdminProfile: { type: "object", required: ["id", "username"], properties: { id: { type: "integer" }, username: { type: "string" }, email: { type: ["string", "null"] }, created_at: { type: "string" }, updated_at: { type: "string" } } },
   SessionResult: { type: "object", required: ["success", "message"], properties: { success: { type: "boolean" }, message: { type: "string" }, user: ref("AdminProfile") } },
-  AdminProfileUpdate: { type: "object", additionalProperties: false, minProperties: 1, properties: { username: { type: "string", minLength: 1, maxLength: 64 }, email: { type: ["string", "null"], maxLength: 254 } } },
+  AdminProfileUpdate: { type: "object", additionalProperties: false, required: ["email"], properties: { email: { type: ["string", "null"], maxLength: 254 } } },
   AdminPasswordChange: { type: "object", additionalProperties: false, required: ["currentPassword", "newPassword"], properties: { currentPassword: { type: "string", minLength: 1, maxLength: 256 }, newPassword: { type: "string", minLength: 6, maxLength: 256 } } },
   DashboardData: {
     type: "object",

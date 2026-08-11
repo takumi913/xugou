@@ -430,6 +430,7 @@ const enUS = {
     "profile.changePassword": "Change Password",
     "profile.changePasswordButton": "Change Password",
     "profile.basicInfo": "Basic Info",
+    "profile.usernameFixed": "The administrator username is fixed as admin",
     "profile.update": "Update Profile",
     "profile.currentPassword": "Current Password",
     "profile.newPassword": "New Password",

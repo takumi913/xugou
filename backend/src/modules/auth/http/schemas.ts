@@ -9,11 +9,9 @@ export const authCredentialsSchema = z
 
 export const adminProfileUpdateSchema = z
   .object({
-    username: z.string().trim().min(1).max(64).optional(),
-    email: z.string().trim().email().max(254).nullable().optional(),
+    email: z.string().trim().email().max(254).nullable(),
   })
-  .strict()
-  .refine((value) => Object.keys(value).length > 0, "至少需要提供一个更新字段");
+  .strict();
 
 export const adminPasswordChangeSchema = z
   .object({

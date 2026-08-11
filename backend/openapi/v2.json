@@ -4407,13 +4407,10 @@
       "AdminProfileUpdate": {
         "type": "object",
         "additionalProperties": false,
-        "minProperties": 1,
+        "required": [
+          "email"
+        ],
         "properties": {
-          "username": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          },
           "email": {
             "type": [
               "string",

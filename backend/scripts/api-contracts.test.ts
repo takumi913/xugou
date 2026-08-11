@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  adminProfileUpdateSchema,
   authCredentialsSchema,
   adminPasswordChangeSchema,
 } from "../src/modules/auth/http/schemas";
@@ -38,6 +39,12 @@ valid(
   authCredentialsSchema.safeParse({ username: "admin", password: "admin123" })
 );
 invalid("session login without password", authCredentialsSchema.safeParse({ username: "admin" }));
+valid("profile email update", adminProfileUpdateSchema.safeParse({ email: "admin@example.com" }));
+valid("profile email clear", adminProfileUpdateSchema.safeParse({ email: null }));
+invalid(
+  "profile rejects username updates",
+  adminProfileUpdateSchema.safeParse({ username: "renamed-admin", email: null })
+);
 valid(
   "password change",
   adminPasswordChangeSchema.safeParse({

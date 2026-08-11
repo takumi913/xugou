@@ -16,7 +16,6 @@ const UserProfile = () => {
   const { user } = useAuth();
   const { t } = useTranslation();
 
-  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -27,7 +26,6 @@ const UserProfile = () => {
 
   useEffect(() => {
     if (user) {
-      setUsername(user.username);
       setEmail(user.email || "");
     }
   }, [user]);
@@ -43,8 +41,7 @@ const UserProfile = () => {
     }
 
     const data: UpdateProfileRequest = {
-      username,
-      email: email || undefined,
+      email: email.trim() || null,
     };
 
     try {
@@ -124,12 +121,13 @@ const UserProfile = () => {
                 </Text>
                 <Input
                   className="h-10"
-                  value={username}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setUsername(e.target.value)
-                  }
-                  required
+                  value={user.username}
+                  disabled
+                  aria-readonly="true"
                 />
+                <Text size="1" color="gray">
+                  {t("profile.usernameFixed")}
+                </Text>
               </Flex>
 
               <Flex direction="column" gap="1">

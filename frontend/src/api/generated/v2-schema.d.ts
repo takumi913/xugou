@@ -693,8 +693,7 @@ export interface components {
             user?: components["schemas"]["AdminProfile"];
         };
         AdminProfileUpdate: {
-            username?: string;
-            email?: string | null;
+            email: string | null;
         };
         AdminPasswordChange: {
             currentPassword: string;

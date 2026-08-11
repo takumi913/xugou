@@ -75,7 +75,7 @@ profile.put("/", async (c) => {
     subjectType: "admin",
     subjectId: admin.id,
     request: c.req.raw,
-    metadata: { changed_username: parsed.data.username !== undefined },
+    metadata: { changed_email: true },
   });
   if (!result.success && isV2ApiRequest(c)) {
     return profileFailure(c, result, "profile");

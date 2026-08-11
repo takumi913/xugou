@@ -426,6 +426,7 @@ const zhCN = {
     "profile.changePassword": "修改密码",
     "profile.changePasswordButton": "修改密码",
     "profile.basicInfo": "基本信息",
+    "profile.usernameFixed": "管理员用户名固定为 admin",
     "profile.update": "更新个人资料",
     "profile.currentPassword": "当前密码",
     "profile.newPassword": "新密码",
