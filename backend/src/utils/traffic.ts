@@ -104,7 +104,7 @@ export interface TrafficSampleTotals {
   totals: NetworkTotals | null;
 }
 
-/** 月流量累计状态（agent_latest_metrics 上的持久化列） */
+/** 月流量累计状态（agent_current_metrics 上的持久化列） */
 export interface TrafficState {
   month_rx: number;
   month_tx: number;

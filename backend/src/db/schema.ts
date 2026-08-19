@@ -1,4 +1,5 @@
 import {
+  blob,
   int,
   sqliteTable,
   text,
@@ -441,46 +442,6 @@ export const agentEnrollmentTokens = sqliteTable(
   })
 );
 
-// 客户端最新资源指标表
-export const agentLatestMetrics = sqliteTable(
-  "agent_latest_metrics",
-  {
-    agent_id: int("agent_id")
-      .primaryKey()
-      .references(() => agents.id, { onDelete: "cascade" }),
-    metrics_json: text("metrics_json").notNull(),
-    collected_at: text("collected_at"),
-    reported_at: text("reported_at").notNull(),
-    cpu_usage: real("cpu_usage"),
-    memory_usage_rate: real("memory_usage_rate"),
-    disk_usage_rate: real("disk_usage_rate"),
-    swap_total: int("swap_total"),
-    swap_used: int("swap_used"),
-    process_count: int("process_count"),
-    tcp_connections: int("tcp_connections"),
-    udp_connections: int("udp_connections"),
-    ping_json: text("ping_json"),
-    ipv4_reachable: int("ipv4_reachable"),
-    ipv6_reachable: int("ipv6_reachable"),
-    updated_at: text("updated_at").notNull(),
-    // 服务端计算的实时网速（bytes/s，无法计算时为空）
-    network_rx_speed: real("network_rx_speed"),
-    network_tx_speed: real("network_tx_speed"),
-    // 月流量累计状态（字节；last_total_* 为上次上报的累计计数器基准）
-    month_rx: int("month_rx").default(0),
-    month_tx: int("month_tx").default(0),
-    last_total_rx: int("last_total_rx"),
-    last_total_tx: int("last_total_tx"),
-    // 当前流量周期起点（UTC，YYYY-MM-DD）
-    month_reset_at: text("month_reset_at"),
-  },
-  (table) => ({
-    reportedAtIdx: index("agent_latest_metrics_reported_at_idx").on(
-      table.reported_at
-    ),
-  })
-);
-
 // v2 Agent 当前指标；时间统一为 Unix 毫秒，兼容期与 agent_latest_metrics 双写。
 export const agentCurrentMetrics = sqliteTable(
   "agent_current_metrics",
@@ -520,156 +481,42 @@ export const agentCurrentMetrics = sqliteTable(
   })
 );
 
-// 客户端资源指标表
-export const agentMetrics24h = sqliteTable(
-  "agent_metrics_24h",
+// v5 指标块：一分钟一行，行内是列式压缩的 60 个采样点。
+// 两种分辨率共用本表，仅 resolution 取值不同：
+//   resolution=1  -> 桶为 1 分钟（60 × 1 秒槽），1 秒精度原始数据
+//   resolution=60 -> 桶为 1 小时（60 × 1 分钟槽），avg/min/max 三聚合
+//
+// 刻意使用普通 rowid 表而非 WITHOUT ROWID：块行约 2.6 KB，远超页面大小的
+// 1/20（约 205 B），WITHOUT ROWID 会把大 payload 直接塞进索引 B-tree 造成
+// overflow 链，SQLite 官方明确建议此场景不要用。唯一索引承担主键语义，
+// rowid 则让 GC 可以走 `WHERE rowid IN (...)` 的批量删除。
+export const agentMetricBlocks = sqliteTable(
+  "agent_metric_blocks",
   {
-    id: int("id").primaryKey({ autoIncrement: true }),
-    agent_id: int("agent_id")
-      .notNull()
-      .references(() => agents.id),
-    timestamp: text("timestamp").default("CURRENT_TIMESTAMP"),
-    cpu_usage: real("cpu_usage"),
-    cpu_cores: int("cpu_cores"),
-    cpu_model: text("cpu_model"),
-    memory_total: int("memory_total"),
-    memory_used: int("memory_used"),
-    memory_free: int("memory_free"),
-    memory_usage_rate: real("memory_usage_rate"),
-    load_1: real("load_1"),
-    load_5: real("load_5"),
-    load_15: real("load_15"),
-    disk_metrics: text("disk_metrics"),
-    network_metrics: text("network_metrics"),
-  },
-  (table) => ({
-    // agent_id 和 timestamp 的联合索引，用于优化按代理和时间查询的性能
-    agentTimestampIdx: index("agent_metrics_24h_agent_timestamp_idx").on(
-      table.agent_id,
-      table.timestamp
-    ),
-  })
-);
-
-// 客户端历史指标表（整型分区主键：partitionId * 10^13 + YYMMDDHHmmss）
-// 兼容旧历史的只读表；每周轮换出的 agent_metrics_history_old 由运行时裸 SQL管理。
-// 新 v4 样本事实源是 agent_report_samples，本表仅用于升级窗口内的旧数据查询。
-export const agentMetricsHistory = sqliteTable("agent_metrics_history", {
-  id: int("id").primaryKey(),
-  agent_id: int("agent_id").notNull(),
-  timestamp: text("timestamp"),
-  cpu_usage: real("cpu_usage"),
-  cpu_cores: int("cpu_cores"),
-  cpu_model: text("cpu_model"),
-  memory_total: int("memory_total"),
-  memory_used: int("memory_used"),
-  memory_free: int("memory_free"),
-  memory_usage_rate: real("memory_usage_rate"),
-  load_1: real("load_1"),
-  load_5: real("load_5"),
-  load_15: real("load_15"),
-  disk_metrics: text("disk_metrics"),
-  network_metrics: text("network_metrics"),
-  swap_total: int("swap_total"),
-  swap_used: int("swap_used"),
-  process_count: int("process_count"),
-  tcp_connections: int("tcp_connections"),
-  udp_connections: int("udp_connections"),
-  ping_json: text("ping_json"),
-  ipv4_reachable: int("ipv4_reachable"),
-  ipv6_reachable: int("ipv6_reachable"),
-  // 服务端计算的实时网速（bytes/s，无法计算时为空）
-  network_rx_speed: real("network_rx_speed"),
-  network_tx_speed: real("network_tx_speed"),
-});
-
-// 客户端聚合指标表
-export const agentMetricRollups = sqliteTable(
-  "agent_metric_rollups",
-  {
-    id: int("id").primaryKey({ autoIncrement: true }),
+    id: int("id").primaryKey(),
     agent_id: int("agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    bucket_start: text("bucket_start").notNull(),
-    bucket_size_seconds: int("bucket_size_seconds").notNull(),
-    sample_count: int("sample_count").notNull().default(0),
-    cpu_avg: real("cpu_avg"),
-    cpu_min: real("cpu_min"),
-    cpu_max: real("cpu_max"),
-    cpu_p95: real("cpu_p95"),
-    memory_avg: real("memory_avg"),
-    memory_min: real("memory_min"),
-    memory_max: real("memory_max"),
-    memory_p95: real("memory_p95"),
-    disk_max: real("disk_max"),
-    load_avg: real("load_avg"),
-    network_delta_json: text("network_delta_json"),
-    threshold_events_json: text("threshold_events_json"),
-    created_at: text("created_at").notNull(),
+    resolution: int("resolution").notNull(),
+    // epoch 秒。桶起点，由 resolution 决定跨度
+    bucket_start: int("bucket_start").notNull(),
+    // 【实际存在】的槽数，用于 upsert 单调守卫；与块头里恒为 60 的 slot_count 不同
+    point_count: int("point_count").notNull(),
+    codec: int("codec").notNull(),
+    // length(data)，GC 统计预算时避免反复计算
+    byte_size: int("byte_size").notNull(),
+    data: blob("data").notNull(),
   },
   (table) => ({
-    agentBucketUniqueIdx: uniqueIndex(
-      "agent_metric_rollups_agent_bucket_unique_idx"
-    ).on(table.agent_id, table.bucket_start, table.bucket_size_seconds),
-    agentBucketIdx: index("agent_metric_rollups_agent_bucket_idx").on(
+    keyIdx: uniqueIndex("agent_metric_blocks_key_idx").on(
       table.agent_id,
+      table.resolution,
       table.bucket_start
     ),
-  })
-);
-
-// Agent v4 上报幂等账本。HTTP 入口直接完成轻量化 D1 批量写入，
-// payload_json 处理完成后立即清空，report_id + digest 用于识别安全重投。
-export const agentReports = sqliteTable(
-  "agent_reports",
-  {
-    report_id: text("report_id").primaryKey(),
-    agent_id: int("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
-    payload_digest: text("payload_digest").notNull(),
-    payload_json: text("payload_json").notNull(),
-    sample_count: int("sample_count").notNull(),
-    status: text("status").notNull().default("pending"),
-    received_at: text("received_at").notNull(),
-    processed_at: text("processed_at"),
-    last_error: text("last_error"),
-    created_at: text("created_at").notNull(),
-    updated_at: text("updated_at").notNull(),
-  },
-  (table) => ({
-    agentReceivedIdx: index("agent_reports_agent_received_at_idx").on(
-      table.agent_id,
-      table.received_at
+    gcIdx: index("agent_metric_blocks_gc_idx").on(
+      table.resolution,
+      table.bucket_start
     ),
-    statusUpdatedIdx: index("agent_reports_status_updated_at_idx").on(
-      table.status,
-      table.updated_at
-    ),
-  })
-);
-
-// v4 原始样本按 report_id + sample_index 不可变落库；重投同一 Report 不重复写行。
-export const agentReportSamples = sqliteTable(
-  "agent_report_samples",
-  {
-    report_id: text("report_id")
-      .notNull()
-      .references(() => agentReports.report_id, { onDelete: "cascade" }),
-    sample_index: int("sample_index").notNull(),
-    agent_id: int("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
-    collected_at: text("collected_at").notNull(),
-    metrics_json: text("metrics_json").notNull(),
-    created_at: text("created_at").notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.report_id, table.sample_index] }),
-    agentCollectedIdx: index(
-      "agent_report_samples_agent_collected_at_idx"
-    ).on(table.agent_id, table.collected_at),
   })
 );
 

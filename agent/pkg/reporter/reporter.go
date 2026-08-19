@@ -82,11 +82,11 @@ func NewHTTPReporter() *model.HTTPReporter {
 	return reporter
 }
 
-// Report 使用 gzip 发送 v4 批次。调用方只在 2xx 后 Ack Spool，因此 HTTP 超时、
+// Report 使用 gzip 发送 v5 批次。调用方只在 2xx 后 Ack Spool，因此 HTTP 超时、
 // 5xx 或进程退出都会在下一轮重用同一个 report_id 和 Payload。
 func (r *DefaultReporter) Report(ctx context.Context, report *model.AgentReport) (*config.RemoteConfig, error) {
-	if report == nil || report.ReportID == "" || len(report.Samples) == 0 {
-		return nil, errors.New("没有可上报的 v4 批次")
+	if report == nil || report.ReportID == "" || len(report.Blocks) == 0 {
+		return nil, errors.New("没有可上报的 v5 批次")
 	}
 
 	if !r.reporter.Registered {
@@ -138,7 +138,8 @@ func (r *DefaultReporter) Report(ctx context.Context, report *model.AgentReport)
 		log.Println(err)
 		return nil, err
 	}
-	log.Printf("v4 批量上报成功: report_id=%s count=%d compressed_bytes=%d", report.ReportID, len(report.Samples), compressed.Len())
+	log.Printf("v5 批量上报成功: report_id=%s blocks=%d samples=%d compressed_bytes=%d",
+		report.ReportID, len(report.Blocks), report.SampleCount(), compressed.Len())
 	return parseV4ConfigResponse(resp), nil
 }
 

@@ -10,16 +10,14 @@ import {
   linkAgentEnrollmentToken,
   releaseAgentEnrollmentToken,
 } from "./D1AgentCredentialStore";
-import {
-  getHistoryIdRange,
-  normalizeAgentMetricsHours,
-  normalizeHistoryPartitionId,
-} from "../../../utils/historyId";
+import { normalizeAgentMetricsHours } from "../../../utils/agentMetricsHours";
 import type { AgentMutation, AgentReportSample, AgentView } from "../domain/models";
+import { downsample, queryAgentSamples } from "../metricblock/query";
+import type { BlockSample } from "../metricblock/materialize";
 
 import { createAgentUseCases } from "../composition";
 
-export { normalizeAgentMetricsHours } from "../../../utils/historyId";
+export { normalizeAgentMetricsHours } from "../../../utils/agentMetricsHours";
 
 const LEGACY_AGENT_LIST_LIMIT = 500;
 
@@ -519,127 +517,82 @@ export async function importLegacyAgents(
   return { created, skipped, issuedCredentials };
 }
 
-function sampleToMetrics(agentId: number, sample: AgentReportSample): Metrics {
-  return {
-    agent_id: agentId,
-    timestamp: sample.collected_at,
-    cpu_usage: sample.cpu?.usage,
-    cpu_cores: sample.cpu?.cores,
-    cpu_model: sample.cpu?.model_name,
-    memory_total: sample.memory?.total,
-    memory_used: sample.memory?.used,
-    memory_free: sample.memory?.free,
-    memory_usage_rate: sample.memory?.usage_rate,
-    load_1: sample.load?.load1,
-    load_5: sample.load?.load5,
-    load_15: sample.load?.load15,
-    disk_metrics: JSON.stringify(sample.disks ?? []),
-    network_metrics: JSON.stringify(sample.network ?? []),
-    swap_total: sample.swap?.total,
-    swap_used: sample.swap?.used,
-    process_count: sample.process_count,
-    tcp_connections: sample.tcp_connections,
-    udp_connections: sample.udp_connections,
-    ping_json: JSON.stringify(sample.ping ?? {}),
-    ipv4_reachable: sample.ipv4_reachable == null ? null : sample.ipv4_reachable ? 1 : 0,
-    ipv6_reachable: sample.ipv6_reachable == null ? null : sample.ipv6_reachable ? 1 : 0,
-    network_rx_speed: sample.network_rx_speed ?? null,
-    network_tx_speed: sample.network_tx_speed ?? null,
-  };
-}
-
-function metricIdentity(metric: Metrics) {
-  return JSON.stringify({
-    agent_id: metric.agent_id,
-    timestamp: metric.timestamp,
-    cpu_usage: metric.cpu_usage ?? null,
-    cpu_cores: metric.cpu_cores ?? null,
-    cpu_model: metric.cpu_model ?? null,
-    memory_total: metric.memory_total ?? null,
-    memory_used: metric.memory_used ?? null,
-    memory_free: metric.memory_free ?? null,
-    memory_usage_rate: metric.memory_usage_rate ?? null,
-    load_1: metric.load_1 ?? null,
-    load_5: metric.load_5 ?? null,
-    load_15: metric.load_15 ?? null,
-    disk_metrics: metric.disk_metrics ?? "[]",
-    network_metrics: metric.network_metrics ?? "[]",
-    swap_total: metric.swap_total ?? null,
-    swap_used: metric.swap_used ?? null,
-    process_count: metric.process_count ?? null,
-    tcp_connections: metric.tcp_connections ?? null,
-    udp_connections: metric.udp_connections ?? null,
-    ping_json: metric.ping_json ?? "{}",
-    ipv4_reachable: metric.ipv4_reachable ?? null,
-    ipv6_reachable: metric.ipv6_reachable ?? null,
-  });
-}
+/** 仪表盘历史图返回的点数上限。 */
+const DASHBOARD_CHART_POINTS = 160;
 
 export async function queryLegacyAgentMetrics(env: Bindings, agentId: number, hours: number) {
   const contractMode = isContractMode(env);
   const agent = await env.DB.prepare(
     contractMode
-      ? `SELECT 0 AS history_partition_id FROM agent_nodes
+      ? `SELECT 1 AS ok FROM agent_nodes
          WHERE id = ? AND deleted_at_ms IS NULL LIMIT 1`
-      : `SELECT history_partition_id FROM agents
+      : `SELECT 1 AS ok FROM agents
          WHERE id = ? AND deleted_at IS NULL LIMIT 1`
   )
     .bind(agentId)
-    .first<{ history_partition_id: number | null }>();
+    .first<{ ok: number }>();
   if (!agent) return null;
-  const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
-  const samples = await env.DB.prepare(
-    `SELECT metrics_json FROM agent_report_samples
-     WHERE agent_id = ? AND collected_at >= ?
-     ORDER BY collected_at ASC LIMIT 10000`
-  )
-    .bind(agentId, cutoff)
-    .all<{ metrics_json: string }>();
-  const parsedSamples = samples.results.flatMap((row) => {
-    try {
-      return [sampleToMetrics(agentId, JSON.parse(row.metrics_json) as AgentReportSample)];
-    } catch {
-      return [];
-    }
-  });
 
-  const partitionId = normalizeHistoryPartitionId(agent.history_partition_id);
-  const legacyRows: Metrics[] = [];
-  for (const table of contractMode
-    ? []
-    : await []) {
-    if (table === "agent_metrics_24h") {
-      const rows = await env.DB.prepare(
-        `SELECT * FROM agent_metrics_24h
-         WHERE agent_id = ? AND timestamp >= ?
-         ORDER BY timestamp ASC LIMIT 10000`
-      )
-        .bind(agentId, cutoff)
-        .all<Metrics>();
-      legacyRows.push(...rows.results);
-      continue;
-    }
-    if (!partitionId) continue;
-    const { startId, endId } = getHistoryIdRange(
-      partitionId,
-      Date.now() - hours * 3_600_000,
-      Date.now()
-    );
-    const rows = await env.DB.prepare(
-      `SELECT * FROM "${table}" WHERE id BETWEEN ? AND ? ORDER BY id ASC LIMIT 10000`
-    )
-      .bind(startId, endId)
-      .all<Metrics>();
-    legacyRows.push(...rows.results);
-  }
-  const merged = new Map<string, Metrics>();
-  for (const row of legacyRows) merged.set(metricIdentity(row), row);
-  for (const row of parsedSamples) merged.set(metricIdentity(row), row);
-  const ordered = [...merged.values()].sort(
-    (left, right) => Date.parse(left.timestamp ?? "") - Date.parse(right.timestamp ?? "")
+  const toSec = Math.floor(Date.now() / 1000);
+  const fromSec = toSec - hours * 3600;
+  const { samples } = await queryAgentSamples(env, agentId, fromSec, toSec);
+
+  return downsample(
+    samples.map((sample) => blockSampleToMetrics(agentId, sample)),
+    DASHBOARD_CHART_POINTS
   );
-  const step = Math.max(1, Math.ceil(ordered.length / 160));
-  return ordered.filter((_, index) => index % step === 0).slice(-160);
+}
+
+/** 把还原出的块样本映射成仪表盘沿用的 Metrics 形状。 */
+function blockSampleToMetrics(agentId: number, sample: BlockSample): Metrics {
+  return {
+    agent_id: agentId,
+    timestamp: new Date(sample.timestampMs).toISOString(),
+    cpu_usage: sample.cpuUsage ?? undefined,
+    // CPU 型号与核数属于静态元数据，不入块；历史图不需要，留空
+    memory_total: sample.memoryTotal,
+    memory_used: sample.memoryUsed ?? undefined,
+    memory_free: sample.memoryFree ?? undefined,
+    memory_usage_rate: sample.memoryUsageRate ?? undefined,
+    load_1: sample.load1 ?? undefined,
+    load_5: sample.load5 ?? undefined,
+    load_15: sample.load15 ?? undefined,
+    disk_metrics: JSON.stringify(
+      sample.disks.map((disk) => ({
+        mount_point: disk.mountPoint,
+        total: disk.total,
+        used: disk.used,
+        free: disk.free,
+        usage_rate: disk.usageRate,
+      }))
+    ),
+    network_metrics: JSON.stringify(
+      sample.nets.map((net) => ({
+        interface: net.iface,
+        bytes_sent: net.bytesSent,
+        bytes_recv: net.bytesRecv,
+        packets_sent: net.packetsSent,
+        packets_recv: net.packetsRecv,
+      }))
+    ),
+    swap_total: sample.swapTotal,
+    swap_used: sample.swapUsed ?? undefined,
+    process_count: sample.processCount ?? undefined,
+    tcp_connections: sample.tcpConnections ?? undefined,
+    udp_connections: sample.udpConnections ?? undefined,
+    ping_json: JSON.stringify(
+      Object.fromEntries(
+        sample.pings.map((ping) => [
+          ping.key,
+          { latency_ms: ping.latencyMs, loss: ping.loss },
+        ])
+      )
+    ),
+    ipv4_reachable:
+      sample.ipv4Reachable === null ? undefined : sample.ipv4Reachable ? 1 : 0,
+    ipv6_reachable:
+      sample.ipv6Reachable === null ? undefined : sample.ipv6Reachable ? 1 : 0,
+  } as Metrics;
 }
 
 export async function queryLatestLegacyAgentMetric(env: Bindings, agentId: number) {
@@ -652,19 +605,15 @@ export async function queryLatestLegacyAgentMetric(env: Bindings, agentId: numbe
     .bind(agentId)
     .first<{ id: number }>();
   if (!exists) return null;
-  const currentMetricsReady = contractMode || true;
   const row = await env.DB.prepare(
-    currentMetricsReady
-      ? `SELECT agent_id, metrics_json,
-                CASE WHEN collected_at_ms IS NULL THEN NULL
-                     ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
-                                   collected_at_ms / 1000.0, 'unixepoch') END
-                  AS collected_at,
-                strftime('%Y-%m-%dT%H:%M:%fZ',
-                         reported_at_ms / 1000.0, 'unixepoch') AS reported_at
-         FROM agent_current_metrics WHERE agent_id = ? LIMIT 1`
-      : `SELECT agent_id, metrics_json, collected_at, reported_at
-         FROM agent_latest_metrics WHERE agent_id = ? LIMIT 1`
+    `SELECT agent_id, metrics_json,
+            CASE WHEN collected_at_ms IS NULL THEN NULL
+                 ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
+                               collected_at_ms / 1000.0, 'unixepoch') END
+              AS collected_at,
+            strftime('%Y-%m-%dT%H:%M:%fZ',
+                     reported_at_ms / 1000.0, 'unixepoch') AS reported_at
+     FROM agent_current_metrics WHERE agent_id = ? LIMIT 1`
   )
     .bind(agentId)
     .first<LatestMetricRow>();
@@ -676,22 +625,16 @@ export async function queryLatestAgentMetricsForIds(
   agentIds: number[]
 ) {
   if (agentIds.length === 0) return new Map<number, Metrics>();
-  const currentMetricsReady =
-    isContractMode(env) || true;
   const rows = await env.DB.prepare(
-    currentMetricsReady
-      ? `SELECT agent_id, metrics_json,
-                CASE WHEN collected_at_ms IS NULL THEN NULL
-                     ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
-                                   collected_at_ms / 1000.0, 'unixepoch') END
-                  AS collected_at,
-                strftime('%Y-%m-%dT%H:%M:%fZ',
-                         reported_at_ms / 1000.0, 'unixepoch') AS reported_at
-         FROM agent_current_metrics
-         WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
-      : `SELECT agent_id, metrics_json, collected_at, reported_at
-         FROM agent_latest_metrics
-         WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
+    `SELECT agent_id, metrics_json,
+            CASE WHEN collected_at_ms IS NULL THEN NULL
+                 ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
+                               collected_at_ms / 1000.0, 'unixepoch') END
+              AS collected_at,
+            strftime('%Y-%m-%dT%H:%M:%fZ',
+                     reported_at_ms / 1000.0, 'unixepoch') AS reported_at
+     FROM agent_current_metrics
+     WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
   )
     .bind(JSON.stringify(agentIds))
     .all<LatestMetricRow>();

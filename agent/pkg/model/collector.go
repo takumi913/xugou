@@ -79,20 +79,51 @@ type AgentReportSample struct {
 	DynamicMetrics
 }
 
-// AgentReport 是 v4 数据面持久化和传输的稳定信封。report_id 在本地 Spool
+// AgentReportProtocolVersion 是当前数据面协议版本。
+// v4 以逐条 JSON 样本上报，v5 改为列式压缩块，两者不兼容。
+const AgentReportProtocolVersion = 5
+
+// AgentReportBlock 是一个列式压缩的指标块。编码规格见 pkg/metricblock，
+// 服务端按 (agent_id, resolution, bucket_start) 幂等 upsert。
+type AgentReportBlock struct {
+	// Resolution 为 1（1 秒块，桶跨 1 分钟）或 60（1 分钟聚合块，桶跨 1 小时）
+	Resolution  int   `json:"resolution"`
+	BucketStart int64 `json:"bucket_start"`
+	// PointCount 是【实际存在】的槽数，服务端用它做单调守卫，
+	// 与块头里恒为 60 的 slot_count 不是一回事。
+	PointCount int    `json:"point_count"`
+	Codec      int    `json:"codec"`
+	Data       string `json:"data"` // base64 (std, 带 padding)
+}
+
+// AgentReport 是 v5 数据面持久化和传输的稳定信封。report_id 在本地 Spool
 // 首次组批时生成，网络重试和进程重启后保持不变。
 type AgentReport struct {
-	ProtocolVersion       int                  `json:"protocol_version"`
-	AgentVersion          string               `json:"agent_version,omitempty"`
-	ReportID              string               `json:"report_id"`
-	Hostname              string               `json:"hostname,omitempty"`
-	IPAddresses           []string             `json:"ip_addresses,omitempty"`
-	OS                    string               `json:"os,omitempty"`
-	Version               string               `json:"version,omitempty"`
-	BootTime              int64                `json:"boot_time,omitempty"`
-	KeepaliveSeconds      int                  `json:"keepalive_seconds,omitempty"`
-	ReportIntervalSeconds int                  `json:"report_interval_seconds,omitempty"`
-	Samples               []*AgentReportSample `json:"samples"`
+	ProtocolVersion       int                 `json:"protocol_version"`
+	AgentVersion          string              `json:"agent_version,omitempty"`
+	ReportID              string              `json:"report_id"`
+	Hostname              string              `json:"hostname,omitempty"`
+	IPAddresses           []string            `json:"ip_addresses,omitempty"`
+	OS                    string              `json:"os,omitempty"`
+	Version               string              `json:"version,omitempty"`
+	BootTime              int64               `json:"boot_time,omitempty"`
+	KeepaliveSeconds      int                 `json:"keepalive_seconds,omitempty"`
+	ReportIntervalSeconds int                 `json:"report_interval_seconds,omitempty"`
+	Blocks                []*AgentReportBlock `json:"blocks"`
+	// Latest 是本批次最后一条原始样本，服务端据此更新 agent_current_metrics
+	// 以及 CPU 型号、设备名等不进块的静态元数据。
+	Latest *AgentReportSample `json:"latest,omitempty"`
+}
+
+// SampleCount 汇总本次上报覆盖的采样点数，仅用于日志。
+func (r *AgentReport) SampleCount() int {
+	total := 0
+	for _, block := range r.Blocks {
+		if block.Resolution == 1 {
+			total += block.PointCount
+		}
+	}
+	return total
 }
 
 // LiveMetricFrame 是 Agent 到 Worker 独立上行 WebSocket 的实时协议。

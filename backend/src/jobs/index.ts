@@ -1,11 +1,15 @@
 // 导出所有定时任务
 import monitorTask from "./monitor-task";
 import agentTask from "./agent-task";
-import {
-  checkExpiringAgents,
-  shouldRunDailyExpiryCheck,
-} from "./expiry-task";
+import { checkExpiringAgents } from "./expiry-task";
 import { getEnvNumber } from "../utils/env";
+import { runAgentBlockRetention } from "./agent-block-retention";
+import {
+  claimIntervalRun,
+  DAILY_INTERVAL_MS,
+  INTERVAL_KEY_CLEANUP,
+  INTERVAL_KEY_EXPIRY_CHECK,
+} from "./interval-gate";
 
 import {
   rotateNotificationSecretKek,
@@ -18,14 +22,12 @@ import {
 import type { Bindings } from "../models/db";
 import { writeStructuredLog } from "../platform/observability/StructuredLogger";
 
-const DEFAULT_AGENT_ROLLUP_RETENTION_DAYS = 30;
 const DEFAULT_MONITOR_ROLLUP_RETENTION_DAYS = 90;
-const DEFAULT_AGENT_REPORT_RETENTION_DAYS = 30;
 const DEFAULT_MONITOR_SAMPLE_RETENTION_DAYS = 90;
 const DEFAULT_MONITOR_DAILY_ROLLUP_RETENTION_DAYS = 3650;
 const DEFAULT_MONITOR_INCIDENT_RETENTION_DAYS = 180;
 const DEFAULT_SECURITY_AUDIT_RETENTION_DAYS = 180;
-const DEFAULT_STATUS_PUBLICATION_RETENTION_DAYS = 7;
+const DEFAULT_STATUS_PUBLICATION_RETENTION_DAYS = 1;
 const DEFAULT_PROCESSED_EVENT_RETENTION_DAYS = 30;
 const DEFAULT_NOTIFICATION_EVENT_RETENTION_DAYS = 90;
 const SECURITY_RATE_LIMIT_RETENTION_DAYS = 7;
@@ -37,10 +39,42 @@ export const runScheduledTasks = async (
   env: Bindings,
   ctx: ExecutionContext
 ) => {
-  try {
-    const now = new Date();
+  const nowMs = Number.isFinite(Number(event.scheduledTime))
+    ? Number(event.scheduledTime)
+    : Date.now();
+  const now = new Date(nowMs);
+  let failures = 0;
 
+  // 每个子任务都自己兜住异常：2026-08-12 的事故就是「库满 → monitorTask 抛异常 →
+  // 清理任务永远走不到 → 库永远满」的自锁循环，任何一个环节都不该能掐断后面的环节。
+  const runIsolated = async (operation: string, task: () => Promise<unknown>) => {
+    try {
+      await task();
+      return true;
+    } catch (error) {
+      failures += 1;
+      writeStructuredLog(env, {
+        service: "cron",
+        operation,
+        result: "failure",
+        errorCode: `CRON_${operation.toUpperCase()}_FAILED`,
+        error,
+      });
+      return false;
+    }
+  };
 
+  // 清理排在最前面：它是自愈路径，必须先于任何可能因库满而失败的任务执行。
+  await runIsolated("cleanup_old_records", async () => {
+    if (await claimIntervalRun(env, INTERVAL_KEY_CLEANUP, DAILY_INTERVAL_MS, nowMs)) {
+      await cleanupOldRecords(env);
+    }
+  });
+
+  // 块保留策略自己记日志、自己吞异常，每个 tick 都跑。
+  await runAgentBlockRetention(env, nowMs);
+
+  {
     try {
       const notificationRotation = await rotateNotificationSecretKek(env, 10);
       if (notificationRotation.rotated > 0) {
@@ -74,25 +108,27 @@ export const runScheduledTasks = async (
       });
     }
 
-    // 执行监控检查任务
-    await monitorTask.scheduled(event, env, ctx);
+  }
 
-    // Agent 定时任务只推进在线状态与低频事件。
-    await agentTask.scheduled(event, env, ctx);
+  // 执行监控检查任务
+  await runIsolated("monitor_task", () => monitorTask.scheduled(event, env, ctx));
 
-    // 执行清理任务 - 每天执行一次
-    const hour = now.getUTCHours();
-    const minute = now.getUTCMinutes();
-    if (hour === 0 && minute === 30) {
-      await cleanupOldRecords(env);
+  // Agent 定时任务只推进在线状态与低频事件。
+  await runIsolated("agent_task", () => agentTask.scheduled(event, env, ctx));
+
+  // 客户端账单到期检测/自动续费 - 每天一次。
+  await runIsolated("expiry_check", async () => {
+    if (
+      await claimIntervalRun(env, INTERVAL_KEY_EXPIRY_CHECK, DAILY_INTERVAL_MS, nowMs)
+    ) {
+      await checkExpiringAgents(env, nowMs);
     }
+  });
 
-    // 客户端账单到期检测/自动续费 - 每天 UTC 12:00 执行一次
-    if (shouldRunDailyExpiryCheck(now)) {
-      await checkExpiringAgents(env);
-    }
-  } catch (error) {
-    throw error;
+  // 全部隔离执行完毕后再抛：让 Cloudflare 把这次触发标记为失败以便告警，
+  // 但不影响本次已经跑完的其它任务。
+  if (failures > 0) {
+    throw new Error(`scheduled tasks failed: ${failures}`);
   }
 };
 
@@ -109,14 +145,6 @@ export async function cleanupOldRecords(env: Bindings) {
     .bind(cleanupStartedAt)
     .run();
 
-  const agentRollupCutoff = getCutoffIso(
-    getEnvNumber(
-      env,
-      "AGENT_ROLLUP_RETENTION_DAYS",
-      DEFAULT_AGENT_ROLLUP_RETENTION_DAYS,
-      { min: 1, max: 3650 }
-    )
-  );
   const monitorRollupCutoff = getCutoffIso(
     getEnvNumber(
       env,
@@ -138,14 +166,6 @@ export async function cleanupOldRecords(env: Bindings) {
       env,
       "MONITOR_INCIDENT_RETENTION_DAYS",
       DEFAULT_MONITOR_INCIDENT_RETENTION_DAYS,
-      { min: 1, max: 3650 }
-    )
-  );
-  const agentReportCutoff = getCutoffIso(
-    getEnvNumber(
-      env,
-      "AGENT_REPORT_RETENTION_DAYS",
-      DEFAULT_AGENT_REPORT_RETENTION_DAYS,
       { min: 1, max: 3650 }
     )
   );
@@ -183,10 +203,9 @@ export async function cleanupOldRecords(env: Bindings) {
       max: 3650,
     })
   );
+  // Agent 指标的保留策略已整体搬到 agent-block-retention.ts：
+  // 块表按年龄 + 字节预算回收，不再有 agent_metric_rollups / agent_reports 的按天清理。
   await env.DB.batch([
-    env.DB.prepare(`DELETE FROM agent_metric_rollups WHERE bucket_start < ?`).bind(
-      agentRollupCutoff
-    ),
     env.DB.prepare(
       `DELETE FROM monitor_check_rollups
        WHERE bucket_size_seconds < 86400 AND bucket_start < ?`
@@ -198,12 +217,6 @@ export async function cleanupOldRecords(env: Bindings) {
     env.DB.prepare(
       `DELETE FROM monitor_incidents WHERE started_at < ? AND ended_at IS NOT NULL`
     ).bind(monitorIncidentCutoff),
-    // Raw samples are retained directly in D1 for a bounded window. Rollups keep
-    // long-term trends, so cold R2 copies are unnecessary.
-    env.DB.prepare(
-      `DELETE FROM agent_reports
-       WHERE received_at < ? AND status IN ('processed', 'failed')`
-    ).bind(agentReportCutoff),
     env.DB.prepare(`DELETE FROM monitor_check_samples WHERE checked_at < ?`).bind(
       monitorSampleCutoff
     ),

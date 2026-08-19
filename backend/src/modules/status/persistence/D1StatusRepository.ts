@@ -3,6 +3,11 @@ import { writeStructuredLog } from "../../../platform/observability/StructuredLo
 import { QueueJobPublisher } from "../../../platform/queues/QueuePublisher";
 import type { StatusRepositoryPort } from "../application/StatusUseCases";
 import type { StatusPageConfigCommand } from "../domain/models";
+import type { BlockSample } from "../../agents/metricblock/materialize";
+import {
+  downsample,
+  queryAgentSamplesBatch,
+} from "../../agents/metricblock/query";
 
 import {
   projectPublicDiskMetrics,
@@ -92,122 +97,61 @@ function toLatestMetric(row: MetricRow | undefined, onInvalid: InvalidMetricHand
   };
 }
 
-function toRollupMetric(
-  row: Record<string, unknown>,
-  onInvalid: InvalidMetricHandler
-): PublicAgentMetric {
-  const diskMax = typeof row.disk_max === "number" ? row.disk_max : null;
-  return {
-    id: metricId(row.id),
-    agent_id: Number(row.agent_id),
-    timestamp: metricText(row.bucket_start),
-    cpu_usage: metricNumber(row.cpu_avg ?? row.cpu_max),
-    memory_usage_rate: metricNumber(row.memory_avg ?? row.memory_max),
-    load_1: metricNumber(row.load_avg),
-    load_5: metricNumber(row.load_avg),
-    load_15: metricNumber(row.load_avg),
-    disk_metrics:
-      diskMax === null
-        ? []
-        : [
-            {
-              device: "rollup",
-              mount_point: "/",
-              total: 0,
-              used: 0,
-              free: 0,
-              usage_rate: diskMax,
-              fs_type: "rollup",
-            },
-          ],
-    network_metrics:
-      projectPublicNetworkMetrics(row.network_delta_json) ??
-      (onInvalid("network_metrics"), []),
-  };
-}
-
-function toHistoryMetric(
-  row: Record<string, unknown>,
-  onInvalid: InvalidMetricHandler
-): PublicAgentMetric {
-  return {
-    id: metricId(row.id),
-    agent_id: Number(row.agent_id),
-    timestamp: metricText(row.timestamp),
-    cpu_usage: metricNumber(row.cpu_usage),
-    cpu_cores: metricNumber(row.cpu_cores),
-    cpu_model: metricText(row.cpu_model),
-    memory_total: metricNumber(row.memory_total),
-    memory_used: metricNumber(row.memory_used),
-    memory_free: metricNumber(row.memory_free),
-    memory_usage_rate: metricNumber(row.memory_usage_rate),
-    load_1: metricNumber(row.load_1),
-    load_5: metricNumber(row.load_5),
-    load_15: metricNumber(row.load_15),
-    ...publicMetricArrays(row.disk_metrics, row.network_metrics, onInvalid),
-    swap_total: metricNumber(row.swap_total),
-    swap_used: metricNumber(row.swap_used),
-    process_count: metricNumber(row.process_count),
-    tcp_connections: metricNumber(row.tcp_connections),
-    udp_connections: metricNumber(row.udp_connections),
-    ipv4_reachable: metricNumber(row.ipv4_reachable),
-    ipv6_reachable: metricNumber(row.ipv6_reachable),
-    network_rx_speed: metricNumber(row.network_rx_speed),
-    network_tx_speed: metricNumber(row.network_tx_speed),
-  };
-}
-
 function objectValue(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
 }
 
-function toReportSampleMetric(row: {
-  report_id: string;
-  sample_index: number;
-  agent_id: number;
-  metrics_json: string;
-}, onInvalid: InvalidMetricHandler): PublicAgentMetric {
-  const sample = objectValue(JSON.parse(row.metrics_json));
-  const cpu = objectValue(sample.cpu);
-  const memory = objectValue(sample.memory);
-  const load = objectValue(sample.load);
-  const swap = objectValue(sample.swap);
+/**
+ * 把还原出的块样本投影成状态页的公开指标。
+ *
+ * 相比 v4 从 metrics_json 里解析任意 JSON，块格式只承载类型化数值与
+ * 挂载点/网卡名，没有自由字段可以夹带秘密 —— 原先针对
+ * PUBLIC_METRIC_SENSITIVE_KEY 的扫描在这条路径上不再需要。
+ */
+function blockSampleToPublicMetric(
+  agentId: number,
+  sample: BlockSample
+): PublicAgentMetric {
   return {
-    id: `${row.report_id}:${row.sample_index}`,
-    agent_id: row.agent_id,
-    timestamp: metricText(sample.collected_at),
-    cpu_usage: metricNumber(cpu.usage),
-    cpu_cores: metricNumber(cpu.cores),
-    cpu_model: metricText(cpu.model_name),
-    memory_total: metricNumber(memory.total),
-    memory_used: metricNumber(memory.used),
-    memory_free: metricNumber(memory.free),
-    memory_usage_rate: metricNumber(memory.usage_rate),
-    load_1: metricNumber(load.load1),
-    load_5: metricNumber(load.load5),
-    load_15: metricNumber(load.load15),
-    ...publicMetricArrays(sample.disks, sample.network, onInvalid),
-    swap_total: metricNumber(swap.total),
-    swap_used: metricNumber(swap.used),
-    process_count: metricNumber(sample.process_count),
-    tcp_connections: metricNumber(sample.tcp_connections),
-    udp_connections: metricNumber(sample.udp_connections),
+    id: `${agentId}:${sample.timestampMs}`,
+    agent_id: agentId,
+    timestamp: new Date(sample.timestampMs).toISOString(),
+    cpu_usage: sample.cpuUsage,
+    memory_total: sample.memoryTotal,
+    memory_used: sample.memoryUsed,
+    memory_free: sample.memoryFree,
+    memory_usage_rate: sample.memoryUsageRate,
+    load_1: sample.load1,
+    load_5: sample.load5,
+    load_15: sample.load15,
+    disk_metrics: sample.disks.map((disk) => ({
+      // device/fs_type 是静态元数据，不入块；公开页也不需要
+      device: disk.mountPoint,
+      mount_point: disk.mountPoint,
+      total: disk.total,
+      used: disk.used ?? 0,
+      free: disk.free ?? 0,
+      usage_rate: disk.usageRate ?? 0,
+      fs_type: "",
+    })),
+    network_metrics: sample.nets.map((net) => ({
+      interface: net.iface,
+      bytes_sent: net.bytesSent ?? 0,
+      bytes_recv: net.bytesRecv ?? 0,
+      packets_sent: net.packetsSent ?? 0,
+      packets_recv: net.packetsRecv ?? 0,
+    })),
+    swap_total: sample.swapTotal,
+    swap_used: sample.swapUsed,
+    process_count: sample.processCount,
+    tcp_connections: sample.tcpConnections,
+    udp_connections: sample.udpConnections,
     ipv4_reachable:
-      typeof sample.ipv4_reachable === "boolean"
-        ? sample.ipv4_reachable
-          ? 1
-          : 0
-        : metricNumber(sample.ipv4_reachable),
+      sample.ipv4Reachable === null ? null : sample.ipv4Reachable ? 1 : 0,
     ipv6_reachable:
-      typeof sample.ipv6_reachable === "boolean"
-        ? sample.ipv6_reachable
-          ? 1
-          : 0
-        : metricNumber(sample.ipv6_reachable),
-    network_rx_speed: metricNumber(sample.network_rx_speed),
-    network_tx_speed: metricNumber(sample.network_tx_speed),
+      sample.ipv6Reachable === null ? null : sample.ipv6Reachable ? 1 : 0,
   };
 }
 
@@ -527,31 +471,21 @@ export class D1StatusRepository implements StatusRepositoryPort {
           .bind(config.id)
           .all<PublicAgentSource>(),
         this.env.DB.prepare(
-          true
-            ? `SELECT agent_id,
-                      CASE WHEN collected_at_ms IS NULL THEN NULL
-                           ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
-                                         collected_at_ms / 1000.0, 'unixepoch') END
-                        AS collected_at,
-                      strftime('%Y-%m-%dT%H:%M:%fZ',
-                               reported_at_ms / 1000.0, 'unixepoch') AS reported_at,
-                      cpu_usage, memory_usage_rate, disk_usage_rate, swap_total,
-                      swap_used, process_count, tcp_connections, udp_connections,
-                      ipv4_reachable, ipv6_reachable, network_rx_speed,
-                      network_tx_speed, month_rx, month_tx,
-                      json_extract(metrics_json, '$.disk_metrics') AS disk_metrics,
-                      json_extract(metrics_json, '$.network_metrics') AS network_metrics
-               FROM agent_current_metrics
-               WHERE agent_id IN (${selectedAgentSql})`
-            : `SELECT agent_id, collected_at, reported_at, cpu_usage,
-                      memory_usage_rate, disk_usage_rate, swap_total, swap_used,
-                      process_count, tcp_connections, udp_connections,
-                      ipv4_reachable, ipv6_reachable, network_rx_speed,
-                      network_tx_speed, month_rx, month_tx,
-                      json_extract(metrics_json, '$.disk_metrics') AS disk_metrics,
-                      json_extract(metrics_json, '$.network_metrics') AS network_metrics
-               FROM agent_latest_metrics
-               WHERE agent_id IN (${selectedAgentSql})`
+          `SELECT agent_id,
+                  CASE WHEN collected_at_ms IS NULL THEN NULL
+                       ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
+                                     collected_at_ms / 1000.0, 'unixepoch') END
+                    AS collected_at,
+                  strftime('%Y-%m-%dT%H:%M:%fZ',
+                           reported_at_ms / 1000.0, 'unixepoch') AS reported_at,
+                  cpu_usage, memory_usage_rate, disk_usage_rate, swap_total,
+                  swap_used, process_count, tcp_connections, udp_connections,
+                  ipv4_reachable, ipv6_reachable, network_rx_speed,
+                  network_tx_speed, month_rx, month_tx,
+                  json_extract(metrics_json, '$.disk_metrics') AS disk_metrics,
+                  json_extract(metrics_json, '$.network_metrics') AS network_metrics
+           FROM agent_current_metrics
+           WHERE agent_id IN (${selectedAgentSql})`
         ).bind(config.id).all<MetricRow>(),
       ]);
 
@@ -615,78 +549,35 @@ export class D1StatusRepository implements StatusRepositoryPort {
     };
   }
 
+  /**
+   * 状态页的 24 小时指标曲线。
+   *
+   * 窗口固定 24 小时，远超 1 秒层的适用范围，因此直读 1 分钟聚合层（avg），
+   * 再等距降采样到 MAX_PUBLIC_METRIC_POINTS。
+   *
+   * v4 时代这里要先查 rollup、查不到再回落到原始样本 —— 而 rollup 的写入方
+   * 从未被调用，那张表恒为 0 行，于是永远走 fallback。现在只有一条路径。
+   */
   async buildPublicAgentMetricPublications(agentIds: number[]) {
     const selected = uniquePositiveIds(agentIds).slice(0, MAX_PUBLIC_COMPONENTS_PER_TYPE);
     if (selected.length === 0) return [];
-    const selectedJson = JSON.stringify(selected);
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const rollups = await this.env.DB.prepare(
-      `SELECT id, agent_id, bucket_start, cpu_avg, cpu_max, memory_avg, memory_max,
-              disk_max, load_avg, network_delta_json
-       FROM (
-         SELECT rollup.*,
-                ROW_NUMBER() OVER (
-                  PARTITION BY agent_id ORDER BY bucket_start DESC, id DESC
-                ) AS row_number
-         FROM agent_metric_rollups rollup
-         WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
-           AND bucket_start >= ?
-       ) WHERE row_number <= ?
-       ORDER BY agent_id ASC, bucket_start ASC`
-    )
-      .bind(selectedJson, since, MAX_PUBLIC_METRIC_POINTS)
-      .all<Record<string, unknown>>();
-    const rollupsByAgent = new Map<number, PublicAgentMetric[]>();
-    for (const row of rollups.results) {
-      const agentId = Number(row.agent_id);
-      const metric = toRollupMetric(row, (field) =>
-        this.projectionWarning(agentId, "rollup", field)
-      );
-      rollupsByAgent.set(agentId, [...(rollupsByAgent.get(agentId) ?? []), metric]);
-    }
 
-    const fallbackByAgent = new Map<number, PublicAgentMetric[]>();
-    const samples = await this.env.DB.prepare(
-      `SELECT report_id, sample_index, agent_id, metrics_json
-       FROM (
-         SELECT sample.*,
-                ROW_NUMBER() OVER (
-                  PARTITION BY agent_id
-                  ORDER BY collected_at DESC, report_id DESC, sample_index DESC
-                ) AS row_number
-         FROM agent_report_samples sample
-         WHERE agent_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
-           AND collected_at >= ?
-       ) WHERE row_number <= ?
-       ORDER BY agent_id ASC, collected_at ASC, report_id ASC, sample_index ASC`
-    )
-      .bind(selectedJson, since, MAX_PUBLIC_METRIC_POINTS)
-      .all<{
-        report_id: string;
-        sample_index: number;
-        agent_id: number;
-        metrics_json: string;
-      }>();
-    for (const row of samples.results) {
-      try {
-        const metric = toReportSampleMetric(row, (field) =>
-          this.projectionWarning(row.agent_id, "report_sample", field)
-        );
-        fallbackByAgent.set(row.agent_id, [
-          ...(fallbackByAgent.get(row.agent_id) ?? []),
-          metric,
-        ]);
-      } catch (error) {
-        if (error instanceof Error && error.message === "PUBLIC_METRIC_SENSITIVE_KEY") {
-          throw error;
-        }
-        this.projectionWarning(row.agent_id, "report_sample", "disk_metrics");
-      }
-    }
+    const toSec = Math.floor(Date.now() / 1000);
+    const fromSec = toSec - 24 * 60 * 60;
+    const byAgent = await queryAgentSamplesBatch(
+      this.env,
+      selected,
+      fromSec,
+      toSec,
+      { resolution: 60 }
+    );
 
     return selected.map((agentId) => ({
       agentId,
-      metrics: rollupsByAgent.get(agentId) ?? fallbackByAgent.get(agentId) ?? [],
+      metrics: downsample(
+        byAgent.get(agentId) ?? [],
+        MAX_PUBLIC_METRIC_POINTS
+      ).map((sample) => blockSampleToPublicMetric(agentId, sample)),
     }));
   }
 }

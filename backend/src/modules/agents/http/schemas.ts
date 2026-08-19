@@ -210,9 +210,29 @@ const agentReportSampleSchema = z
   })
   .strict();
 
-export const agentV4ReportSchema = z
+// base64 字符集校验：解码前先挡掉明显非法的输入，避免把垃圾喂给解码器。
+const base64Block = z
+  .string()
+  .min(1)
+  // 32 字节块头 + 维度头 + 描述符 + gzip 载荷；256 KB base64 约合 192 KB 原始，
+  // 远超正常块（约 2.6 KB），只作为兜底上限。
+  .max(262_144)
+  .regex(/^[A-Za-z0-9+/]+={0,2}$/, "block.data 必须是标准 base64");
+
+const agentReportBlockSchema = z
   .object({
-    protocol_version: z.literal(4),
+    resolution: z.union([z.literal(1), z.literal(60)]),
+    bucket_start: z.number().int().min(0).max(4_294_967_295),
+    // 实际存在的槽数；1 秒块与 1 分钟块的槽上限都是 60
+    point_count: z.number().int().min(1).max(60),
+    codec: z.literal(1),
+    data: base64Block,
+  })
+  .strict();
+
+export const agentV5ReportSchema = z
+  .object({
+    protocol_version: z.literal(5),
     agent_version: z.string().trim().min(1).max(128).optional(),
     report_id: z.string().uuid(),
     hostname: z.string().trim().max(255).nullable().optional(),
@@ -222,6 +242,9 @@ export const agentV4ReportSchema = z
     boot_time: z.number().int().nonnegative().nullable().optional(),
     keepalive_seconds: z.number().int().min(1).max(86400).optional(),
     report_interval_seconds: z.number().int().min(10).max(3600).optional(),
-    samples: z.array(agentReportSampleSchema).min(1).max(100),
+    // 一批最多 120 个块：断网恢复时一次补一小时的 1 秒块（60 个）
+    // 外加跨小时的两个聚合块仍有充裕余量。
+    blocks: z.array(agentReportBlockSchema).min(1).max(120),
+    latest: agentReportSampleSchema.optional(),
   })
   .strict();

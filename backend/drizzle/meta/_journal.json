@@ -337,6 +337,20 @@
       "when": 1786420823099,
       "tag": "0047_uneven_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1787137560397,
+      "tag": "0048_even_blue_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1787145025181,
+      "tag": "0049_green_aqueduct",
+      "breakpoints": true
     }
   ]
 }

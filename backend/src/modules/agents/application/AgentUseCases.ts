@@ -11,6 +11,7 @@ import {
   type OrderedCursor,
 } from "../../../shared/pagination/OrderedCursor";
 import type { AgentReportSourceLocation } from "../../../utils/geo";
+import { AgentBlockRejected } from "../persistence/D1AgentReportIngestor";
 
 export interface AgentRepositoryPort {
   listPage(input: { after?: OrderedCursor; limit: number }): Promise<AgentView[]>;
@@ -160,6 +161,11 @@ export class AgentUseCases {
         sourceLocation,
       });
     } catch (error) {
+      // 块自身不合规是客户端的问题，返回 422 让探针不要无限重试同一批坏数据；
+      // 其余异常（DB 故障等）仍是 5xx，探针会带着同一个 report_id 重发。
+      if (error instanceof AgentBlockRejected) {
+        throw new ApplicationProblem(422, "AGENT_BLOCK_INVALID", error.message);
+      }
       throw new ApplicationProblem(
         500,
         "REPORT_PROCESSING_FAILED",

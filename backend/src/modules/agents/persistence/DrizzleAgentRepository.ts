@@ -2,11 +2,7 @@ import { and, asc, eq, gt, isNull, notExists, or } from "drizzle-orm";
 import type { AppDatabase } from "../../../config/db";
 import type { Bindings } from "../../../models/db";
 
-import {
-  agentCredentials,
-  agentReports,
-  agents,
-} from "../../../db/schema";
+import { agentCredentials, agents } from "../../../db/schema";
 import type { AgentRepositoryPort } from "../application/AgentUseCases";
 import type {
   AgentMutation,

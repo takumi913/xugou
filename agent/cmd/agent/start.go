@@ -123,6 +123,10 @@ func runStart(cmd *cobra.Command, args []string) {
 		fmt.Printf("初始化持久化采样队列失败: %v\n", err)
 		return
 	}
+	if discarded := sampleSpool.Discarded(); len(discarded) > 0 {
+		fmt.Printf("已丢弃 %d 个旧版本残留的 spool 文件（结构不兼容，将重新组批）\n",
+			len(discarded))
+	}
 	fmt.Println("使用实时 WebSocket + HTTP 批量上报器")
 	go liveClient.Run(ctx)
 
@@ -284,7 +288,9 @@ func reportSamples(
 		fmt.Printf("提交已确认上报批次失败: report_id=%s err=%v\n", pending.ReportID, err)
 		return remoteConfig
 	}
-	fmt.Printf("系统信息已确认上报，report_id=%s, 样本数=%d, 时间=%s\n", pending.ReportID, len(pending.Samples), time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Printf("系统信息已确认上报，report_id=%s, 块数=%d, 样本数=%d, 时间=%s\n",
+		pending.ReportID, len(pending.Blocks), pending.SampleCount(),
+		time.Now().Format("2006-01-02 15:04:05"))
 	return remoteConfig
 }
 

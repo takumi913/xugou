@@ -4,7 +4,6 @@ import {
   computeTraffic,
   getTrafficPeriodStart,
   normalizeTrafficResetDay,
-  sumNetworkTotals,
 } from "../../../utils/traffic";
 import type { AgentReportCommand } from "../domain/models";
 import { publishLatestMetrics } from "../realtime/MetricsBroadcastPublisher";
@@ -14,12 +13,20 @@ import {
   type AgentReportSourceLocation,
 } from "../../../utils/geo";
 import { requestStatusRebuild } from "../../status/persistence/status-events";
-
-interface StoredReport {
-  agent_id: number;
-  payload_digest: string;
-  status: string;
-}
+import {
+  base64ByteLength,
+  base64ToBytes,
+  decodeBlockBase64,
+  MetricBlockError,
+  type DecodedBlock,
+} from "../metricblock/decode";
+import {
+  blockSamples,
+  maxDiskUsageRate,
+  maxOf,
+  sumNetTotals,
+  type BlockSample,
+} from "../metricblock/materialize";
 
 interface StoredAgentState {
   status: string | null;
@@ -63,26 +70,34 @@ export type AgentReportIngestResult = {
   outcome: "completed" | "duplicate" | "conflict";
 };
 
-function maxDiskUsage(disks: Array<Record<string, unknown>> | undefined) {
-  let maximum: number | null = null;
-  for (const disk of disks ?? []) {
-    if (typeof disk.usage_rate !== "number") continue;
-    maximum = maximum === null ? disk.usage_rate : Math.max(maximum, disk.usage_rate);
+/** 摄入期块校验失败。调用方据此返回 422 而不是 5xx —— 这是客户端的问题。 */
+export class AgentBlockRejected extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentBlockRejected";
   }
-  return maximum;
 }
 
-function latestSample<T extends { collected_at: string }>(samples: T[]) {
-  return samples.reduce((latest, sample) =>
-    Date.parse(sample.collected_at) > Date.parse(latest.collected_at) ? sample : latest
-  );
+function boolToInt(value: boolean | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  return value ? 1 : 0;
 }
 
-function maxFinite(values: Array<number | null | undefined>) {
-  const finite = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value)
-  );
-  return finite.length > 0 ? Math.max(...finite) : null;
+/**
+ * 把 1 秒块还原成按时间升序的样本序列。
+ * 聚合块（resolution=60）只做存储，不参与派生指标计算 —— 它的值是聚合过的，
+ * 拿去算流量差分会重复计数。
+ */
+function materializeHotSamples(
+  decoded: Array<{ resolution: number; block: DecodedBlock }>
+): BlockSample[] {
+  const samples: BlockSample[] = [];
+  for (const entry of decoded) {
+    if (entry.resolution !== 1) continue;
+    samples.push(...blockSamples(entry.block));
+  }
+  samples.sort((left, right) => left.timestampMs - right.timestampMs);
+  return samples;
 }
 
 function previousThresholdState(
@@ -143,12 +158,55 @@ function currentThresholdState(
 }
 
 /**
- * Agent 每 60 秒通过 HTTP 提交一个高密度批次并直接落入 D1。Queue 只接收
- * 状态变化或阈值越界事件；原始样本通过 json_each 在 D1 内展开，避免为每个
- * 样本创建一条 JS statement。
+ * Agent 每 60 秒通过 HTTP 提交一批列式压缩的指标块并直接落入 D1。
+ * Queue 只接收状态变化或阈值越界事件。
+ *
+ * 块按 (agent_id, resolution, bucket_start) 幂等 upsert，重传无副作用，
+ * 因此 v5 不再需要 v4 那套 agent_reports 去重表和 pending/processed/failed 状态机。
  */
 export class D1AgentReportIngestor {
   constructor(private readonly env: Bindings) {}
+
+  /**
+   * 解码并校验上报体里的全部块。
+   *
+   * 写库之前先解码有两个作用：坏块直接拒收而不是先落库再发现；
+   * 以及确认信封里的 resolution/bucket_start/point_count 与块头自述一致 ——
+   * 不一致说明客户端有 bug 或在伪造，这类请求不该污染存储。
+   */
+  private async decodeBlocks(report: AgentReportCommand) {
+    const decoded: Array<{ resolution: number; block: DecodedBlock }> = [];
+    for (const block of report.blocks) {
+      let parsed: DecodedBlock;
+      try {
+        parsed = await decodeBlockBase64(block.data);
+      } catch (error) {
+        const detail =
+          error instanceof MetricBlockError ? error.message : String(error);
+        throw new AgentBlockRejected(
+          `块 (resolution=${block.resolution}, bucket_start=${block.bucket_start}) 解码失败: ${detail}`
+        );
+      }
+      if (parsed.interval !== block.resolution) {
+        throw new AgentBlockRejected(
+          `块头 interval=${parsed.interval} 与信封 resolution=${block.resolution} 不一致`
+        );
+      }
+      if (parsed.bucketStart !== block.bucket_start) {
+        throw new AgentBlockRejected(
+          `块头 bucket_start=${parsed.bucketStart} 与信封 ${block.bucket_start} 不一致`
+        );
+      }
+      const actualPoints = blockSamples(parsed).length;
+      if (actualPoints !== block.point_count) {
+        throw new AgentBlockRejected(
+          `块内实际点数 ${actualPoints} 与信封 point_count=${block.point_count} 不一致`
+        );
+      }
+      decoded.push({ resolution: block.resolution, block: parsed });
+    }
+    return decoded;
+  }
 
   private async thresholdSetting(agentId: number) {
     return this.env.DB.prepare(
@@ -180,42 +238,14 @@ export class D1AgentReportIngestor {
     const nowIso = now.toISOString();
     const nowMs = now.getTime();
 
-    const inserted = await this.env.DB.prepare(
-      `INSERT OR IGNORE INTO agent_reports
-       (report_id, agent_id, payload_digest, payload_json, sample_count, status,
-        received_at, processed_at, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, '{}', ?, 'pending', ?, NULL, NULL, ?, ?)
-       RETURNING report_id`
-    )
-      .bind(
-        report.report_id,
-        agentId,
-        input.payloadDigest,
-        report.samples.length,
-        nowIso,
-        nowIso,
-        nowIso
-      )
-      .first<{ report_id: string }>();
-
-    if (!inserted) {
-      const existing = await this.env.DB.prepare(
-        `SELECT agent_id, payload_digest, status
-         FROM agent_reports WHERE report_id = ? LIMIT 1`
-      )
-        .bind(report.report_id)
-        .first<StoredReport>();
-      if (
-        !existing ||
-        existing.agent_id !== agentId ||
-        existing.payload_digest !== input.payloadDigest
-      ) {
-        return { outcome: "conflict" };
-      }
-      if (existing.status === "processed") {
-        return { outcome: "duplicate" };
-      }
-    }
+    // v5 去重不再依赖 agent_reports 状态机：块按
+    // (agent_id, resolution, bucket_start) upsert，重传天然幂等，
+    // 更短的块还会被单调守卫挡住。
+    //
+    // 解码放在写库之前：坏块直接拒收而不是先落库再发现，
+    // 摄入路径顺带承担了块合法性校验。
+    const decodedBlocks = await this.decodeBlocks(report);
+    const samples = materializeHotSamples(decodedBlocks);
 
     const [agentState, storedTraffic, thresholdSetting] = await Promise.all([
       this.env.DB.prepare(
@@ -244,12 +274,6 @@ export class D1AgentReportIngestor {
     ]);
 
     if (!agentState) {
-      await this.env.DB.prepare(
-        `UPDATE agent_reports SET status = 'failed', last_error = ?, updated_at = ?
-         WHERE report_id = ? AND status <> 'processed'`
-      )
-        .bind(`Agent ${agentId} is missing or deleted`, nowIso, report.report_id)
-        .run();
       throw new Error(`Agent ${agentId} is missing or deleted`);
     }
 
@@ -263,17 +287,14 @@ export class D1AgentReportIngestor {
       (sourceGeo.region_name !== null &&
         sourceGeo.region_name !== agentState.geo_region_name);
 
-    const normalizedSamples = report.samples.map((sample) => ({
-      ...sample,
-      collected_at: new Date(sample.collected_at).toISOString(),
-    }));
-    const latest = latestSample(normalizedSamples);
-    const chronological = normalizedSamples
-      .map((sample, index) => ({ sample, index }))
-      .sort(
-        (left, right) =>
-          Date.parse(left.sample.collected_at) - Date.parse(right.sample.collected_at)
-      );
+    // 派生指标全部来自解块后的样本序列：块里是完整的 1 秒精度数据，
+    // 比只看 report.latest 更准（月流量靠计数器差分累加，阈值取窗口内峰值）。
+    const lastSample = samples.length > 0 ? samples[samples.length - 1] : null;
+    const latestCollectedAtMs = lastSample
+      ? lastSample.timestampMs
+      : Date.parse(report.latest?.collected_at ?? nowIso);
+    const latestCollectedAtIso = new Date(latestCollectedAtMs).toISOString();
+
     const traffic = computeTraffic(
       storedTraffic
         ? {
@@ -287,42 +308,30 @@ export class D1AgentReportIngestor {
               : null,
           }
         : null,
-      chronological.map(({ sample }) => ({
-        ts: Date.parse(sample.collected_at),
-        totals: sumNetworkTotals(
-          sample.network?.map((item) => ({
-            interface:
-              typeof item.interface === "string" ? item.interface : undefined,
-            bytes_recv:
-              typeof item.bytes_recv === "number" ? item.bytes_recv : undefined,
-            bytes_sent:
-              typeof item.bytes_sent === "number" ? item.bytes_sent : undefined,
-          }))
-        ),
-      })),
+      samples.map((sample) => {
+        const { rx, tx } = sumNetTotals(sample);
+        return {
+          ts: sample.timestampMs,
+          // 与 sumNetworkTotals 的语义一致：拿不到任何接口计数就是 null，
+          // 而不是当成 0 —— 后者会让差分把整段流量算成负增长后归零。
+          totals: rx === null || tx === null ? null : { rx, tx },
+        };
+      }),
       getTrafficPeriodStart(
-        new Date(latest.collected_at),
+        new Date(latestCollectedAtMs),
         normalizeTrafficResetDay(agentState.traffic_reset_day)
       )
     );
-    const speedsByIndex = new Map(
-      chronological.map((item, index) => [item.index, traffic.speeds[index]])
-    );
-    const enrichedSamples = normalizedSamples.map((sample, index) => ({
-      ...sample,
-      network_rx_speed: speedsByIndex.get(index)?.rx ?? null,
-      network_tx_speed: speedsByIndex.get(index)?.tx ?? null,
-    }));
-    const latestIndex = normalizedSamples.indexOf(latest);
-    const latestEnriched = enrichedSamples[latestIndex];
+    // samples 已按时间升序，speeds 与之一一对应，取最后一条即当前速率
+    const latestSpeed =
+      traffic.speeds.length > 0
+        ? traffic.speeds[traffic.speeds.length - 1]
+        : undefined;
+
     const observedMetrics = {
-      cpu: maxFinite(normalizedSamples.map((sample) => sample.cpu?.usage)),
-      memory: maxFinite(
-        normalizedSamples.map((sample) => sample.memory?.usage_rate)
-      ),
-      disk: maxFinite(
-        normalizedSamples.map((sample) => maxDiskUsage(sample.disks))
-      ),
+      cpu: maxOf(samples, (sample) => sample.cpuUsage),
+      memory: maxOf(samples, (sample) => sample.memoryUsageRate),
+      disk: maxOf(samples, maxDiskUsageRate),
     };
     const previousThresholds = previousThresholdState(
       storedTraffic,
@@ -333,33 +342,42 @@ export class D1AgentReportIngestor {
       (thresholdState.cpu && !previousThresholds.cpu) ||
       (thresholdState.memory && !previousThresholds.memory) ||
       (thresholdState.disk && !previousThresholds.disk);
+    // agent_current_metrics 的快照来自 report.latest —— 它保留了不入块的静态
+    // 元数据（CPU 型号、设备名、fs_type、ping target），块里没有这些。
+    // 缺 latest 时退化到块内最后一个点，静态字段留空。
+    const latest = report.latest;
     const latestMetrics = {
       agent_id: agentId,
-      timestamp: latest.collected_at,
-      cpu_usage: latest.cpu?.usage ?? null,
-      cpu_cores: latest.cpu?.cores ?? null,
-      cpu_model: latest.cpu?.model_name ?? null,
-      memory_total: latest.memory?.total ?? null,
-      memory_used: latest.memory?.used ?? null,
-      memory_free: latest.memory?.free ?? null,
-      memory_usage_rate: latest.memory?.usage_rate ?? null,
-      load_1: latest.load?.load1 ?? null,
-      load_5: latest.load?.load5 ?? null,
-      load_15: latest.load?.load15 ?? null,
-      disk_metrics: JSON.stringify(latest.disks ?? []),
-      network_metrics: JSON.stringify(latest.network ?? []),
-      swap_total: latest.swap?.total ?? null,
-      swap_used: latest.swap?.used ?? null,
-      process_count: latest.process_count ?? null,
-      tcp_connections: latest.tcp_connections ?? null,
-      udp_connections: latest.udp_connections ?? null,
-      ping_json: latest.ping ? JSON.stringify(latest.ping) : null,
-      ipv4_reachable:
-        latest.ipv4_reachable == null ? null : latest.ipv4_reachable ? 1 : 0,
-      ipv6_reachable:
-        latest.ipv6_reachable == null ? null : latest.ipv6_reachable ? 1 : 0,
-      network_rx_speed: latestEnriched.network_rx_speed,
-      network_tx_speed: latestEnriched.network_tx_speed,
+      timestamp: latestCollectedAtIso,
+      cpu_usage: latest?.cpu?.usage ?? lastSample?.cpuUsage ?? null,
+      cpu_cores: latest?.cpu?.cores ?? null,
+      cpu_model: latest?.cpu?.model_name ?? null,
+      memory_total: latest?.memory?.total ?? lastSample?.memoryTotal ?? null,
+      memory_used: latest?.memory?.used ?? lastSample?.memoryUsed ?? null,
+      memory_free: latest?.memory?.free ?? lastSample?.memoryFree ?? null,
+      memory_usage_rate:
+        latest?.memory?.usage_rate ?? lastSample?.memoryUsageRate ?? null,
+      load_1: latest?.load?.load1 ?? lastSample?.load1 ?? null,
+      load_5: latest?.load?.load5 ?? lastSample?.load5 ?? null,
+      load_15: latest?.load?.load15 ?? lastSample?.load15 ?? null,
+      disk_metrics: JSON.stringify(latest?.disks ?? []),
+      network_metrics: JSON.stringify(latest?.network ?? []),
+      swap_total: latest?.swap?.total ?? lastSample?.swapTotal ?? null,
+      swap_used: latest?.swap?.used ?? lastSample?.swapUsed ?? null,
+      process_count: latest?.process_count ?? lastSample?.processCount ?? null,
+      tcp_connections:
+        latest?.tcp_connections ?? lastSample?.tcpConnections ?? null,
+      udp_connections:
+        latest?.udp_connections ?? lastSample?.udpConnections ?? null,
+      ping_json: latest?.ping ? JSON.stringify(latest.ping) : null,
+      ipv4_reachable: boolToInt(
+        latest?.ipv4_reachable ?? lastSample?.ipv4Reachable ?? null
+      ),
+      ipv6_reachable: boolToInt(
+        latest?.ipv6_reachable ?? lastSample?.ipv6Reachable ?? null
+      ),
+      network_rx_speed: latestSpeed?.rx ?? null,
+      network_tx_speed: latestSpeed?.tx ?? null,
       month_rx: traffic.state.month_rx,
       month_tx: traffic.state.month_tx,
       threshold_state: thresholdState,
@@ -375,17 +393,27 @@ export class D1AgentReportIngestor {
     const metricsObservedEventId = `agent.metrics.observed:${report.report_id}`;
 
     const statements: D1PreparedStatement[] = [
-      this.env.DB.prepare(
-        `INSERT OR IGNORE INTO agent_report_samples
-         (report_id, sample_index, agent_id, collected_at, metrics_json, created_at)
-         SELECT ?, CAST(key AS INTEGER), ?,
-                json_extract(value, '$.collected_at'), json(value), ?
-         FROM json_each(?)`
-      ).bind(
-        report.report_id,
-        agentId,
-        nowIso,
-        JSON.stringify(enrichedSamples)
+      // 块 upsert：幂等（重传同一块结果一致）且单调（更短的块不覆盖更完整的）。
+      // 这两条性质替代了 v4 的 agent_reports 去重表与状态机。
+      ...report.blocks.map((block) =>
+        this.env.DB.prepare(
+          `INSERT INTO agent_metric_blocks
+           (agent_id, resolution, bucket_start, point_count, codec, byte_size, data)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(agent_id, resolution, bucket_start) DO UPDATE SET
+             point_count = excluded.point_count,
+             byte_size   = excluded.byte_size,
+             data        = excluded.data
+           WHERE excluded.point_count >= agent_metric_blocks.point_count`
+        ).bind(
+          agentId,
+          block.resolution,
+          block.bucket_start,
+          block.point_count,
+          block.codec,
+          base64ByteLength(block.data),
+          base64ToBytes(block.data)
+        )
       ),
       this.env.DB.prepare(
         `UPDATE agent_runtime SET
@@ -463,11 +491,11 @@ export class D1AgentReportIngestor {
       ).bind(
         agentId,
         JSON.stringify(latestMetrics),
-        Date.parse(latest.collected_at),
+        latestCollectedAtMs,
         nowMs,
         latestMetrics.cpu_usage,
         latestMetrics.memory_usage_rate,
-        maxDiskUsage(latest.disks),
+        observedMetrics.disk,
         latestMetrics.swap_total,
         latestMetrics.swap_used,
         latestMetrics.process_count,
@@ -527,7 +555,7 @@ export class D1AgentReportIngestor {
           JSON.stringify({
             report_id: report.report_id,
             agent_id: agentId,
-            observed_at: latest.collected_at,
+            observed_at: latestCollectedAtIso,
             ...observedMetrics,
           }),
           nowIso,
@@ -537,42 +565,15 @@ export class D1AgentReportIngestor {
       );
     }
 
-    statements.push(
-      this.env.DB.prepare(
-        `UPDATE agent_reports
-         SET status = 'processed', processed_at = COALESCE(processed_at, ?),
-             payload_json = '{}', last_error = NULL, updated_at = ?
-         WHERE report_id = ? AND agent_id = ? AND payload_digest = ?`
-      ).bind(
-        nowIso,
-        nowIso,
-        report.report_id,
-        agentId,
-        input.payloadDigest
-      )
-    );
-
-    try {
-      await this.env.DB.batch(statements);
-    } catch (error) {
-      await this.env.DB.prepare(
-        `UPDATE agent_reports SET status = 'failed', last_error = ?, updated_at = ?
-         WHERE report_id = ? AND status <> 'processed'`
-      )
-        .bind(
-          (error instanceof Error ? error.message : String(error)).slice(0, 2048),
-          nowIso,
-          report.report_id
-        )
-        .run();
-      throw error;
-    }
+    // v5 没有 agent_reports 状态机可写：批次失败就整体抛出，
+    // Agent 侧不会 Ack，下一轮用同一个 report_id 原样重发。
+    await this.env.DB.batch(statements);
 
     try {
       await publishLatestMetrics(
         this.env,
         agentId,
-        latest.collected_at,
+        latestCollectedAtIso,
         latestMetrics
       );
     } catch (error) {

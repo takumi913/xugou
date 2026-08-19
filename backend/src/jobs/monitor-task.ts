@@ -1,4 +1,9 @@
 import type { Bindings } from "../models/db";
+import {
+  claimIntervalRun,
+  DAILY_INTERVAL_MS,
+  INTERVAL_KEY_DAILY_MONITOR_STATS,
+} from "./interval-gate";
 
 
 interface DailyStatsAggregation {
@@ -127,10 +132,19 @@ export default {
     env: Bindings,
     _ctx: ExecutionContext
   ) {
-    const now = Number.isFinite(Number(event.scheduledTime))
-      ? new Date(Number(event.scheduledTime))
-      : new Date();
-    if (now.getUTCHours() === 0 && now.getUTCMinutes() === 5) {
+    const nowMs = Number.isFinite(Number(event.scheduledTime))
+      ? Number(event.scheduledTime)
+      : Date.now();
+    const now = new Date(nowMs);
+    // 不再绑定「UTC 00:05 这一分钟」：cron 不保证准点触发，漏一次就整天不出日聚合。
+    if (
+      await claimIntervalRun(
+        env,
+        INTERVAL_KEY_DAILY_MONITOR_STATS,
+        DAILY_INTERVAL_MS,
+        nowMs
+      )
+    ) {
       await generateDailyMonitorStats(env, now);
     }
     return { success: true, message: "监控检查已由同 Worker Queue 调度" };

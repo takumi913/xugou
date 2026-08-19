@@ -17,7 +17,7 @@ import {
   agentV2OrderSchema,
   agentV2RegistrationSchema,
   agentV2UpdateSchema,
-  agentV4ReportSchema,
+  agentV5ReportSchema,
 } from "./schemas";
 import {
   importLegacyAgents,
@@ -591,7 +591,7 @@ agentsV2.delete("/:id", async (c) => {
   return c.body(null, 204);
 });
 
-// v4 数据面使用 Agent Bearer Credential，自身完成鉴权，不进入管理 Session 流程。
+// v5 数据面使用 Agent Bearer Credential，自身完成鉴权，不进入管理 Session 流程。
 agentsV2.post("/reports", async (c) => {
   const token = bearerToken(c);
   if (!token) {
@@ -603,7 +603,7 @@ agentsV2.post("/reports", async (c) => {
   }
   const body = await parseJson(c);
   if (!body.ok) return validationProblem(c, { body: ["请求体必须是 JSON"] });
-  const parsed = agentV4ReportSchema.safeParse(body.value);
+  const parsed = agentV5ReportSchema.safeParse(body.value);
   if (!parsed.success) return validationProblem(c, zodErrors(parsed.error.issues));
   const result = await handle(c, () =>
     createAgentUseCases(c.env).acceptReport(

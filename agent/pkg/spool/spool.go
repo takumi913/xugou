@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xugou/agent/pkg/metricblock"
 	"github.com/xugou/agent/pkg/model"
 )
 
@@ -54,6 +56,15 @@ type Store struct {
 	maxBytes             int64
 	maxEntries           int
 	addsSinceBoundsCheck int
+	// rollupPoints 累积尚未落盘的分钟聚合点（minuteStart -> point）。
+	// 进程重启即丢失，届时重传的聚合块会更短——服务端的单调守卫
+	// （excluded.point_count >= 现有值）会拒绝它，已有的完整块不受影响，
+	// 因此这里刻意不做持久化。
+	rollupPoints map[int64]*metricblock.MinutePoint
+	// now 便于测试注入时钟。
+	now func() time.Time
+	// discarded 记录启动时因结构不兼容而丢弃的文件，供调用方打日志。
+	discarded []string
 }
 
 type sampleRecord struct {
@@ -94,15 +105,28 @@ func Open(options Options) (*Store, error) {
 		return nil, fmt.Errorf("设置 spool 目录权限失败: %w", err)
 	}
 	store := &Store{
-		dir:        options.Dir,
-		maxBytes:   options.MaxBytes,
-		maxEntries: options.MaxEntries,
+		dir:          options.Dir,
+		maxBytes:     options.MaxBytes,
+		maxEntries:   options.MaxEntries,
+		rollupPoints: make(map[int64]*metricblock.MinutePoint),
+		now:          time.Now,
+	}
+	// 先清掉旧版本残留的、当前结构解析不了的文件，再走正常恢复流程。
+	// 顺序很重要：v4 的 inflight/样本会让下面每一步都直接报错退出。
+	if err := store.purgeIncompatible(); err != nil {
+		return nil, fmt.Errorf("清理不兼容 spool 文件失败: %w", err)
 	}
 	if err := store.recoverAcked(); err != nil {
 		return nil, fmt.Errorf("恢复已确认 spool 批次失败: %w", err)
 	}
+	// inflight 在这一步只做健全性检查。它引用的样本可能已被上面的清理删掉，
+	// 那种情况下丢掉 manifest 重新组批即可，不值得让 Agent 起不来。
 	if _, err := store.readInflight(); err != nil {
-		return nil, fmt.Errorf("读取 spool inflight 失败: %w", err)
+		if removeErr := os.Remove(filepath.Join(store.dir, inflightFileName)); removeErr != nil &&
+			!os.IsNotExist(removeErr) {
+			return nil, fmt.Errorf("丢弃损坏的 spool inflight 失败: %w", removeErr)
+		}
+		store.discarded = append(store.discarded, inflightFileName)
 	}
 	if _, err := store.enforceBounds(); err != nil {
 		return nil, fmt.Errorf("收敛 spool 容量失败: %w", err)
@@ -183,22 +207,29 @@ func (s *Store) Next(maxSamples, maxCompressedBytes int) (*model.AgentReport, bo
 		return nil, false, nil
 	}
 
+	buckets, discarded, err := s.collectBuckets(files, maxSamples)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(buckets) == 0 {
+		// 只有当前这一分钟的样本，等它写满再组批
+		return nil, false, nil
+	}
+
 	reportID, err := newUUID()
 	if err != nil {
 		return nil, false, err
 	}
-	selected := make([]string, 0, min(maxSamples, len(files)))
-	var report *model.AgentReport
-	for _, name := range files {
-		if len(selected) >= maxSamples {
-			break
-		}
-		record, err := s.readSample(name)
-		if err != nil {
-			return nil, false, err
-		}
-		candidate := append([]string(nil), selected...)
-		candidate = append(candidate, name)
+
+	// 逐桶加入，直到压缩后超过批次上限。桶是编码的最小单位，
+	// 按桶而非按条试探可以把编码次数从 O(样本数) 降到 O(桶数)。
+	var (
+		report   *model.AgentReport
+		selected []string
+		accepted []*sampleBucket
+	)
+	for i, bucket := range buckets {
+		candidate := append(append([]*sampleBucket(nil), accepted...), bucket)
 		candidateReport, err := s.buildReport(reportID, candidate)
 		if err != nil {
 			return nil, false, err
@@ -208,17 +239,30 @@ func (s *Store) Next(maxSamples, maxCompressedBytes int) (*model.AgentReport, bo
 			return nil, false, err
 		}
 		if size > maxCompressedBytes {
-			if len(selected) == 0 {
-				return nil, false, fmt.Errorf("单条采样压缩后为 %d 字节，超过批次上限 %d", size, maxCompressedBytes)
+			if i == 0 {
+				return nil, false, fmt.Errorf(
+					"单个分钟块压缩后为 %d 字节，超过批次上限 %d", size, maxCompressedBytes)
 			}
 			break
 		}
-		_ = record // buildReport 会重新读取，保留此处让损坏样本尽早失败。
-		selected = candidate
+		accepted = candidate
 		report = candidateReport
 	}
 	if report == nil {
 		return nil, false, nil
+	}
+	// 无法解析的样本文件一并纳入 Ack 范围，避免坏文件永久堵住队列
+	selected = append(selected, discarded...)
+	for _, bucket := range accepted {
+		selected = append(selected, bucket.files...)
+	}
+
+	// 只有确定进入本批次的桶才计入聚合累积器
+	s.mergeRollupPoints(accepted)
+	if blocks, err := s.buildRollupBlocks(); err != nil {
+		return nil, false, err
+	} else {
+		report.Blocks = append(report.Blocks, blocks...)
 	}
 
 	inflight := inflightRecord{Files: selected, Report: report}
@@ -298,22 +342,84 @@ func (s *Store) Stats() (Stats, error) {
 	}, nil
 }
 
-func (s *Store) buildReport(reportID string, files []string) (*model.AgentReport, error) {
-	records := make([]sampleRecord, 0, len(files))
+// sampleBucket 是一个分钟桶内的全部样本，块编码的最小单位。
+type sampleBucket struct {
+	start   int64
+	files   []string
+	samples []*model.AgentReportSample
+	latest  sampleRecord
+}
+
+// collectBuckets 按分钟桶归拢待发样本，只返回【已完整】的桶——
+// 当前这一分钟仍在写入，留到下一轮再组批，否则会先发半个块、
+// 下一轮再发完整块，白白多写一次。
+//
+// 第二个返回值是时间戳无法解析的样本文件：它们不进任何桶，但仍要纳入
+// Ack 范围，否则一个坏文件会永久堵住队列。
+func (s *Store) collectBuckets(files []string, maxSamples int) ([]*sampleBucket, []string, error) {
+	cutoff := metricblock.BucketStartFor(s.now().Unix(), 1)
+	var (
+		buckets   []*sampleBucket
+		discarded []string
+		byStart   = make(map[int64]*sampleBucket)
+		total     int
+	)
 	for _, name := range files {
 		record, err := s.readSample(name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		records = append(records, record)
+		if record.Sample == nil {
+			discarded = append(discarded, name)
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, record.Sample.CollectedAt)
+		if err != nil {
+			discarded = append(discarded, name)
+			continue
+		}
+		start := metricblock.BucketStartFor(ts.Unix(), 1)
+		if start >= cutoff {
+			// 文件名按时间有序，遇到当前分钟即可停止扫描
+			break
+		}
+		bucket := byStart[start]
+		if bucket == nil {
+			// 上限只在【开启新桶】时检查：桶是块编码的原子单位，绝不能半途截断。
+			// 若截断，Ack 会删掉已发的那部分，剩余样本下一轮组成同一桶的更短的块，
+			// 而服务端的单调守卫会拒绝它 —— 那部分数据将永久丢失。
+			// 代价是单批最多超出上限一个桶（1 Hz 采集下 ≤ 60 条），可接受。
+			if total >= maxSamples {
+				break
+			}
+			bucket = &sampleBucket{start: start}
+			byStart[start] = bucket
+			buckets = append(buckets, bucket)
+		}
+		bucket.files = append(bucket.files, name)
+		bucket.samples = append(bucket.samples, record.Sample)
+		bucket.latest = record
+		total++
 	}
-	latest := records[len(records)-1]
-	samples := make([]*model.AgentReportSample, 0, len(records))
-	for _, record := range records {
-		samples = append(samples, record.Sample)
+	return buckets, discarded, nil
+}
+
+// buildReport 把若干完整分钟桶编码成 v5 上报信封。
+func (s *Store) buildReport(reportID string, buckets []*sampleBucket) (*model.AgentReport, error) {
+	if len(buckets) == 0 {
+		return nil, errors.New("上报批次为空")
+	}
+	latest := buckets[len(buckets)-1].latest
+	blocks := make([]*model.AgentReportBlock, 0, len(buckets))
+	for _, bucket := range buckets {
+		block, err := metricblock.Encode(bucket.start, bucket.samples)
+		if err != nil {
+			return nil, fmt.Errorf("编码 %d 分钟块失败: %w", bucket.start, err)
+		}
+		blocks = append(blocks, toReportBlock(block))
 	}
 	return &model.AgentReport{
-		ProtocolVersion:       4,
+		ProtocolVersion:       model.AgentReportProtocolVersion,
 		AgentVersion:          latest.AgentVersion,
 		ReportID:              reportID,
 		Hostname:              latest.Hostname,
@@ -323,8 +429,75 @@ func (s *Store) buildReport(reportID string, files []string) (*model.AgentReport
 		BootTime:              latest.BootTime,
 		KeepaliveSeconds:      latest.KeepaliveSeconds,
 		ReportIntervalSeconds: latest.ReportIntervalSeconds,
-		Samples:               samples,
+		Blocks:                blocks,
+		Latest:                latest.Sample,
 	}, nil
+}
+
+func toReportBlock(block *metricblock.Block) *model.AgentReportBlock {
+	return &model.AgentReportBlock{
+		Resolution:  block.Resolution,
+		BucketStart: block.BucketStart,
+		PointCount:  block.PointCount,
+		Codec:       int(metricblock.CodecVersion),
+		Data:        base64.StdEncoding.EncodeToString(block.Data),
+	}
+}
+
+// mergeRollupPoints 把进入本批次的分钟桶聚合后并入累积器。
+// 键是分钟起点，重复处理同一分钟是幂等的。
+func (s *Store) mergeRollupPoints(buckets []*sampleBucket) {
+	for _, bucket := range buckets {
+		if point := metricblock.Aggregate(bucket.start, bucket.samples); point != nil {
+			s.rollupPoints[bucket.start] = point
+		}
+	}
+}
+
+// buildRollupBlocks 为累积器里出现的每个小时生成一个聚合块，随后只保留
+// 最新一个小时的点：更早的小时已经完整，不会再有新分钟加入。
+//
+// 当前小时的块每轮都会带着全部已知分钟重发一次（最多 60 点约 1.5 KB），
+// 服务端按 (agent_id, 60, hourStart) upsert，越发越完整。
+func (s *Store) buildRollupBlocks() ([]*model.AgentReportBlock, error) {
+	if len(s.rollupPoints) == 0 {
+		return nil, nil
+	}
+	byHour := make(map[int64][]*metricblock.MinutePoint)
+	var latestHour int64
+	for minute, point := range s.rollupPoints {
+		hour := metricblock.BucketStartFor(minute, 60)
+		byHour[hour] = append(byHour[hour], point)
+		if hour > latestHour {
+			latestHour = hour
+		}
+	}
+
+	hours := make([]int64, 0, len(byHour))
+	for hour := range byHour {
+		hours = append(hours, hour)
+	}
+	sort.Slice(hours, func(i, j int) bool { return hours[i] < hours[j] })
+
+	blocks := make([]*model.AgentReportBlock, 0, len(hours))
+	for _, hour := range hours {
+		points := byHour[hour]
+		sort.Slice(points, func(i, j int) bool {
+			return points[i].MinuteStart < points[j].MinuteStart
+		})
+		block, err := metricblock.EncodeRollup(hour, points)
+		if err != nil {
+			return nil, fmt.Errorf("编码 %d 小时聚合块失败: %w", hour, err)
+		}
+		blocks = append(blocks, toReportBlock(block))
+	}
+
+	for minute := range s.rollupPoints {
+		if metricblock.BucketStartFor(minute, 60) != latestHour {
+			delete(s.rollupPoints, minute)
+		}
+	}
+	return blocks, nil
 }
 
 func (s *Store) enforceBounds() (uint64, error) {
@@ -397,6 +570,65 @@ func (s *Store) enforceBounds() (uint64, error) {
 		}
 	}
 	return dropped, nil
+}
+
+// Discarded 返回启动时丢弃的不兼容文件名，调用方可据此打一条升级提示日志。
+func (s *Store) Discarded() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.discarded...)
+}
+
+// purgeIncompatible 删除当前 manifest/样本结构解析不了的残留文件。
+//
+// 升级路径上这是必需的：v4 的 inflight manifest 带 `samples` 字段，v5 的
+// 严格解码器会直接拒绝，导致 Open 失败、进程起不来。manifest 里固化的
+// 上报体在 v5 也已经没有意义（协议从 samples 换成了 blocks），丢掉只损失
+// 一个 report_id；样本文件本身若还能解析就原样保留，下一轮重新组批。
+//
+// 只对【解码失败】动手：I/O 错误照常向上抛，不能把读不到的文件当成脏数据删掉。
+func (s *Store) purgeIncompatible() error {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		isManifest := name == inflightFileName ||
+			(strings.HasPrefix(name, "acked-") && strings.HasSuffix(name, ".json"))
+		if !isManifest && !isSampleFile(name) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(s.dir, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var decodeErr error
+		if isManifest {
+			var record inflightRecord
+			decodeErr = strictJSON(raw, &record)
+		} else {
+			var record sampleRecord
+			decodeErr = strictJSON(raw, &record)
+		}
+		if decodeErr == nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		s.discarded = append(s.discarded, name)
+	}
+	if len(s.discarded) == 0 {
+		return nil
+	}
+	return syncDir(s.dir)
 }
 
 func (s *Store) readSample(name string) (sampleRecord, error) {

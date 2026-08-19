@@ -85,8 +85,25 @@ export interface AgentReportSample {
   network_tx_speed?: number | null;
 }
 
+/**
+ * 一个列式压缩的指标块。`data` 是 base64，解码规格见 ../metricblock。
+ * 服务端按 (agent_id, resolution, bucket_start) 幂等 upsert。
+ */
+export interface AgentReportBlock {
+  /** 1 = 1 秒块（桶跨 1 分钟）；60 = 1 分钟聚合块（桶跨 1 小时） */
+  resolution: 1 | 60;
+  bucket_start: number;
+  /**
+   * 实际存在的槽数，用于 upsert 的单调守卫。
+   * 与块头里恒为 60 的 slot_count 不是一回事。
+   */
+  point_count: number;
+  codec: 1;
+  data: string;
+}
+
 export interface AgentReportCommand {
-  protocol_version: 4;
+  protocol_version: 5;
   agent_version?: string;
   report_id: string;
   hostname?: string | null;
@@ -96,7 +113,9 @@ export interface AgentReportCommand {
   boot_time?: number | null;
   keepalive_seconds?: number;
   report_interval_seconds?: number;
-  samples: AgentReportSample[];
+  blocks: AgentReportBlock[];
+  /** 本批次最后一条原始样本，用于更新 agent_current_metrics 与静态元数据。 */
+  latest?: AgentReportSample;
 }
 
 export interface AuthenticatedAgent {

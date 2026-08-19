@@ -20,9 +20,6 @@ interface ExpiringAgentRow {
   auto_renewal: number | null;
 }
 
-export function shouldRunDailyExpiryCheck(now: Date = new Date()): boolean {
-  return now.getUTCHours() === 12 && now.getUTCMinutes() === 0;
-}
 
 function parseDateOnly(value: string | null | undefined) {
   const match = String(value ?? "")
