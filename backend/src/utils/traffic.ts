@@ -98,16 +98,33 @@ export function sumNetworkTotals(
   return hasData ? { rx, tx } : null;
 }
 
-/** 一个样本的累计总量 + 采集时间（Unix 毫秒） */
-export interface TrafficSampleTotals {
+/** 单个网卡在某一刻的累计计数器 */
+export interface InterfaceCounters {
+  rx: number;
+  tx: number;
+}
+
+/** 逐网卡基准：接口名 -> 上次见到的累计计数器 */
+export type TrafficBaselines = Record<string, InterfaceCounters>;
+
+/** 基准表最多保留多少个接口，超出时丢弃本次样本里没出现的老条目 */
+export const MAX_TRACKED_INTERFACES = 64;
+
+/** 一个样本的逐网卡计数器 + 采集时间（Unix 毫秒） */
+export interface TrafficSampleInterfaces {
   ts: number;
-  totals: NetworkTotals | null;
+  interfaces:
+    | Array<{ name: string; rx: number | null; tx: number | null }>
+    | null;
 }
 
 /** 月流量累计状态（agent_current_metrics 上的持久化列） */
 export interface TrafficState {
   month_rx: number;
   month_tx: number;
+  /** 逐网卡基准。null 表示还没有基准（首次上报或从旧版本迁移过来） */
+  baselines: TrafficBaselines | null;
+  /** 基准的合计值，仅用于展示与排查；累计逻辑不读它 */
   last_total_rx: number | null;
   last_total_tx: number | null;
   month_reset_at: string | null;
@@ -122,35 +139,55 @@ export interface TrafficComputation {
   state: TrafficState;
 }
 
-// 相邻计数器速率：delta/dt；dt<=0 或 delta<0（重启/回绕）记 null，不记负值
-function computeSpeed(
-  prevTotal: number | null,
-  prevTs: number | null,
-  curTotal: number,
-  curTs: number
-): number | null {
-  if (prevTotal === null || prevTs === null) return null;
-  const deltaMs = curTs - prevTs;
-  if (!Number.isFinite(deltaMs) || deltaMs <= 0) return null;
-  const deltaBytes = curTotal - prevTotal;
-  if (deltaBytes < 0) return null;
-  return (deltaBytes / deltaMs) * 1000;
+/** 解析持久化的基准 JSON；结构不对就当作没有基准，让下一个样本重建。 */
+export function parseTrafficBaselines(raw: unknown): TrafficBaselines | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const baselines: TrafficBaselines = {};
+  for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!name || !value || typeof value !== "object") continue;
+    const rx = Number((value as Record<string, unknown>).rx);
+    const tx = Number((value as Record<string, unknown>).tx);
+    if (!Number.isFinite(rx) || !Number.isFinite(tx) || rx < 0 || tx < 0) continue;
+    baselines[name] = { rx, tx };
+  }
+  return Object.keys(baselines).length > 0 ? baselines : null;
+}
+
+function sumBaselines(baselines: TrafficBaselines): NetworkTotals {
+  let rx = 0;
+  let tx = 0;
+  for (const counters of Object.values(baselines)) {
+    rx += counters.rx;
+    tx += counters.tx;
+  }
+  return { rx, tx };
 }
 
 /**
- * 单趟遍历样本序列，计算逐样本速率并累计月流量。
+ * 月流量累计：**逐网卡**差分。
  *
- * 规则：
- * - 跨重置日（prev.month_reset_at !== periodStart）先清零 month_rx/tx 再累计，
- *   基准计数器（last_total_*）保留，保证周期边界后 delta 正确衔接；
- * - ts 不大于上次基准时间的样本视为重放，整体跳过（防止重传导致重复累计）；
- * - delta < 0（计数器归零/重启）：速率记 null，月流量按 delta = current_total 累计；
- * - 首次上报（无基准）：只建立基准，不累计、不出速率；
- * - 无网络数据的样本：速率 null，不影响基准与月累计。
+ * 之所以不能按「所有网卡求和」再差分：总和会随接口集合变化而跳变。jp 上的
+ * tun0(VPN) / docker0 这类接口来去一次，总和就掉一截，旧实现把它当成计数器归零，
+ * 于是 `month += 当前总和` —— 一次接口消失就凭空记进 ~290 GB。线上实测
+ * month_rx 长到了 last_total_rx 的 19.7 倍，就是这么来的。
+ *
+ * 逐网卡之后：
+ * - 接口消失：它的基准留着不动，什么都不累计（下次回来能正确接上）
+ * - 接口新增：只建基准，不累计（不知道多少流量发生在纳入统计之前）
+ * - 单块网卡计数器归零：按该网卡当前值累计，量级被这块网卡自身限住，
+ *   不会再是全机总和
+ * - 回环接口（lo/lo0/Loopback）全程排除，计进配额没有意义
  */
 export function computeTraffic(
   prev: TrafficState | null,
-  samples: TrafficSampleTotals[],
+  samples: TrafficSampleInterfaces[],
   periodStart: string
 ): TrafficComputation {
   let monthRx = prev?.month_rx ?? 0;
@@ -160,17 +197,16 @@ export function computeTraffic(
     monthTx = 0;
   }
 
-  let lastRx = prev?.last_total_rx ?? null;
-  let lastTx = prev?.last_total_tx ?? null;
+  const baselines: TrafficBaselines = { ...(prev?.baselines ?? {}) };
   let lastTs = prev?.last_ts ?? null;
-
   const speeds: Array<{ rx: number | null; tx: number | null }> = [];
 
   for (const sample of samples) {
-    const totals = sample.totals;
     const ts = Number(sample.ts);
+    // ts 不大于上次基准时间的样本视为重放，整体跳过，防止重传导致重复累计
     if (
-      !totals ||
+      !Array.isArray(sample.interfaces) ||
+      sample.interfaces.length === 0 ||
       !Number.isFinite(ts) ||
       (lastTs !== null && ts <= lastTs)
     ) {
@@ -178,32 +214,67 @@ export function computeTraffic(
       continue;
     }
 
-    speeds.push({
-      rx: computeSpeed(lastRx, lastTs, totals.rx, ts),
-      tx: computeSpeed(lastTx, lastTs, totals.tx, ts),
-    });
-
-    if (lastRx !== null) {
-      const deltaRx = totals.rx - lastRx;
-      monthRx += deltaRx < 0 ? totals.rx : deltaRx;
+    const current: TrafficBaselines = {};
+    for (const item of sample.interfaces) {
+      if (!item || typeof item.name !== "string" || item.name === "") continue;
+      if (isLoopbackInterface(item.name)) continue;
+      const rx = Number(item.rx);
+      const tx = Number(item.tx);
+      if (!Number.isFinite(rx) || !Number.isFinite(tx) || rx < 0 || tx < 0) continue;
+      current[item.name] = { rx, tx };
     }
-    if (lastTx !== null) {
-      const deltaTx = totals.tx - lastTx;
-      monthTx += deltaTx < 0 ? totals.tx : deltaTx;
+    const names = Object.keys(current);
+    if (names.length === 0) {
+      speeds.push({ rx: null, tx: null });
+      continue;
     }
 
-    lastRx = totals.rx;
-    lastTx = totals.tx;
+    let deltaRx = 0;
+    let deltaTx = 0;
+    let matched = false;
+    let sawCounterReset = false;
+    for (const name of names) {
+      const base = baselines[name];
+      const now = current[name];
+      if (!base) continue; // 新接口：只建基准，本轮不累计
+      matched = true;
+      const dRx = now.rx - base.rx;
+      const dTx = now.tx - base.tx;
+      if (dRx < 0 || dTx < 0) sawCounterReset = true;
+      deltaRx += dRx < 0 ? now.rx : dRx;
+      deltaTx += dTx < 0 ? now.tx : dTx;
+    }
+
+    monthRx += deltaRx;
+    monthTx += deltaTx;
+
+    const deltaMs = lastTs === null ? 0 : ts - lastTs;
+    speeds.push(
+      matched && !sawCounterReset && deltaMs > 0
+        ? { rx: (deltaRx / deltaMs) * 1000, tx: (deltaTx / deltaMs) * 1000 }
+        : { rx: null, tx: null }
+    );
+
+    for (const name of names) baselines[name] = current[name];
+    // 消失的接口基准刻意保留，回来时才能正确接上差分；只有条目过多才裁剪。
+    if (Object.keys(baselines).length > MAX_TRACKED_INTERFACES) {
+      for (const name of Object.keys(baselines)) {
+        if (!(name in current)) delete baselines[name];
+      }
+    }
     lastTs = ts;
   }
 
+  const hasBaselines = Object.keys(baselines).length > 0;
+  const totals = hasBaselines ? sumBaselines(baselines) : null;
   return {
     speeds,
     state: {
       month_rx: monthRx,
       month_tx: monthTx,
-      last_total_rx: lastRx,
-      last_total_tx: lastTx,
+      baselines: hasBaselines ? baselines : null,
+      last_total_rx: totals ? totals.rx : null,
+      last_total_tx: totals ? totals.tx : null,
       month_reset_at: periodStart,
       last_ts: lastTs,
     },

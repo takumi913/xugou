@@ -624,6 +624,13 @@ const enUS = {
     "agentCard.status.active": "Online",
     "agentCard.status.inactive": "Offline",
     "agentCard.status.connecting": "Connecting",
+    "agentCard.metric.cpu": "CPU",
+    "agentCard.metric.memory": "RAM",
+    "agentCard.metric.swap": "SWAP",
+    "agentCard.metric.disk": "DISK",
+    "agentCard.metric.load": "LOAD",
+    "agentCard.metric.network": "NET",
+    "agentCard.metric.traffic": "TRAFFIC",
 
     // MonitorCard Component
     "monitorCard.status.up": "Up",

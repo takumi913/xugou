@@ -4,6 +4,7 @@ import {
   computeTraffic,
   getTrafficPeriodStart,
   normalizeTrafficResetDay,
+  parseTrafficBaselines,
 } from "../../../utils/traffic";
 import type { AgentReportCommand } from "../domain/models";
 import { publishLatestMetrics } from "../realtime/MetricsBroadcastPublisher";
@@ -24,7 +25,6 @@ import {
   blockSamples,
   maxDiskUsageRate,
   maxOf,
-  sumNetTotals,
   type BlockSample,
 } from "../metricblock/materialize";
 
@@ -47,6 +47,7 @@ interface StoredTrafficState {
   month_tx: number | null;
   last_total_rx: number | null;
   last_total_tx: number | null;
+  traffic_baselines_json: string | null;
   month_reset_at: string | null;
   collected_at: string | null;
 }
@@ -261,6 +262,7 @@ export class D1AgentReportIngestor {
       this.env.DB.prepare(
         `SELECT metrics_json, cpu_usage, memory_usage_rate, disk_usage_rate,
                 month_rx, month_tx, last_total_rx, last_total_tx,
+                traffic_baselines_json,
                 traffic_period_start AS month_reset_at,
                 CASE WHEN collected_at_ms IS NULL THEN NULL
                      ELSE strftime('%Y-%m-%dT%H:%M:%fZ',
@@ -300,6 +302,7 @@ export class D1AgentReportIngestor {
         ? {
             month_rx: Number(storedTraffic.month_rx ?? 0),
             month_tx: Number(storedTraffic.month_tx ?? 0),
+            baselines: parseTrafficBaselines(storedTraffic.traffic_baselines_json),
             last_total_rx: storedTraffic.last_total_rx,
             last_total_tx: storedTraffic.last_total_tx,
             month_reset_at: storedTraffic.month_reset_at,
@@ -308,15 +311,16 @@ export class D1AgentReportIngestor {
               : null,
           }
         : null,
-      samples.map((sample) => {
-        const { rx, tx } = sumNetTotals(sample);
-        return {
-          ts: sample.timestampMs,
-          // 与 sumNetworkTotals 的语义一致：拿不到任何接口计数就是 null，
-          // 而不是当成 0 —— 后者会让差分把整段流量算成负增长后归零。
-          totals: rx === null || tx === null ? null : { rx, tx },
-        };
-      }),
+      // 逐网卡喂给累计器：接口名必须带上，否则无法分辨「某块网卡计数器归零」
+      // 和「某块网卡从统计里消失」——后者按总和差分会凭空多记一整个总量。
+      samples.map((sample) => ({
+        ts: sample.timestampMs,
+        interfaces: sample.nets.map((net) => ({
+          name: net.iface,
+          rx: net.bytesRecv,
+          tx: net.bytesSent,
+        })),
+      })),
       getTrafficPeriodStart(
         new Date(latestCollectedAtMs),
         normalizeTrafficResetDay(agentState.traffic_reset_day)
@@ -459,8 +463,9 @@ export class D1AgentReportIngestor {
           process_count, tcp_connections, udp_connections, ping_json,
           ipv4_reachable, ipv6_reachable, network_rx_speed, network_tx_speed,
           month_rx, month_tx, last_total_rx, last_total_tx,
+          traffic_baselines_json,
           traffic_period_start, version, created_at_ms, updated_at_ms)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM agent_nodes WHERE id = ? AND deleted_at_ms IS NULL
          )
@@ -483,6 +488,7 @@ export class D1AgentReportIngestor {
            month_rx = excluded.month_rx, month_tx = excluded.month_tx,
            last_total_rx = excluded.last_total_rx,
            last_total_tx = excluded.last_total_tx,
+           traffic_baselines_json = excluded.traffic_baselines_json,
            traffic_period_start = excluded.traffic_period_start,
            version = agent_current_metrics.version + 1,
            updated_at_ms = excluded.updated_at_ms
@@ -510,6 +516,9 @@ export class D1AgentReportIngestor {
         traffic.state.month_tx,
         traffic.state.last_total_rx,
         traffic.state.last_total_tx,
+        traffic.state.baselines
+          ? JSON.stringify(traffic.state.baselines)
+          : null,
         traffic.state.month_reset_at,
         nowMs,
         nowMs,

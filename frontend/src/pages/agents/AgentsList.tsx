@@ -1,4 +1,4 @@
-import { useState, useRef, type DragEvent } from "react";
+import { useMemo, useState, useRef, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -50,8 +50,12 @@ import {
 import AgentStatusBar from "../../components/AgentStatusBar";
 import PageLoading from "../../components/PageLoading";
 import { useTranslation } from "react-i18next";
+import { useLiveAgentMetrics } from "@/hooks/useLiveAgentMetrics";
 import { agentStatusColors } from "../../utils/statusColors";
 import { downloadJson, readJsonArrayFile } from "../../utils/importExport";
+
+// 引用稳定的空数组：每次渲染新建 [] 会让下面的 useMemo 依赖恒变
+const EMPTY_AGENTS: AgentV2[] = [];
 
 const AgentsList = () => {
   const navigate = useNavigate();
@@ -78,7 +82,30 @@ const AgentsList = () => {
       ),
     refetchInterval: 60_000,
   });
-  const agents: AgentV2[] = agentsQuery.data?.data ?? [];
+  const baseAgents: AgentV2[] = agentsQuery.data?.data ?? EMPTY_AGENTS;
+  // 列表页此前只靠 refetchInterval 更新，要刷新网页才见到新数据。
+  // 现在与 Dashboard 共用同一个实时订阅，指标与在线状态都随 WebSocket 推送变化。
+  const agentIds = useMemo(
+    () => baseAgents.map((agent) => agent.id),
+    [baseAgents]
+  );
+  const { liveStatus, merge } = useLiveAgentMetrics(agentIds);
+  // 只把在线状态叠加进列表数据；指标在渲染处合并，避免把 Partial<MetricHistory>
+  // 硬塞回 AgentV2["metrics"]（两者不是同一个类型，强转只会骗过编译器）。
+  const agents: AgentV2[] = useMemo(
+    () =>
+      baseAgents.map((agent) => {
+        const live = liveStatus[agent.id];
+        if (!live) return agent;
+        return {
+          ...agent,
+          status: live.status ?? agent.status,
+          last_seen_at:
+            live.lastSeenAt !== undefined ? live.lastSeenAt : agent.last_seen_at,
+        };
+      }),
+    [baseAgents, liveStatus]
+  );
   const nextCursor = agentsQuery.data?.has_more
     ? agentsQuery.data.next_cursor
     : null;
@@ -249,7 +276,10 @@ const AgentsList = () => {
               handleDrop(agent.id);
             }}
           >
-            <AgentStatusBar latestMetric={agent.metrics} agent={agent} />
+            <AgentStatusBar
+              latestMetric={merge(agent.id, agent.metrics)}
+              agent={agent}
+            />
             <Flex gap="2" className="absolute top-4 right-4">
               <Button
                 variant="ghost"

@@ -351,6 +351,13 @@
       "when": 1787145025181,
       "tag": "0049_green_aqueduct",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1787148765823,
+      "tag": "0050_abandoned_grim_reaper",
+      "breakpoints": true
     }
   ]
 }

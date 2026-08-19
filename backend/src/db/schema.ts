@@ -469,6 +469,9 @@ export const agentCurrentMetrics = sqliteTable(
     month_tx: int("month_tx").notNull().default(0),
     last_total_rx: int("last_total_rx"),
     last_total_tx: int("last_total_tx"),
+    // 逐网卡累计计数器基准 {iface: {rx, tx}}。按总和差分会把「接口消失」
+    // 误判成计数器归零，从而凭空记进一整个总量，故基准必须按网卡存。
+    traffic_baselines_json: text("traffic_baselines_json"),
     traffic_period_start: text("traffic_period_start"),
     version: int("version").notNull().default(0),
     created_at_ms: int("created_at_ms").notNull(),

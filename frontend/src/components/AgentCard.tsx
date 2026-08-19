@@ -131,7 +131,7 @@ const AgentCard = ({
       ? (displayMetric.swap_used / displayMetric.swap_total) * 100
       : undefined;
 
-  // 月流量（按计费方式）与限额百分比（无月流量数据时 TRF 行不渲染）
+  // 月流量（按计费方式）与限额百分比（无月流量数据时流量行不渲染）
   const monthBytes = monthlyTraffic(displayMetric, agent.traffic_calc_type);
   const trafficPct = trafficPercent(monthBytes, agent.traffic_limit_gb);
 
@@ -287,22 +287,27 @@ const AgentCard = ({
         </div>
       )}
 
-      {/* 指标行：CPU/RAM/SWAP/DISK 进度条 + LOAD/NET/TRF */}
+      {/* 指标行：CPU/内存/交换/磁盘 进度条 + 负载/网速/流量 */}
       {displayMetric && (
         <div className="mb-2">
           {typeof displayMetric.cpu_usage === "number" && (
-            <StatBar label="CPU" percent={displayMetric.cpu_usage} />
+            <StatBar label={t("agentCard.metric.cpu")} percent={displayMetric.cpu_usage} />
           )}
           {memoryPercent !== undefined && (
-            <StatBar label="RAM" percent={memoryPercent} />
+            <StatBar label={t("agentCard.metric.memory")} percent={memoryPercent} />
           )}
           {swapPercent !== undefined && (
-            <StatBar label="SWAP" percent={swapPercent} />
+            <StatBar label={t("agentCard.metric.swap")} percent={swapPercent} />
           )}
-          {diskUsage && <StatBar label="DISK" percent={diskUsage.percent} />}
+          {diskUsage && (
+            <StatBar
+              label={t("agentCard.metric.disk")}
+              percent={diskUsage.percent}
+            />
+          )}
           {typeof displayMetric.load_1 === "number" && (
             <div className="stat-row">
-              <span className="stat-key">LOAD</span>
+              <span className="stat-key">{t("agentCard.metric.load")}</span>
               <span className="net-down">
                 {displayMetric.load_1.toFixed(2)}
               </span>
@@ -314,9 +319,9 @@ const AgentCard = ({
               </span>
             </div>
           )}
-          {/* NET：服务端计算的实时网速（WS 样本优先；无速率数据显示 '-'） */}
+          {/* 网速：服务端计算的实时速率（WS 样本优先；无速率数据显示 '-'） */}
           <div className="stat-row">
-            <span className="stat-key">NET</span>
+            <span className="stat-key">{t("agentCard.metric.network")}</span>
             <span className="net-down">
               ↓ {formatSpeed(displayMetric.network_rx_speed)}
             </span>
@@ -324,10 +329,10 @@ const AgentCard = ({
               ↑ {formatSpeed(displayMetric.network_tx_speed)}
             </span>
           </div>
-          {/* TRF：当月流量（按计费方式）；设置限额时叠加进度条 */}
+          {/* 流量：当月用量（按计费方式）；设置限额时叠加进度条 */}
           {monthBytes !== null && (
             <div className="stat-row">
-              <span className="stat-key">TRF</span>
+              <span className="stat-key">{t("agentCard.metric.traffic")}</span>
               {trafficPct !== null ? (
                 <>
                   <ProgressBar percent={trafficPct} />

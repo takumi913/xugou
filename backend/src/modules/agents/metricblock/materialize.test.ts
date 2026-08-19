@@ -12,7 +12,6 @@ import {
   blockSamples,
   maxDiskUsageRate,
   maxOf,
-  sumNetTotals,
 } from "./materialize";
 
 const FIXTURE_PATH = join(
@@ -115,10 +114,12 @@ describe("blockSamples", () => {
   it("网络计数器单调递增，可用于差分算速率", async () => {
     const { samples } = await samplesOf("dense-1s");
     for (let i = 1; i < samples.length; i++) {
-      const prev = sumNetTotals(samples[i - 1]);
-      const cur = sumNetTotals(samples[i]);
-      expect(cur.rx!).toBeGreaterThanOrEqual(prev.rx!);
-      expect(cur.tx!).toBeGreaterThanOrEqual(prev.tx!);
+      for (const [slot, cur] of samples[i].nets.entries()) {
+        const prev = samples[i - 1].nets[slot];
+        expect(cur.iface).toBe(prev.iface);
+        expect(cur.bytesRecv!).toBeGreaterThanOrEqual(prev.bytesRecv!);
+        expect(cur.bytesSent!).toBeGreaterThanOrEqual(prev.bytesSent!);
+      }
     }
   });
 
@@ -194,13 +195,4 @@ describe("聚合辅助函数", () => {
     expect(peak).toBeCloseTo(manual, 9);
   });
 
-  it("sumNetTotals 汇总全部接口", async () => {
-    const { samples } = await samplesOf("dense-1s");
-    const totals = sumNetTotals(samples[0]);
-    const manualRx = samples[0].nets.reduce(
-      (acc, n) => acc + (n.bytesRecv ?? 0),
-      0
-    );
-    expect(totals.rx).toBeCloseTo(manualRx, 6);
-  });
 });

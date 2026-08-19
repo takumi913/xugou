@@ -32,10 +32,6 @@ import {
   deleteAgent,
   getAgentMetrics,
   getLatestAgentMetrics,
-  getAgentCredentials,
-  rotateAgentCredential,
-  revokeAgentCredential,
-  type AgentCredentialMetadata,
 } from "../../api/agents";
 import { Agent, MetricHistory } from "../../types/agents";
 import { useTranslation } from "react-i18next";
@@ -89,11 +85,6 @@ const AgentDetail = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const [issuedCredential, setIssuedCredential] = useState<string | null>(null);
-  const [credentialCursor, setCredentialCursor] = useState<number | undefined>();
-  const [credentialCursorHistory, setCredentialCursorHistory] = useState<
-    Array<number | undefined>
-  >([]);
   const [liveMetric, setLiveMetric] = useState<Partial<MetricHistory> | null>(
     null
   );
@@ -104,12 +95,6 @@ const AgentDetail = () => {
 
   const agentId = Number(id);
   const hasValidAgentId = Boolean(id) && !Number.isNaN(agentId);
-
-  useEffect(() => {
-    setCredentialCursor(undefined);
-    setCredentialCursorHistory([]);
-    setIssuedCredential(null);
-  }, [agentId]);
 
   // WebSocket 实时链路：只订阅当前 agent，实时更新环形进度与最新指标
   useEffect(() => {
@@ -174,38 +159,6 @@ const AgentDetail = () => {
     }
   }, [agentQuery.data?.latest]);
 
-  const credentialsQuery = useQuery({
-    queryKey: ["agents", "credentials", agentId, credentialCursor],
-    queryFn: () =>
-      getAgentCredentials(agentId, { cursor: credentialCursor, limit: 25 }),
-    enabled: hasValidAgentId,
-  });
-  const credentials: AgentCredentialMetadata[] =
-    credentialsQuery.data?.data ?? [];
-  const activeCredentialCount = credentials.filter(
-    (credential) => !credential.revoked_at
-  ).length;
-
-  const rotateCredentialMutation = useMutation({
-    mutationFn: () => rotateAgentCredential(agentId),
-    onSuccess: (result) => {
-      setIssuedCredential(result.token);
-      queryClient.invalidateQueries({ queryKey: ["agents", "credentials", agentId] });
-      toast.success(t("agent.credentials.rotateSuccess"));
-    },
-    onError: () => toast.error(t("agent.credentials.rotateError")),
-  });
-
-  const revokeCredentialMutation = useMutation({
-    mutationFn: (credentialId: number) =>
-      revokeAgentCredential(agentId, credentialId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agents", "credentials", agentId] });
-      toast.success(t("agent.credentials.revokeSuccess"));
-    },
-    onError: () => toast.error(t("agent.credentials.revokeError")),
-  });
-
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(agentId),
     onSuccess: () => {
@@ -216,37 +169,8 @@ const AgentDetail = () => {
     onError: () => toast.error(t("agent.deleteError")),
   });
 
-  const credentialLoading =
-    rotateCredentialMutation.isPending || revokeCredentialMutation.isPending;
-
   const handleRefresh = () => {
     agentQuery.refetch();
-    credentialsQuery.refetch();
-  };
-
-  const handleCredentialRotate = () => {
-    if (!confirm(t("agent.credentials.rotateConfirm"))) return;
-    rotateCredentialMutation.mutate();
-  };
-
-  const handleCredentialRevoke = (credentialId: number) => {
-    if (!confirm(t("agent.credentials.revokeConfirm"))) return;
-    revokeCredentialMutation.mutate(credentialId);
-  };
-
-  const handleCredentialNextPage = () => {
-    const nextCursor = Number(credentialsQuery.data?.next_cursor);
-    if (!Number.isSafeInteger(nextCursor) || nextCursor <= 0) return;
-    setCredentialCursorHistory((history) => [...history, credentialCursor]);
-    setCredentialCursor(nextCursor);
-  };
-
-  const handleCredentialPreviousPage = () => {
-    setCredentialCursorHistory((history) => {
-      if (history.length === 0) return history;
-      setCredentialCursor(history.at(-1));
-      return history.slice(0, -1);
-    });
   };
 
   // 取历史数据里时间戳最新的一条指标（仅依赖 agent?.metrics，实时样本变化不重算）
@@ -745,113 +669,6 @@ const AgentDetail = () => {
                     return null;
                   }
                 })()}
-            </Flex>
-          </div>
-
-          <div className="terminal-card p-4">
-            <Flex direction="column" gap="3">
-              <Flex justify="between" align="center" gap="3">
-                <Box>
-                  <h2 className="group-title">
-                    {t("agent.credentials.title")}
-                  </h2>
-                  <Text size="2" color="gray">
-                    {t("agent.credentials.description")}
-                  </Text>
-                </Box>
-                <Button
-                  variant="secondary"
-                  onClick={handleCredentialRotate}
-                  disabled={credentialLoading || activeCredentialCount >= 5}
-                >
-                  {t("agent.credentials.rotate")}
-                </Button>
-              </Flex>
-
-              {issuedCredential && (
-                <Box className="rounded-md border border-amber-500/50 p-3">
-                  <Text as="div" size="2" weight="bold">
-                    {t("agent.credentials.oneTime")}
-                  </Text>
-                  <Text as="div" size="2" className="break-all font-mono">
-                    {issuedCredential}
-                  </Text>
-                  <Flex gap="2" mt="2">
-                    <Button
-                      variant="secondary"
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(issuedCredential);
-                        toast.success(t("common.copied"));
-                      }}
-                    >
-                      {t("common.copy")}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setIssuedCredential(null)}
-                    >
-                      {t("common.close")}
-                    </Button>
-                  </Flex>
-                </Box>
-              )}
-
-              {credentials.map((credential) => (
-                <Flex
-                  key={credential.id}
-                  justify="between"
-                  align="center"
-                  gap="3"
-                  className="rounded-md border p-3"
-                >
-                  <Box>
-                    <Text as="div" size="2" weight="bold">
-                      {credential.token_hint}
-                    </Text>
-                    <Text as="div" size="1" color="gray">
-                      {t("agent.credentials.createdAt")}: {formatDateTime(credential.created_at)}
-                      {" · "}
-                      {t("agent.credentials.lastUsedAt")}: {credential.last_used_at ? formatDateTime(credential.last_used_at) : t("common.notFound")}
-                    </Text>
-                  </Box>
-                  {credential.revoked_at ? (
-                    <Badge color="gray">{t("agent.credentials.revoked")}</Badge>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      disabled={credentialLoading}
-                      onClick={() => handleCredentialRevoke(credential.id)}
-                    >
-                      {t("agent.credentials.revoke")}
-                    </Button>
-                  )}
-                </Flex>
-              ))}
-
-              <Flex justify="between" align="center" gap="3">
-                <Text size="1" color="gray">
-                  {t("common.pageItemCount", { count: credentials.length })}
-                  {activeCredentialCount >= 5
-                    ? ` · ${t("agent.credentials.limitReached")}`
-                    : ""}
-                </Text>
-                <Flex gap="2">
-                  <Button
-                    variant="secondary"
-                    disabled={credentialCursorHistory.length === 0}
-                    onClick={handleCredentialPreviousPage}
-                  >
-                    {t("common.previousPage")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    disabled={!credentialsQuery.data?.has_more}
-                    onClick={handleCredentialNextPage}
-                  >
-                    {t("common.nextPage")}
-                  </Button>
-                </Flex>
-              </Flex>
             </Flex>
           </div>
 

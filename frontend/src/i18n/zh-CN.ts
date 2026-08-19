@@ -634,6 +634,14 @@ const zhCN = {
     "agentCard.status.active": "在线",
     "agentCard.status.inactive": "离线",
     "agentCard.status.connecting": "连接中",
+    // 指标行标签。CPU 保留原样（本身就是通用写法），其余用中文，便于阅读
+    "agentCard.metric.cpu": "CPU",
+    "agentCard.metric.memory": "内存",
+    "agentCard.metric.swap": "交换",
+    "agentCard.metric.disk": "磁盘",
+    "agentCard.metric.load": "负载",
+    "agentCard.metric.network": "网速",
+    "agentCard.metric.traffic": "流量",
 
     // MonitorCard 组件
     "monitorCard.status.up": "正常",

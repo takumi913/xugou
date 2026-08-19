@@ -181,7 +181,7 @@ const AgentRingCard = ({ agent, liveMetric, onSelect }: AgentRingCardProps) => {
 
       {/* 网络速率行 */}
       <div className="stat-row">
-        <span className="stat-key">NET</span>
+        <span className="stat-key">{t("agentCard.metric.network")}</span>
         <span className="net-down">
           ↓ {formatSpeed(displayMetric?.network_rx_speed)}
         </span>
@@ -193,7 +193,7 @@ const AgentRingCard = ({ agent, liveMetric, onSelect }: AgentRingCardProps) => {
       {/* 月流量：有限额时叠加进度条 */}
       {monthBytes !== null && (
         <div className="stat-row mb-0">
-          <span className="stat-key">TRF</span>
+          <span className="stat-key">{t("agentCard.metric.traffic")}</span>
           {trafficPct !== null ? (
             <>
               <ProgressBar percent={trafficPct} />

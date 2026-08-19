@@ -177,20 +177,6 @@ export function blockSamples(block: DecodedBlock, agg = 0): BlockSample[] {
   return out;
 }
 
-/** 网络计数器总和，用于流量记账。缺值的接口不参与求和。 */
-export function sumNetTotals(sample: BlockSample): {
-  rx: number | null;
-  tx: number | null;
-} {
-  let rx: number | null = null;
-  let tx: number | null = null;
-  for (const net of sample.nets) {
-    if (net.bytesRecv !== null) rx = (rx ?? 0) + net.bytesRecv;
-    if (net.bytesSent !== null) tx = (tx ?? 0) + net.bytesSent;
-  }
-  return { rx, tx };
-}
-
 /** 块内某序列的最大值，用于阈值判定。 */
 export function maxOf(
   samples: BlockSample[],

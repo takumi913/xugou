@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   getDashboardDataWithSignal,
   type DashboardAgent,
@@ -11,20 +11,12 @@ import AgentViewsSection from "../components/AgentViewsSection";
 import LiveIndicator from "../components/LiveIndicator";
 import PageLoading from "../components/PageLoading";
 import { formatBytes, formatSpeed } from "../utils/format";
-import { createLiveSocket, type LiveAgentStatus } from "../utils/liveSocket";
 import { mergeLatestMetric, monthlyTraffic } from "../utils/metrics";
-import type { MetricHistory } from "../types/agents";
+import { useLiveAgentMetrics } from "../hooks/useLiveAgentMetrics";
 import {
   monitorStatusColors,
   statusAccentColor,
 } from "../utils/statusColors";
-
-interface DashboardLiveState {
-  metric: Partial<MetricHistory>;
-  status?: LiveAgentStatus;
-  lastSeenAt?: string | null;
-  ts: number;
-}
 
 const EMPTY_DASHBOARD_AGENTS: DashboardAgent[] = [];
 
@@ -42,62 +34,18 @@ const Dashboard = () => {
   const baseSummary = dashboardQuery.data?.summary;
   const monitorsHasMore = dashboardQuery.data?.monitors_has_more ?? false;
   const agentsHasMore = dashboardQuery.data?.agents_has_more ?? false;
-  const [liveState, setLiveState] = useState<Record<number, DashboardLiveState>>(
-    {}
-  );
-  const [liveConnected, setLiveConnected] = useState(false);
-  const [liveLagSeconds, setLiveLagSeconds] = useState(0);
-  const agentSubscriptionKey = baseAgents.map((agent) => agent.id).join(",");
-
-  useEffect(() => {
-    setLiveConnected(false);
-    if (!agentSubscriptionKey) return;
-    const socket = createLiveSocket({
-      subscribe: agentSubscriptionKey.split(",").map(Number),
-      onUpdate: ({
-        agentId,
-        ts,
-        data,
-        status,
-        lastSeenAt,
-        lagSeconds,
-      }) => {
-        setLiveState((current) => {
-          const previous = current[agentId];
-          if (previous && previous.ts > ts) return current;
-          return {
-            ...current,
-            [agentId]: {
-              metric: { ...previous?.metric, ...data },
-              status: status ?? previous?.status,
-              lastSeenAt:
-                lastSeenAt !== undefined ? lastSeenAt : previous?.lastSeenAt,
-              ts,
-            },
-          };
-        });
-        setLiveLagSeconds(lagSeconds);
-      },
-      onStatusChange: ({ connected }) => setLiveConnected(connected),
-    });
-    return () => socket.close();
-  }, [agentSubscriptionKey]);
-
-  const liveMetrics = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(liveState).map(([agentId, state]) => [
-          Number(agentId),
-          state.metric,
-        ])
-      ) as Record<number, Partial<MetricHistory>>,
-    [liveState]
-  );
+  const agentIds = useMemo(() => baseAgents.map((agent) => agent.id), [baseAgents]);
+  const {
+    liveMetrics,
+    liveStatus,
+    connected: liveConnected,
+    lagSeconds: liveLagSeconds,
+  } = useLiveAgentMetrics(agentIds);
 
   const agents = useMemo(
     () =>
       baseAgents.map((agent) => {
-        const live = liveState[agent.id];
+        const live = liveStatus[agent.id];
         return live
           ? {
               ...agent,
@@ -109,7 +57,7 @@ const Dashboard = () => {
             }
           : agent;
       }),
-    [baseAgents, liveState]
+    [baseAgents, liveStatus]
   );
 
   const summary = useMemo(() => {
