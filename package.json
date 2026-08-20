@@ -1,6 +1,6 @@
 {
   "name": "xugou",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Xugou monitoring system",
   "private": true,
   "scripts": {
