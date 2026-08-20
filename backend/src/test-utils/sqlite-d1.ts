@@ -124,3 +124,100 @@ CREATE INDEX agent_metric_blocks_gc_idx
   ON agent_metric_blocks (resolution, bucket_start);
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
 `;
+
+/**
+ * 监控新建流程测试需要的最小 schema。
+ * 外键刻意保留：monitor_check_samples 指向 monitors(id) 正是要守住的那条约束。
+ */
+export const MONITOR_SCHEMA = `
+CREATE TABLE monitors (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  name            TEXT NOT NULL,
+  url             TEXT NOT NULL,
+  method          TEXT NOT NULL,
+  interval        INTEGER NOT NULL,
+  timeout         INTEGER NOT NULL,
+  expected_status INTEGER NOT NULL,
+  headers         TEXT NOT NULL,
+  body            TEXT,
+  active          INTEGER NOT NULL,
+  status          TEXT DEFAULT 'pending',
+  response_time   INTEGER DEFAULT 0,
+  last_checked    TEXT,
+  next_check_at   TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  sort_order      INTEGER DEFAULT 0,
+  timeout_ms      INTEGER NOT NULL DEFAULT 30000,
+  deleted_at      TEXT
+);
+CREATE TABLE monitor_definitions (
+  id              INTEGER PRIMARY KEY,
+  name            TEXT NOT NULL,
+  url             TEXT NOT NULL,
+  method          TEXT NOT NULL,
+  headers_json    TEXT NOT NULL DEFAULT '{}',
+  body            TEXT,
+  interval_ms     INTEGER NOT NULL,
+  timeout_ms      INTEGER NOT NULL,
+  expected_status INTEGER NOT NULL,
+  active          INTEGER NOT NULL,
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  created_at_ms   INTEGER NOT NULL,
+  updated_at_ms   INTEGER NOT NULL,
+  deleted_at_ms   INTEGER
+);
+CREATE TABLE monitor_runtime (
+  monitor_id               INTEGER PRIMARY KEY
+    REFERENCES monitor_definitions(id) ON DELETE CASCADE,
+  status                   TEXT NOT NULL,
+  response_time_ms         INTEGER NOT NULL,
+  last_checked_at_ms       INTEGER,
+  next_due_at_ms           INTEGER,
+  version                  INTEGER NOT NULL DEFAULT 0,
+  created_at_ms            INTEGER NOT NULL,
+  updated_at_ms            INTEGER NOT NULL
+);
+CREATE TABLE monitor_check_samples (
+  job_id           TEXT PRIMARY KEY,
+  monitor_id       INTEGER NOT NULL
+    REFERENCES monitors(id) ON DELETE CASCADE,
+  scheduled_for_ms INTEGER NOT NULL,
+  checked_at       TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  response_time_ms INTEGER NOT NULL,
+  status_code      INTEGER,
+  error            TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+`;
+
+/** 状态页发布回收测试需要的最小 schema。 */
+export const STATUS_PUBLICATION_SCHEMA = `
+CREATE TABLE status_publications (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_event_id TEXT NOT NULL,
+  payload_json    TEXT NOT NULL,
+  etag            TEXT NOT NULL,
+  generated_at    TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE TABLE status_metric_publications (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  status_publication_id INTEGER NOT NULL
+    REFERENCES status_publications(id) ON DELETE CASCADE,
+  agent_id              INTEGER NOT NULL,
+  payload_json          TEXT NOT NULL,
+  etag                  TEXT NOT NULL,
+  generated_at          TEXT NOT NULL,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL
+);
+CREATE TABLE status_publication_state (
+  singleton_key         INTEGER PRIMARY KEY,
+  active_publication_id INTEGER,
+  updated_at            TEXT NOT NULL
+);
+`;

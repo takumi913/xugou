@@ -5,8 +5,52 @@ import type {
 } from "../../../platform/queues/outbox";
 import { parsePublicStatusSnapshot } from "../domain/public-contract";
 import { D1StatusRepository } from "../persistence/D1StatusRepository";
+import { writeStructuredLog } from "../../../platform/observability/StructuredLogger";
 import { sha256Hex } from "../../../utils/crypto";
 import { getEnvNumber } from "../../../utils/env";
+
+/** 被顶下去的发布至少留这么久再删，默认 15 分钟。 */
+export const DEFAULT_STATUS_PUBLICATION_GRACE_MINUTES = 15;
+
+/**
+ * 切换 active_publication_id 之后立刻回收被顶下去的发布。
+ *
+ * 读路径（getActivePublication / getActiveMetricPublication）只认
+ * status_publication_state.active_publication_id，非活跃的发布一行也读不到。
+ * 但 status_metric_publications 每次发布都要为每台 agent 落一份 24 小时指标的
+ * 完整 JSON（实测约 300 KB/行、每 5 分钟一轮），等每天一次的 cleanup 才删的话，
+ * 单台 agent 就能攒出上百 MB——比它要展示的块表数据本身大两个数量级。
+ *
+ * 宽限期不是留给读路径的，是留给并发的 outbox 消费者：另一个消费者可能已经插入
+ * 新发布但还没来得及切 active，此时把它当"非活跃"删掉，会让它切过去之后 JOIN 落空。
+ */
+export async function pruneSupersededPublications(
+  env: Bindings,
+  activePublicationId: number,
+  nowMs: number = Date.now()
+) {
+  const graceMinutes = getEnvNumber(
+    env,
+    "STATUS_PUBLICATION_GRACE_MINUTES",
+    DEFAULT_STATUS_PUBLICATION_GRACE_MINUTES,
+    { min: 1, max: 1440 }
+  );
+  const cutoff = new Date(nowMs - graceMinutes * 60_000).toISOString();
+  // 不依赖 ON DELETE cascade：子表先删，父表后删，两条语句合成一个 batch 走隐式事务。
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM status_metric_publications
+       WHERE status_publication_id IN (
+         SELECT id FROM status_publications
+         WHERE id <> ? AND generated_at < ?
+       )`
+    ).bind(activePublicationId, cutoff),
+    env.DB.prepare(
+      `DELETE FROM status_publications WHERE id <> ? AND generated_at < ?`
+    ).bind(activePublicationId, cutoff),
+  ]);
+  return { deleted: results[1]?.meta?.changes ?? 0, cutoff };
+}
 
 export class StatusPublicationConsumer implements OutboxConsumer {
   readonly consumerName = "status.publication.v1";
@@ -141,5 +185,32 @@ export class StatusPublicationConsumer implements OutboxConsumer {
          updated_at = excluded.updated_at`
     ).bind(publicationId, nowIso);
     await publicationState.run();
+
+    // 回收失败不能让发布事件整体失败重放：记一条日志，交给每日 cleanup 兜底。
+    try {
+      const pruned = await pruneSupersededPublications(
+        this.env,
+        publicationId,
+        now.getTime()
+      );
+      if (pruned.deleted > 0) {
+        writeStructuredLog(this.env, {
+          service: "queue",
+          operation: "status_publication_prune",
+          result: "success",
+          eventId: event.event_id,
+          fields: { deleted: pruned.deleted, cutoff: pruned.cutoff },
+        });
+      }
+    } catch (error) {
+      writeStructuredLog(this.env, {
+        service: "queue",
+        operation: "status_publication_prune",
+        result: "failure",
+        eventId: event.event_id,
+        errorCode: "STATUS_PUBLICATION_PRUNE_FAILED",
+        error,
+      });
+    }
   }
 }

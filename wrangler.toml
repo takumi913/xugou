@@ -53,8 +53,12 @@ AGENT_BLOCK_GC_BATCH = "500"
 MONITOR_DAILY_ROLLUP_RETENTION_DAYS = "3650"
 MONITOR_INCIDENT_RETENTION_DAYS = "180"
 SECURITY_AUDIT_RETENTION_DAYS = "180"
-# 单条发布快照约 27 KB，7 天保留期 36 小时就攒了 15 MB，收敛到 1 天
+# 每日 cleanup 的兜底保留期。真正控制体积的是下面的宽限期：发布被顶下去就再没人读得到，
+# 消费者切完 active 当场删，这里只负责扫掉漏网的。
 STATUS_PUBLICATION_RETENTION_DAYS = "1"
+# 非活跃发布的回收宽限期（分钟）。只保护「已插入但还没切 active」的并发发布，
+# 不需要按读流量放大——读路径只认 active_publication_id。
+STATUS_PUBLICATION_GRACE_MINUTES = "15"
 PROCESSED_EVENT_RETENTION_DAYS = "30"
 NOTIFICATION_EVENT_RETENTION_DAYS = "90"
 # 最新探针版本号（如 "1.2.0"）。留空则不触发探针自升级；
