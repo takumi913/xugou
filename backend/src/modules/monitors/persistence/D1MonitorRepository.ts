@@ -153,14 +153,39 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
     const now = new Date(nowMs).toISOString();
     const active = input.active === false ? 0 : 1;
     const headersJson = "";
+    // monitors 表如今只当 id 锚点：monitor_check_samples / monitor_check_rollups /
+    // monitor_incidents 的外键都指向 monitors(id)，而 D1 的 foreign_keys 是开着的。
+    // 少了这行锚点，新建的监控第一次写检查样本就会 FOREIGN KEY constraint failed。
+    // 与 agents / agent_nodes 的做法一致：业务字段只落 monitor_definitions。
+    const anchor = await this.env.DB.prepare(
+      `INSERT INTO monitors
+       (name, url, method, interval, timeout, expected_status, headers, active,
+        status, created_at, updated_at, deleted_at)
+       VALUES (?, ?, ?, ?, ?, ?, '{}', 0, 'retired', ?, ?, ?)
+       RETURNING id`
+    )
+      .bind(
+        `contract-anchor:${crypto.randomUUID()}`,
+        input.url,
+        input.method,
+        input.interval_seconds,
+        Math.max(1, Math.ceil(input.timeout_ms / 1000)),
+        input.expected_status,
+        now,
+        now,
+        now
+      )
+      .first<{ id: number }>();
+    if (!anchor) throw new Error("Monitor identity insert returned no ID");
     const identityInsert = this.env.DB.prepare(
       `INSERT INTO monitor_definitions
-       (name, url, method, headers_json, body, interval_ms, timeout_ms,
+       (id, name, url, method, headers_json, body, interval_ms, timeout_ms,
         expected_status, active, sort_order, created_at_ms, updated_at_ms,
         deleted_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)
        RETURNING id`
     ).bind(
+      anchor.id,
       input.name,
       input.url,
       input.method,
@@ -173,8 +198,21 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
       nowMs,
       nowMs
     );
-    const row = await identityInsert.first<{ id: number }>();
-    if (!row) throw new Error("Monitor insert returned no ID");
+    let row: { id: number } | null = null;
+    try {
+      row = await identityInsert.first<{ id: number }>();
+    } catch (error) {
+      await this.env.DB.prepare(`DELETE FROM monitors WHERE id = ?`)
+        .bind(anchor.id)
+        .run();
+      throw error;
+    }
+    if (!row) {
+      await this.env.DB.prepare(`DELETE FROM monitors WHERE id = ?`)
+        .bind(anchor.id)
+        .run();
+      throw new Error("Monitor insert returned no ID");
+    }
     const view: MonitorView = {
       id: row.id,
       name: input.name,
@@ -205,7 +243,10 @@ export class D1MonitorRepository implements MonitorRepositoryPort {
       ];
       await this.env.DB.batch(statements);
     } catch (error) {
-      await this.env.DB.prepare(`DELETE FROM monitor_definitions WHERE id = ?`).bind(row.id).run();
+      await this.env.DB.batch([
+        this.env.DB.prepare(`DELETE FROM monitor_definitions WHERE id = ?`).bind(row.id),
+        this.env.DB.prepare(`DELETE FROM monitors WHERE id = ?`).bind(anchor.id),
+      ]);
       throw error;
     }
     return view;

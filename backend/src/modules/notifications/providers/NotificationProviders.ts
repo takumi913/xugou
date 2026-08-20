@@ -1,4 +1,4 @@
-import * as models from "../../../models";
+import type { NotificationChannel } from "../../../models/notification";
 
 interface ProviderResponse {
   ok?: boolean;
@@ -133,7 +133,7 @@ interface GotifyConfig {
 /**
  * 解析通知渠道配置
  */
-function parseChannelConfig<T>(channel: models.NotificationChannel): T {
+function parseChannelConfig<T>(channel: NotificationChannel): T {
   try {
     let config: unknown;
     if (typeof channel.config === "string") {
@@ -165,7 +165,7 @@ function parseChannelConfig<T>(channel: models.NotificationChannel): T {
 // =================================================================
 
 async function sendResendNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -233,7 +233,7 @@ async function sendResendNotification(
  * 发送Telegram通知
  */
 async function sendTelegramNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -298,7 +298,7 @@ async function sendTelegramNotification(
  */
 interface NotificationSender {
   (
-    channel: models.NotificationChannel,
+    channel: NotificationChannel,
     subject: string,
     content: string
   ): Promise<{ success: boolean; error?: string }>;
@@ -327,7 +327,7 @@ function registerSender(type: string, sender: NotificationSender) {
  * "The point of interfaces is that you don't have to care."
  */
 export async function sendNotificationByChannel(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -344,7 +344,7 @@ export async function sendNotificationByChannel(
 }
 
 async function sendFeishuNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -412,7 +412,7 @@ registerSender("feishu", sendFeishuNotification);
  * 发送企业微信通知
  */
 async function sendWeComNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -492,7 +492,7 @@ async function signDingTalkWebhookUrl(
  * 发送钉钉机器人通知
  */
 async function sendDingTalkNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -550,7 +550,7 @@ const BARK_DEFAULT_SERVER_URL = "https://api.day.app";
  * 发送 Bark 通知（支持官方 api.day.app 或自建服务端）
  */
 async function sendBarkNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -607,7 +607,7 @@ registerSender("bark", sendBarkNotification);
  * 发送 Server 酱通知
  */
 async function sendServerChanNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -657,7 +657,7 @@ registerSender("serverchan", sendServerChanNotification);
  * 发送 WxPusher 通知
  */
 async function sendWxPusherNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -728,7 +728,7 @@ registerSender("wxpusher", sendWxPusherNotification);
  * 发送 Gotify 通知
  */
 async function sendGotifyNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
@@ -807,7 +807,7 @@ interface OneBotConfig {
  * 响应 retcode === 0 判成功。
  */
 async function sendOneBotNotification(
-  channel: models.NotificationChannel,
+  channel: NotificationChannel,
   subject: string,
   content: string
 ): Promise<{ success: boolean; error?: string }> {

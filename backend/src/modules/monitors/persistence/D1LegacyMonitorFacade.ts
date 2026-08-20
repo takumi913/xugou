@@ -1,9 +1,6 @@
-const isContractMode = (env: any) => true;
-const hasTableColumn = (env: any, table: string, column: string) => true;
 import type { Bindings } from "../../../models/db";
 import type { MonitorMutation, MonitorView } from "../domain/models";
 import { createMonitorUseCases } from "../composition";
-
 
 const SINGLE_HISTORY_LIMIT = 1440;
 const ALL_HISTORY_LIMIT = 10_000;
@@ -137,36 +134,7 @@ export async function queryMonitorHistory(env: Bindings, monitorId?: number) {
   )
     .bind(...bindings, limit)
     .all<Record<string, unknown>>();
-  if (isContractMode(env)) {
-    return samples.results.reverse();
-  }
-  const history = await env.DB.prepare(
-    `SELECT id, monitor_id, status, timestamp, response_time, status_code, error
-     FROM monitor_status_history_24h
-     WHERE timestamp >= ? ${filter}
-     ORDER BY timestamp DESC LIMIT ?`
-  )
-    .bind(...bindings, limit)
-    .all<Record<string, unknown>>();
-  const identity = (row: Record<string, unknown>) =>
-    JSON.stringify({
-      monitor_id: row.monitor_id,
-      status: row.status,
-      timestamp: row.timestamp,
-      response_time: row.response_time ?? 0,
-      status_code: row.status_code ?? null,
-      error: row.error ?? null,
-    });
-  const merged = new Map<string, Record<string, unknown>>();
-  for (const row of history.results) merged.set(identity(row), row);
-  for (const row of samples.results) merged.set(identity(row), row);
-  const ordered = [...merged.values()].sort(
-    (left, right) =>
-      Date.parse(String(left.timestamp ?? "")) -
-      Date.parse(String(right.timestamp ?? ""))
-  );
-  const step = Math.max(1, Math.ceil(ordered.length / limit));
-  return ordered.filter((_, index) => index % step === 0).slice(-limit);
+  return samples.results.reverse();
 }
 
 export async function queryMonitorDailyStats(
@@ -180,47 +148,27 @@ export async function queryMonitorDailyStats(
   );
   cutoff.setUTCHours(0, 0, 0, 0);
   const cutoffIso = cutoff.toISOString();
-  const cutoffDate = cutoffIso.slice(0, 10);
   const limit = monitorId === undefined ? ALL_HISTORY_LIMIT : boundedDays;
-  const coverage = isContractMode(env)
-    ? { read_ready: true }
-    : await null;
-  if (coverage?.read_ready) {
-    const filter = monitorId === undefined ? "" : "AND monitor_id = ?";
-    const statement = env.DB.prepare(
-      `SELECT id, monitor_id, substr(bucket_start, 1, 10) AS date,
-              total_checks, up_checks, down_checks,
-              response_time_avg AS avg_response_time,
-              response_time_min AS min_response_time,
-              response_time_max AS max_response_time,
-              CASE WHEN total_checks > 0
-                   THEN (CAST(up_checks AS REAL) / total_checks) * 100 ELSE 0 END
-                AS availability,
-              created_at
-       FROM monitor_check_rollups
-       WHERE bucket_size_seconds = 86400 AND bucket_start >= ? ${filter}
-       ORDER BY bucket_start DESC, monitor_id ASC LIMIT ?`
-    );
-    const rows = (
-      monitorId === undefined
-        ? await statement.bind(cutoffIso, limit).all<Record<string, unknown>>()
-        : await statement
-            .bind(cutoffIso, monitorId, limit)
-            .all<Record<string, unknown>>()
-    ).results;
-    return orderDailyStatsAscending(rows);
-  }
-  const query = monitorId === undefined
-    ? `SELECT * FROM monitor_daily_stats
-       WHERE date >= ? ORDER BY date DESC, monitor_id ASC LIMIT ?`
-    : `SELECT * FROM monitor_daily_stats
-       WHERE monitor_id = ? AND date >= ? ORDER BY date DESC LIMIT ?`;
-  const statement = env.DB.prepare(query);
+  const filter = monitorId === undefined ? "" : "AND monitor_id = ?";
+  const statement = env.DB.prepare(
+    `SELECT id, monitor_id, substr(bucket_start, 1, 10) AS date,
+            total_checks, up_checks, down_checks,
+            response_time_avg AS avg_response_time,
+            response_time_min AS min_response_time,
+            response_time_max AS max_response_time,
+            CASE WHEN total_checks > 0
+                 THEN (CAST(up_checks AS REAL) / total_checks) * 100 ELSE 0 END
+              AS availability,
+            created_at
+     FROM monitor_check_rollups
+     WHERE bucket_size_seconds = 86400 AND bucket_start >= ? ${filter}
+     ORDER BY bucket_start DESC, monitor_id ASC LIMIT ?`
+  );
   const rows = (
     monitorId === undefined
-      ? await statement.bind(cutoffDate, limit).all<Record<string, unknown>>()
+      ? await statement.bind(cutoffIso, limit).all<Record<string, unknown>>()
       : await statement
-          .bind(monitorId, cutoffDate, limit)
+          .bind(cutoffIso, monitorId, limit)
           .all<Record<string, unknown>>()
   ).results;
   return orderDailyStatsAscending(rows);
@@ -228,10 +176,9 @@ export async function queryMonitorDailyStats(
 
 export async function updateLegacyMonitorOrder(env: Bindings, ids: number[]) {
   const uniqueIds = [...new Set(ids)];
-  const contractMode = isContractMode(env);
   const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS count FROM ${contractMode ? "monitor_definitions" : "monitors"}
-     WHERE ${contractMode ? "deleted_at_ms" : "deleted_at"} IS NULL
+    `SELECT COUNT(*) AS count FROM monitor_definitions
+     WHERE deleted_at_ms IS NULL
        AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
   )
     .bind(JSON.stringify(uniqueIds))
@@ -239,26 +186,12 @@ export async function updateLegacyMonitorOrder(env: Bindings, ids: number[]) {
   if (Number(row?.count ?? 0) !== uniqueIds.length) return false;
   for (let offset = 0; offset < uniqueIds.length; offset += 25) {
     await env.DB.batch(
-      uniqueIds.slice(offset, offset + 25).flatMap((id, index) => {
-        const order = offset + index;
-        const nowMs = Date.now();
-        const now = new Date(nowMs).toISOString();
-        const statements = [
-          env.DB.prepare(
-            `UPDATE monitor_definitions SET sort_order = ?, updated_at_ms = ?
-             WHERE id = ? AND deleted_at_ms IS NULL`
-          ).bind(order, nowMs, id),
-        ];
-        if (!contractMode) {
-          statements.unshift(
-            env.DB.prepare(
-              `UPDATE monitors SET sort_order = ?, updated_at = ?
-               WHERE id = ? AND deleted_at IS NULL`
-            ).bind(order, now, id)
-          );
-        }
-        return statements;
-      })
+      uniqueIds.slice(offset, offset + 25).map((id, index) =>
+        env.DB.prepare(
+          `UPDATE monitor_definitions SET sort_order = ?, updated_at_ms = ?
+           WHERE id = ? AND deleted_at_ms IS NULL`
+        ).bind(offset + index, Date.now(), id)
+      )
     );
   }
   return true;
@@ -270,13 +203,9 @@ export async function importLegacyMonitors(
 ) {
   const candidateNames = [...new Set(items.map((item) => item.name))];
   const existingRows = await env.DB.prepare(
-    isContractMode(env)
-      ? `SELECT name FROM monitor_definitions
-         WHERE deleted_at_ms IS NULL
-           AND name IN (SELECT value FROM json_each(?))`
-      : `SELECT name FROM monitors
-         WHERE deleted_at IS NULL
-           AND name IN (SELECT value FROM json_each(?))`
+    `SELECT name FROM monitor_definitions
+     WHERE deleted_at_ms IS NULL
+       AND name IN (SELECT value FROM json_each(?))`
   )
     .bind(JSON.stringify(candidateNames))
     .all<{ name: string }>();
@@ -291,21 +220,12 @@ export async function importLegacyMonitors(
     try {
       const view = await createMonitorUseCases(env).create(item);
       if (Number.isInteger(item.sort_order)) {
-        const nowMs = Date.now();
-        const statements = [
-          env.DB.prepare(
-            `UPDATE monitor_definitions
-             SET sort_order = ?, updated_at_ms = ? WHERE id = ?`
-          ).bind(item.sort_order, nowMs, view.id),
-        ];
-        if (!isContractMode(env)) {
-          statements.unshift(
-            env.DB.prepare(
-              `UPDATE monitors SET sort_order = ?, updated_at = ? WHERE id = ?`
-            ).bind(item.sort_order, new Date(nowMs).toISOString(), view.id)
-          );
-        }
-        await env.DB.batch(statements);
+        await env.DB.prepare(
+          `UPDATE monitor_definitions
+           SET sort_order = ?, updated_at_ms = ? WHERE id = ?`
+        )
+          .bind(item.sort_order, Date.now(), view.id)
+          .run();
       }
       names.add(item.name);
       created += 1;

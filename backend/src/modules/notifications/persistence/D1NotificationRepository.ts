@@ -1,5 +1,3 @@
-const isContractMode = (env: any) => true;
-const hasTableColumn = (env: any, table: string, column: string) => true;
 import type { Bindings } from "../../../models/db";
 import { sendNotificationByChannel } from "../providers/NotificationProviders";
 import type { NotificationRepositoryPort } from "../application/NotificationUseCases";

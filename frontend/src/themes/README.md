@@ -110,7 +110,7 @@ export default theme;
 - `global.css` 的 `:root` / `.light` 兜底变量与 mono 保持一致，承担
   无 JS 与未知主题 id 的回退。
 - 用户在后台「主题」页的选择会保存到本地（立即生效）并写入状态页
-  配置（`status_page_config.theme`），公开状态页对所有访客按站长所选
+  配置（`status_pages.theme`），公开状态页对所有访客按站长所选
   主题渲染；访客自己的明暗偏好仍然生效。
 - 服务端只校验主题 id 格式不校验存在性；前端遇到未知 id 一律回退
   `mono`，因此删除一个主题不会破坏任何已保存的配置。

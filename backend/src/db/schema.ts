@@ -89,7 +89,9 @@ export const securityAuditEvents = sqliteTable(
   })
 );
 
-// 监控表
+// 旧监控表。业务字段已全部搬到 monitor_definitions / monitor_runtime，这里只剩
+// id 锚点作用：monitor_check_samples / monitor_check_rollups / monitor_incidents
+// 的外键仍指向本表，新建监控必须先在这里占一个 id（见 D1MonitorRepository.create）。
 export const monitors = sqliteTable(
   "monitors",
   {
@@ -123,7 +125,7 @@ export const monitors = sqliteTable(
   })
 );
 
-// v2 Monitor 配置事实；旧 monitors 在兼容窗口内作为同 ID 回切投影。
+// v2 Monitor 配置事实；id 与 monitors 锚点行保持一致。
 export const monitorDefinitions = sqliteTable(
   "monitor_definitions",
   {
@@ -170,32 +172,6 @@ export const monitorRuntime = sqliteTable(
   })
 );
 
-// 24小时监控状态历史表
-export const monitorStatusHistory24h = sqliteTable(
-  "monitor_status_history_24h",
-  {
-    id: int("id").primaryKey({ autoIncrement: true }),
-    monitor_id: int("monitor_id")
-      .notNull()
-      .references(() => monitors.id),
-    status: text("status").notNull(),
-    timestamp: text("timestamp").default("CURRENT_TIMESTAMP"),
-    response_time: int("response_time"),
-    status_code: int("status_code"),
-    error: text("error"),
-  },
-  (table) => ({
-    // monitor_id 和 timestamp 的联合索引，用于优化按监控项和时间查询的性能
-    monitorTimestampIdx: index(
-      "monitor_status_history_24h_monitor_timestamp_idx"
-    ).on(table.monitor_id, table.timestamp),
-    // timestamp 单独索引，用于优化按时间排序和范围查询的性能
-    timestampIdx: index("monitor_status_history_24h_timestamp_idx").on(
-      table.timestamp
-    ),
-  })
-);
-
 // Queue 驱动的不可变检查样本；job_id 同时是业务幂等键。
 export const monitorCheckSamples = sqliteTable(
   "monitor_check_samples",
@@ -218,35 +194,6 @@ export const monitorCheckSamples = sqliteTable(
       table.monitor_id,
       table.checked_at
     ),
-  })
-);
-
-// 监控每日统计表
-export const monitorDailyStats = sqliteTable(
-  "monitor_daily_stats",
-  {
-    id: int("id").primaryKey({ autoIncrement: true }),
-    monitor_id: int("monitor_id")
-      .notNull()
-      .references(() => monitors.id),
-    date: text("date").notNull(),
-    total_checks: int("total_checks").notNull().default(0),
-    up_checks: int("up_checks").notNull().default(0),
-    down_checks: int("down_checks").notNull().default(0),
-    avg_response_time: int("avg_response_time").default(0),
-    min_response_time: int("min_response_time").default(0),
-    max_response_time: int("max_response_time").default(0),
-    availability: real("availability").default(0),
-    created_at: text("created_at").notNull(),
-  },
-  (table) => ({
-    monitorDateIdx: index("monitor_daily_stats_monitor_id_date_idx").on(
-      table.monitor_id,
-      table.date
-    ),
-    monitorDateUniqueIdx: uniqueIndex(
-      "monitor_daily_stats_monitor_id_date_unique_idx"
-    ).on(table.monitor_id, table.date),
   })
 );
 
@@ -442,7 +389,7 @@ export const agentEnrollmentTokens = sqliteTable(
   })
 );
 
-// v2 Agent 当前指标；时间统一为 Unix 毫秒，兼容期与 agent_latest_metrics 双写。
+// v2 Agent 当前指标；时间统一为 Unix 毫秒。
 export const agentCurrentMetrics = sqliteTable(
   "agent_current_metrics",
   {
@@ -571,29 +518,7 @@ export const processedEvents = sqliteTable(
   })
 );
 
-// 状态页配置表
-export const statusPageConfig = sqliteTable(
-  "status_page_config",
-  {
-    id: int("id").primaryKey({ autoIncrement: true }),
-    singleton_key: int("singleton_key").notNull().default(1),
-    title: text("title").notNull().default("系统状态"),
-    description: text("description").default("系统当前运行状态"),
-    logo_url: text("logo_url").default(""),
-    custom_css: text("custom_css").default(""),
-    // 状态页主题 id（对应前端 frontend/src/themes/<id>/，未知 id 前端回退默认主题）
-    theme: text("theme").default("mono"),
-    created_at: text("created_at").default("CURRENT_TIMESTAMP"),
-    updated_at: text("updated_at").default("CURRENT_TIMESTAMP"),
-  },
-  (table) => ({
-    singletonIdx: uniqueIndex("status_page_config_singleton_idx").on(
-      table.singleton_key
-    ),
-  })
-);
-
-// v2 单例状态页配置；兼容期与 status_page_config 双写。
+// v2 单例状态页配置。
 export const statusPages = sqliteTable(
   "status_pages",
   {
@@ -637,38 +562,6 @@ export const statusComponents = sqliteTable(
       table.sort_order,
       table.component_id
     ),
-  })
-);
-
-// 状态页监控项关联表
-export const statusPageMonitors = sqliteTable(
-  "status_page_monitors",
-  {
-    config_id: int("config_id")
-      .notNull()
-      .references(() => statusPageConfig.id, { onDelete: "cascade" }),
-    monitor_id: int("monitor_id")
-      .notNull()
-      .references(() => monitors.id, { onDelete: "cascade" }),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.config_id, table.monitor_id] }),
-  })
-);
-
-// 状态页客户端关联表
-export const statusPageAgents = sqliteTable(
-  "status_page_agents",
-  {
-    config_id: int("config_id")
-      .notNull()
-      .references(() => statusPageConfig.id, { onDelete: "cascade" }),
-    agent_id: int("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.config_id, table.agent_id] }),
   })
 );
 
@@ -729,18 +622,6 @@ export const monitorIncidents = sqliteTable(
   })
 );
 
-// 公共状态页快照表
-export const publicStatusSnapshots = sqliteTable("public_status_snapshots", {
-  id: int("id").primaryKey().default(1),
-  snapshot_json: text("snapshot_json").notNull(),
-  etag: text("etag").notNull(),
-  generated_at: text("generated_at").notNull(),
-  expires_at: text("expires_at").notNull(),
-  dirty_at: text("dirty_at"),
-  refresh_after: text("refresh_after"),
-  refreshing: int("refreshing").notNull().default(0),
-  last_error: text("last_error"),
-});
 
 // 通知渠道表
 export const notificationChannels = sqliteTable(
@@ -939,32 +820,6 @@ export const notificationSettingCommands = sqliteTable(
     statusUpdatedIdx: index("notification_setting_commands_status_updated_idx").on(
       table.status,
       table.updated_at
-    ),
-  })
-);
-
-// 通知历史记录表
-export const notificationHistory = sqliteTable(
-  "notification_history",
-  {
-    id: int("id").primaryKey({ autoIncrement: true }),
-    type: text("type").notNull(),
-    target_id: int("target_id"),
-    channel_id: int("channel_id")
-      .notNull()
-      .references(() => notificationChannels.id),
-    template_id: int("template_id")
-      .notNull()
-      .references(() => notificationTemplates.id),
-    status: text("status").notNull(),
-    content: text("content").notNull(),
-    error: text("error"),
-    sent_at: text("sent_at").default("CURRENT_TIMESTAMP"),
-  },
-  (table) => ({
-    channelSentAtIdx: index("notification_history_channel_sent_at_idx").on(
-      table.channel_id,
-      table.sent_at
     ),
   })
 );
